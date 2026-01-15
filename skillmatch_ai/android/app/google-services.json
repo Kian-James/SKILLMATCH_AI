@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "771598992448",
+    "project_id": "skillmatch-ai-27c75",
+    "storage_bucket": "skillmatch-ai-27c75.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:771598992448:android:8f230354703adef5864ba5",
+        "android_client_info": {
+          "package_name": "com.example.skillmatch_ai"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "771598992448-54109riool09939qmk1lv2694g9fj6vv.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCBMO99XUTOx9eUo4QV-cwui8wC0FNB8_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "771598992448-54109riool09939qmk1lv2694g9fj6vv.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "771598992448-7q8tsaft0cep4ei84a2ctlvacg92g5l1.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.skillmatchAi"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
