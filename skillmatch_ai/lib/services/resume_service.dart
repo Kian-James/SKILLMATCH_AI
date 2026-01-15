@@ -2,16 +2,19 @@ import '../config/firebase_config.dart';
 import '../models/resume_model.dart';
 
 class ResumeService {
-  /// Upload resume text and get extracted skills
-  static Future<ResumeModel> uploadResume(String userId, String resumeText) async {
-    final data = {'resumeText': resumeText};
+  static const String processResumeUrl =
+      'https://us-central1-yourproject.cloudfunctions.net/processResume';
 
-    final result = await FirebaseConfig.callFunction('processResume', data);
+  /// Upload resume text or Base64 file to backend
+  static Future<ResumeModel> uploadResume(String userId, String resumeText) async {
+    final data = {'resumeText': resumeText, 'userId': userId};
+
+    final result = await FirebaseConfig.callFunction(processResumeUrl, data);
 
     return ResumeModel(
       userId: userId,
       skills: List<String>.from(result['skills'] ?? []),
-      skillClusters: [], // optional
+      skillClusters: List<String>.from(result['skill_clusters'] ?? []),
       lastUpdated: DateTime.now(),
     );
   }

@@ -2,9 +2,12 @@ import '../config/firebase_config.dart';
 import '../models/skill_gap_model.dart';
 
 class SkillGapService {
-  /// Analyze skill gap for a user for a specific job role
+  static const String analyzeSkillGapUrl =
+      'https://us-central1-yourproject.cloudfunctions.net/analyzeSkillGap';
+
+  /// Analyze skill gap for a user and specific job role
   static Future<SkillGapModel> analyzeSkillGap(String userId, String role) async {
-    final result = await FirebaseConfig.callFunction('analyzeSkillGap', {
+    final result = await FirebaseConfig.callFunction(analyzeSkillGapUrl, {
       'userId': userId,
       'role': role,
     });

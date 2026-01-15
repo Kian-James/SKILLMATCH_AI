@@ -2,9 +2,12 @@ import '../config/firebase_config.dart';
 import '../models/job_model.dart';
 
 class JobService {
-  /// Call matchJobs cloud function for a user
+  static const String matchJobsUrl =
+      'https://us-central1-yourproject.cloudfunctions.net/matchJobs';
+
+  /// Call backend to get jobs matched to user
   static Future<List<JobModel>> getMatchedJobs(String userId) async {
-    final result = await FirebaseConfig.callFunction('matchJobs', {'userId': userId});
+    final result = await FirebaseConfig.callFunction(matchJobsUrl, {'userId': userId});
 
     final jobs = <JobModel>[];
     for (var job in result) {
