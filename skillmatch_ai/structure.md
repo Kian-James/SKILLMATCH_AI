@@ -1,90 +1,61 @@
-lib/
-│
-├── main.dart
-│
-├── app/
-│   ├── app.dart
-│   └── routes.dart
-│
-├── config/
-│   ├── api_config.dart
-│   ├── app_constants.dart
-│   └── algorithm_modes.dart
-│
-├── core/
-│   ├── services/
-│   │   ├── api_service.dart
-│   │   ├── ocr_service.dart
-│   │   ├── document_scan_service.dart
-│   │   └── local_storage_service.dart
+frontend/
+├── lib/
+│   ├── main.dart
 │   │
-│   ├── utils/
-│   │   ├── text_normalizer.dart
-│   │   ├── skill_extractor.dart
-│   │   ├── certification_extractor.dart
-│   │   ├── timer_util.dart
-│   │   └── file_helper.dart
+│   ├── app/
+│   │   ├── app.dart              # Root widget
+│   │   ├── routes.dart           # App navigation
+│   │   └── theme.dart
 │   │
-│   └── models/
-│       ├── skill_model.dart
-│       ├── certification_model.dart
-│       ├── job_model.dart
-│       ├── match_result_model.dart
-│       └── benchmark_model.dart
+│   ├── core/
+│   │   ├── config.dart           # API URLs & flags
+│   │   ├── constants.dart
+│   │   └── privacy_notice.dart   # Privacy disclaimer
+│   │
+│   ├── data/
+│   │   ├── models/
+│   │   │   ├── job.dart
+│   │   │   ├── skill_gap.dart
+│   │   │   └── learning_path.dart
+│   │   │
+│   │   ├── services/
+│   │   │   ├── api_service.dart  # FastAPI client
+│   │   │   └── upload_service.dart
+│   │
+│   ├── features/
+│   │   ├── resume_upload/
+│   │   │   ├── upload_screen.dart
+│   │   │   ├── upload_controller.dart
+│   │   │   └── upload_state.dart
+│   │   │
+│   │   ├── job_matching/
+│   │   │   ├── job_list_screen.dart
+│   │   │   ├── job_card.dart
+│   │   │   └── match_score_badge.dart
+│   │   │
+│   │   ├── career_gap/
+│   │   │   ├── gap_screen.dart
+│   │   │   ├── missing_skills.dart
+│   │   │   ├── certifications.dart
+│   │   │   └── learning_path_view.dart
+│   │   │
+│   │   └── settings/
+│   │       ├── algorithm_toggle.dart   # SBERT / KNN switch
+│   │       └── performance_info.dart
+│   │
+│   ├── shared/
+│   │   ├── widgets/
+│   │   │   ├── loading.dart
+│   │   │   ├── error.dart
+│   │   │   └── section_header.dart
+│   │   │
+│   │   └── utils/
+│   │       ├── file_picker.dart
+│   │       └── formatters.dart
+│   │
+│   └── state/
+│       ├── app_state.dart
+│       └── algorithm_state.dart
 │
-├── features/
-│   ├── resume_input/
-│   │   ├── view/
-│   │   │   ├── resume_upload_screen.dart
-│   │   │   ├── resume_scan_screen.dart
-│   │   │   └── resume_preview_screen.dart
-│   │   │
-│   │   ├── viewmodel/
-│   │   │   └── resume_viewmodel.dart
-│   │   │
-│   │   └── resume_module.dart
-│   │
-│   ├── job_matching/
-│   │   ├── view/
-│   │   │   ├── job_result_screen.dart
-│   │   │   └── job_detail_screen.dart
-│   │   │
-│   │   ├── viewmodel/
-│   │   │   └── job_match_viewmodel.dart
-│   │   │
-│   │   └── job_matching_module.dart
-│   │
-│   ├── skill_gap/
-│   │   ├── view/
-│   │   │   └── skill_gap_screen.dart
-│   │   │
-│   │   ├── viewmodel/
-│   │   │   └── skill_gap_viewmodel.dart
-│   │   │
-│   │   └── skill_gap_module.dart
-│   │
-│   ├── benchmark/
-│   │   ├── view/
-│   │   │   └── benchmark_screen.dart
-│   │   │
-│   │   ├── viewmodel/
-│   │   │   └── benchmark_viewmodel.dart
-│   │   │
-│   │   └── benchmark_module.dart
-│
-├── shared/
-│   ├── widgets/
-│   │   ├── primary_button.dart
-│   │   ├── skill_chip.dart
-│   │   ├── certification_chip.dart
-│   │   ├── similarity_bar.dart
-│   │   └── loading_indicator.dart
-│   │
-│   └── theme/
-│       ├── app_colors.dart
-│       └── app_theme.dart
-│
-└── storage/
-├── local_skill_store.dart
-├── local_certification_store.dart
-└── local_benchmark_store.dart
+├── pubspec.yaml
+└── README.md
