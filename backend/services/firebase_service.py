@@ -17,7 +17,7 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import (
-    FIREBASE_SERVICE_ACCOUNT_PATH,
+    get_firebase_credentials_path,
     COLLECTION_USERS,
     COLLECTION_JOB_DATASET,
     COLLECTION_USER_PROGRESS,
@@ -33,7 +33,7 @@ def init_firebase() -> None:
         _db = firestore.client()
         return
 
-    cred = credentials.Certificate(FIREBASE_SERVICE_ACCOUNT_PATH)
+    cred = credentials.Certificate(get_firebase_credentials_path())
     firebase_admin.initialize_app(cred)
     _db = firestore.client()
     logger.info("Firebase initialized successfully.")
@@ -77,11 +77,11 @@ def upsert_job(job_title: str, skills: list[str], certifications: list[str]) -> 
 # ─── User Progress (Skill Growth Tracking) ────────────────────────────────────
 
 def save_analysis_snapshot(
-    user_id: str,
-    skills: list[str],
-    certifications: list[str],
-    top_job_matches: list[dict],
-    best_match_score: float,
+        user_id: str,
+        skills: list[str],
+        certifications: list[str],
+        top_job_matches: list[dict],
+        best_match_score: float,
 ) -> str:
     """
     Save a timestamped snapshot of extracted resume metadata.
@@ -90,7 +90,7 @@ def save_analysis_snapshot(
     """
     db = get_db()
     doc_ref = db.collection(COLLECTION_USER_PROGRESS).document(user_id) \
-                 .collection("snapshots").document()
+        .collection("snapshots").document()
 
     doc_ref.set({
         "timestamp": datetime.utcnow().isoformat(),
@@ -109,10 +109,10 @@ def get_user_snapshots(user_id: str) -> list[dict]:
     db = get_db()
     docs = (
         db.collection(COLLECTION_USER_PROGRESS)
-          .document(user_id)
-          .collection("snapshots")
-          .order_by("timestamp")
-          .stream()
+        .document(user_id)
+        .collection("snapshots")
+        .order_by("timestamp")
+        .stream()
     )
     return [{"id": doc.id, **doc.to_dict()} for doc in docs]
 

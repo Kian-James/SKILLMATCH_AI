@@ -1,0 +1,22 @@
+# .dockerignore — keep Docker image lean
+__pycache__/
+*.pyc
+*.pyo
+.Python
+venv/
+.venv/
+env/
+
+# Secrets — never bake into image
+.env
+firebase_service_account.json
+
+# Large generated artifacts — rebuilt at runtime from Firestore
+faiss_index/
+embedding_cache/
+
+# Dev files
+*.md
+.git/
+.gitignore
+tests/

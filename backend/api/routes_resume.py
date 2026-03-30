@@ -1,8 +1,8 @@
 """
 api/routes_resume.py
-Endpoints:
-  POST /upload-resume  — OCR + NLP extraction only (returns metadata, no storage)
-  POST /analyze        — Full analysis with job recommendations + saves snapshot
+POST /upload-resume  - OCR + NLP extraction only (no storage, auth required)
+POST /analyze        - Full analysis + saves snapshot (auth required)
+FAISS is lazy-loaded on first request (Render free tier RAM management).
 """
 
 from __future__ import annotations
@@ -44,29 +44,22 @@ class AnalyzeResponse(BaseModel):
 
 @router.post("/upload-resume", response_model=UploadResponse)
 async def upload_resume(
-    request: Request,
-    file: UploadFile = File(...),
-    user: AuthenticatedUser = Depends(get_current_user),  # 🔒 Auth required
+        request: Request,
+        file: UploadFile = File(...),
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """
-    Extract skills and certifications from an uploaded resume.
-    File is read in memory only — nothing is stored anywhere.
-    Available to all auth types including anonymous users.
-    """
     content_type = file.content_type or ""
     if content_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail="Unsupported file type. Upload a PDF or image (PNG/JPG/TIFF/BMP/WEBP)."
-        )
+        raise HTTPException(status_code=415, detail="Unsupported file type. Upload a PDF or image.")
 
     file_bytes = await file.read()
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File too large. Maximum size is 10 MB.")
 
-    faiss_index = request.app.state.faiss
-    service = ResumeService(faiss_index)
+    # Lazy-load ML models on first request
+    await request.app.state.ensure_faiss_ready()
 
+    service = ResumeService(request.app.state.faiss)
     try:
         result = service.analyze(file_bytes, content_type)
     except ValueError as e:
@@ -75,7 +68,6 @@ async def upload_resume(
         logger.error(f"[user={user.uid}] Resume extract error: {e}")
         raise HTTPException(status_code=500, detail="Internal analysis error.")
 
-    logger.info(f"[user={user.uid}] Extracted {len(result['skills'])} skills (no save).")
     return UploadResponse(
         skills=result["skills"],
         certifications=result["certifications"],
@@ -86,15 +78,10 @@ async def upload_resume(
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_resume(
-    request: Request,
-    file: UploadFile = File(...),
-    user: AuthenticatedUser = Depends(get_current_user),  # 🔒 Auth required
+        request: Request,
+        file: UploadFile = File(...),
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """
-    Full analysis: extract → embed → FAISS match → save snapshot.
-    UID comes from the verified Firebase token — clients never send their own UID.
-    Resume file is never stored; only extracted metadata is persisted.
-    """
     content_type = file.content_type or ""
     if content_type not in ALLOWED_TYPES:
         raise HTTPException(status_code=415, detail="Unsupported file type.")
@@ -103,9 +90,10 @@ async def analyze_resume(
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File exceeds 10 MB limit.")
 
-    faiss_index = request.app.state.faiss
-    service = ResumeService(faiss_index)
+    # Lazy-load ML models on first request
+    await request.app.state.ensure_faiss_ready()
 
+    service = ResumeService(request.app.state.faiss)
     try:
         result = service.analyze(file_bytes, content_type)
     except ValueError as e:
@@ -114,14 +102,8 @@ async def analyze_resume(
         logger.error(f"[user={user.uid}] Full analysis error: {e}")
         raise HTTPException(status_code=500, detail="Analysis failed.")
 
-    # Ensure Firestore user document exists (upsert)
-    get_or_create_user(
-        user_id=user.uid,
-        display_name=user.name or "",
-        email=user.email or "",
-    )
+    get_or_create_user(user_id=user.uid, display_name=user.name or "", email=user.email or "")
 
-    # Persist metadata snapshot — resume file is NOT stored
     snapshot_id = save_analysis_snapshot(
         user_id=user.uid,
         skills=result["skills"],
@@ -130,7 +112,6 @@ async def analyze_resume(
         best_match_score=result["best_match_score"],
     )
 
-    logger.info(f"[user={user.uid}] Snapshot {snapshot_id} saved.")
     return AnalyzeResponse(
         user_id=user.uid,
         skills=result["skills"],

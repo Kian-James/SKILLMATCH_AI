@@ -1,11 +1,10 @@
 """
 api/routes_jobs.py
-Endpoint: POST /recommend-jobs
-Accepts a list of skills and returns top 5 matching jobs from FAISS.
+POST /recommend-jobs - Auth required, lazy FAISS load
 """
-
 from __future__ import annotations
 
+import numpy as np
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -17,7 +16,7 @@ router = APIRouter()
 
 
 class RecommendRequest(BaseModel):
-    skills: list[str] = Field(..., min_items=1, description="List of user skills")
+    skills: list[str] = Field(..., min_items=1)
     certifications: list[str] = Field(default_factory=list)
     top_k: int = Field(default=5, ge=1, le=20)
 
@@ -36,49 +35,29 @@ class RecommendResponse(BaseModel):
 
 @router.post("/recommend-jobs", response_model=RecommendResponse)
 async def recommend_jobs(
-    request: Request,
-    body: RecommendRequest,
-    user: AuthenticatedUser = Depends(get_current_user),  # 🔒 Auth required
+        request: Request,
+        body: RecommendRequest,
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """
-    Given a list of skills (and optionally certifications),
-    return the top K matching jobs using FAISS similarity search.
-    """
-    faiss_index = request.app.state.faiss
-    embedder = EmbeddingEngine()
+    # Lazy-load ML models on first request
+    await request.app.state.ensure_faiss_ready()
 
-    # Build query embedding from skills
+    embedder = EmbeddingEngine()
     skill_emb = embedder.embed_skill_list(body.skills)
 
     if body.certifications:
-        cert_text = " ".join(body.certifications)
-        cert_emb = embedder.embed(cert_text)
-        import numpy as np
+        cert_emb = embedder.embed(" ".join(body.certifications))
         combined = (skill_emb + cert_emb) / 2.0
         norm = np.linalg.norm(combined)
         query_emb = (combined / norm).astype("float32") if norm > 0 else skill_emb
     else:
         query_emb = skill_emb
 
-    results = faiss_index.search(query_emb, top_k=body.top_k)
-
+    results = request.app.state.faiss.search(query_emb, top_k=body.top_k)
     if not results:
-        raise HTTPException(
-            status_code=404,
-            detail="No jobs found. Ensure the job dataset has been generated."
-        )
-
-    matches = [
-        JobMatch(
-            job_title=r["job_title"],
-            match_score=r["match_score"],
-            skills=r.get("skills", []),
-            certifications=r.get("certifications", []),
-        )
-        for r in results
-    ]
+        raise HTTPException(status_code=404, detail="No jobs found. Run the dataset generator first.")
 
     return RecommendResponse(
-        top_matches=matches,
+        top_matches=[JobMatch(**r) for r in results],
         query_skill_count=len(body.skills),
     )

@@ -18,6 +18,7 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import HUGGINGFACE_API_TOKEN, LLM_MODEL_ID
+from utils.cache_manager import get_llm_response, set_llm_response, make_key
 
 # Singleton client
 _client: InferenceClient | None = None
@@ -63,8 +64,15 @@ def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 512) -> st
 def generate_learning_resources(skill: str) -> list[dict]:
     """
     Generate curated learning resources for a given skill.
+    Cache-first: same skill won't hit the LLM twice within 24 hours.
     Returns a list of resource dicts with title, type, platform, duration, description.
     """
+    cache_key = make_key("resources", skill.lower().strip())
+    cached = get_llm_response(cache_key)
+    if cached:
+        logger.debug(f"Cache hit for skill resources: {skill}")
+        return cached
+
     system = (
         "You are an expert career advisor and software engineer. "
         "You always respond with valid JSON only - no markdown, no explanation."
@@ -84,7 +92,9 @@ No markdown. No explanation. Only the JSON array."""
         raw = _call_llm(system, user, max_tokens=600)
         match = re.search(r"\[.*?\]", raw, re.DOTALL)
         if match:
-            return json.loads(match.group())
+            result = json.loads(match.group())
+            set_llm_response(cache_key, result, ttl=86400)  # cache 24h
+            return result
     except Exception as e:
         logger.error(f"LLM resource generation failed for '{skill}': {e}")
 

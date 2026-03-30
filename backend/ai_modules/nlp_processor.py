@@ -14,6 +14,7 @@ from spacy.matcher import PhraseMatcher
 from loguru import logger
 
 from utils.skill_normalizer import SkillNormalizer
+from config import SPACY_MODEL
 
 # ─── Certification Keywords ────────────────────────────────────────────────────
 # Common certification patterns — extended via dataset over time
@@ -74,10 +75,12 @@ KNOWN_SKILLS: list[str] = [
 def _load_nlp_model():
     """Load spaCy model (cached singleton)."""
     try:
-        nlp = spacy.load("en_core_web_lg")
+        nlp = spacy.load(SPACY_MODEL)
+        logger.info(f"Loaded spaCy model: {SPACY_MODEL}")
     except OSError:
-        logger.warning("en_core_web_lg not found. Falling back to en_core_web_sm.")
-        nlp = spacy.load("en_core_web_sm")
+        fallback = "en_core_web_sm"
+        logger.warning(f"{SPACY_MODEL} not found. Falling back to {fallback}.")
+        nlp = spacy.load(fallback)
     return nlp
 
 
