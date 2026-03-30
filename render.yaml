@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: resume-analyzer-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+
+    envVars:
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: HUGGINGFACE_API_TOKEN
+        sync: false
+      - key: SPACY_MODEL
+        value: en_core_web_sm
+      - key: TESSERACT_CMD
+        value: /usr/bin/tesseract
+      - key: API_RELOAD
+        value: "false"

@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:dio/dio.dart';
 import 'package:provider/provider.dart';
 
 import 'services/auth_service.dart';
@@ -10,9 +11,32 @@ import 'screens/auth/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'utils/app_theme.dart';
 
+/// Pings the backend health endpoint in the background.
+/// Wakes up Render free tier from sleep before user needs the API.
+void _warmupBackend() {
+  Future.delayed(Duration.zero, () async {
+    try {
+      await Dio().get(
+        'https://resume-analyzer-api.onrender.com/health',
+        options: Options(
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
+    } catch (_) {
+      // Silently ignore - warmup is best-effort
+    }
+  });
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // Ping backend on launch so Render wakes up from sleep
+  // while user is still on the login/splash screen
+  _warmupBackend();
+
   runApp(const ResumeAnalyzerApp());
 }
 
@@ -87,8 +111,8 @@ class _SplashScreen extends StatelessWidget {
             Text(
               'Resume Analyzer',
               style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 32),
             const CircularProgressIndicator(),

@@ -1,12 +1,17 @@
 // screens/growth_chart_screen.dart
+// Growth tracking screen using typed GrowthData model.
+
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:intl/intl.dart';
+
+import '../models/growth_data.dart';
 import '../services/api_service.dart';
+import '../widgets/skill_chip.dart';
 
 class GrowthChartScreen extends StatefulWidget {
   const GrowthChartScreen({super.key});
+
   @override
   State<GrowthChartScreen> createState() => _GrowthChartScreenState();
 }
@@ -15,7 +20,7 @@ class _GrowthChartScreenState extends State<GrowthChartScreen> {
   final _api = ApiService();
   bool _loading = true;
   String? _error;
-  Map<String, dynamic>? _data;
+  GrowthData? _data;
 
   @override
   void initState() {
@@ -37,9 +42,35 @@ class _GrowthChartScreenState extends State<GrowthChartScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)));
-    if (_data == null || _data!['has_data'] == false) {
+
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: cs.error),
+              const SizedBox(height: 12),
+              Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: cs.error)),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final data = _data!;
+
+    if (!data.hasData) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -48,16 +79,15 @@ class _GrowthChartScreenState extends State<GrowthChartScreen> {
             const SizedBox(height: 16),
             const Text('No growth data yet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            Text(_data?['message'] ?? 'Upload your resume to start tracking.',
+            Text(
+              data.message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.grey)),
+              style: const TextStyle(color: Colors.grey),
+            ),
           ],
         ),
       );
     }
-
-    final ts = List<Map<String, dynamic>>.from(_data!['time_series'] ?? []);
-    final cs = Theme.of(context).colorScheme;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -67,56 +97,101 @@ class _GrowthChartScreenState extends State<GrowthChartScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Summary stats
+            // Summary stats row 1
             Row(children: [
-              _GrowthStat(label: 'Total Skills', value: '${_data!['current_skill_count']}',
-                delta: _data!['skill_count_delta'], icon: Icons.psychology),
+              _GrowthStat(
+                label: 'Total Skills',
+                value: '${data.currentSkillCount}',
+                delta: data.skillCountDelta,
+                icon: Icons.psychology,
+              ),
               const SizedBox(width: 12),
-              _GrowthStat(label: 'Best Match', value: '${((_data!['current_best_match_score'] as num) * 100).toStringAsFixed(0)}%',
-                delta: ((_data!['score_delta'] as num) * 100).round(), icon: Icons.bar_chart),
+              _GrowthStat(
+                label: 'Best Match',
+                value: data.matchScorePercent,
+                deltaLabel: data.scoreDeltaPercent,
+                icon: Icons.bar_chart,
+                deltaPositive: data.scoreDelta >= 0,
+              ),
             ]).animate().fadeIn(),
 
             const SizedBox(height: 12),
 
+            // Summary stats row 2
             Row(children: [
-              _GrowthStat(label: 'Analyses', value: '${_data!['total_snapshots']}', icon: Icons.history),
+              _GrowthStat(
+                label: 'Analyses',
+                value: '${data.totalSnapshots}',
+                icon: Icons.history,
+              ),
               const SizedBox(width: 12),
-              _GrowthStat(label: 'New Skills', value: '${_data!['new_skills_count']}', icon: Icons.add_circle_outline),
+              _GrowthStat(
+                label: 'New Skills',
+                value: '${data.newSkillsCount}',
+                icon: Icons.add_circle_outline,
+              ),
             ]).animate().fadeIn(delay: 100.ms),
 
-            const SizedBox(height: 24),
-
-            // Skill count over time chart
-            if (ts.length > 1) ...[
-              Text('Skill Count Over Time', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+            // Charts (only if 2+ data points)
+            if (data.timeSeries.length > 1) ...[
+              const SizedBox(height: 28),
+              _ChartTitle(title: 'Skill Count Over Time'),
               const SizedBox(height: 12),
               SizedBox(
                 height: 200,
-                child: LineChart(_buildLineChart(ts, cs, useScore: false)),
+                child: LineChart(_buildChart(data.timeSeries, cs, useScore: false)),
               ).animate().fadeIn(delay: 200.ms),
-              const SizedBox(height: 24),
 
-              Text('Match Score Over Time', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 28),
+              _ChartTitle(title: 'Match Score Over Time'),
               const SizedBox(height: 12),
               SizedBox(
                 height: 200,
-                child: LineChart(_buildLineChart(ts, cs, useScore: true)),
+                child: LineChart(_buildChart(data.timeSeries, cs, useScore: true)),
               ).animate().fadeIn(delay: 300.ms),
             ],
 
-            // New skills added
-            if ((_data!['new_skills_added'] as List).isNotEmpty) ...[
+            // Improvement streak badge
+            if (data.improvementStreak > 0) ...[
               const SizedBox(height: 24),
-              Text('New Skills Added', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [cs.primaryContainer, cs.secondaryContainer],
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    const Text('🔥', style: TextStyle(fontSize: 28)),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${data.improvementStreak}-upload streak!',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        const Text('You\'ve improved with every upload', style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(delay: 350.ms).scale(begin: const Offset(0.95, 0.95)),
+            ],
+
+            // New skills added
+            if (data.newSkillsAdded.isNotEmpty) ...[
+              const SizedBox(height: 24),
+              _ChartTitle(title: 'New Skills Added (${data.newSkillsCount})'),
               const SizedBox(height: 10),
               Wrap(
-                spacing: 8, runSpacing: 8,
-                children: List<String>.from(_data!['new_skills_added'])
-                  .map((s) => Chip(
-                    label: Text(s, style: TextStyle(fontSize: 12, color: cs.onSecondaryContainer)),
-                    backgroundColor: cs.secondaryContainer,
-                    side: BorderSide.none,
-                  )).toList(),
+                spacing: 8,
+                runSpacing: 8,
+                children: data.newSkillsAdded
+                    .map((s) => SkillChip(skill: s, type: SkillChipType.present))
+                    .toList(),
               ).animate().fadeIn(delay: 400.ms),
             ],
           ],
@@ -125,19 +200,27 @@ class _GrowthChartScreenState extends State<GrowthChartScreen> {
     );
   }
 
-  LineChartData _buildLineChart(List<Map<String, dynamic>> ts, ColorScheme cs, {required bool useScore}) {
-    final spots = ts.asMap().entries.map((e) {
-      final val = useScore
-        ? ((e.value['best_match_score'] as num).toDouble() * 100)
-        : (e.value['skill_count'] as num).toDouble();
+  LineChartData _buildChart(
+      List<GrowthSnapshot> snapshots,
+      ColorScheme cs, {
+        required bool useScore,
+      }) {
+    final spots = snapshots.asMap().entries.map((e) {
+      final val = useScore ? e.value.scorePercent : e.value.skillCount.toDouble();
       return FlSpot(e.key.toDouble(), val);
     }).toList();
 
     return LineChartData(
-      gridData: FlGridData(show: true, drawVerticalLine: false,
-        getDrawingHorizontalLine: (_) => FlLine(color: cs.outlineVariant, strokeWidth: 1)),
+      gridData: FlGridData(
+        show: true,
+        drawVerticalLine: false,
+        getDrawingHorizontalLine: (_) =>
+            FlLine(color: cs.outlineVariant, strokeWidth: 1),
+      ),
       titlesData: FlTitlesData(
-        leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 40)),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+        ),
         bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
         topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
         rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -160,40 +243,73 @@ class _GrowthChartScreenState extends State<GrowthChartScreen> {
   }
 }
 
+class _ChartTitle extends StatelessWidget {
+  final String title;
+  const _ChartTitle({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title,
+      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+    );
+  }
+}
+
 class _GrowthStat extends StatelessWidget {
   final String label;
   final String value;
   final int? delta;
+  final String? deltaLabel;
+  final bool? deltaPositive;
   final IconData icon;
-  const _GrowthStat({required this.label, required this.value, this.delta, required this.icon});
+
+  const _GrowthStat({
+    required this.label,
+    required this.value,
+    this.delta,
+    this.deltaLabel,
+    this.deltaPositive,
+    required this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final isPositive = (delta ?? 0) >= 0;
+    final isPos = deltaPositive ?? (delta ?? 0) >= 0;
+    final deltaStr = deltaLabel ?? (delta != null ? '${isPos ? '+' : ''}$delta' : null);
+
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(14)),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(14),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(icon, size: 20, color: cs.primary),
             const SizedBox(height: 8),
             Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            Row(children: [
-              Text(label, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-              if (delta != null) ...[
-                const SizedBox(width: 4),
-                Text(
-                  '${isPositive ? '+' : ''}$delta',
-                  style: TextStyle(
-                    color: isPositive ? Colors.green : Colors.red,
-                    fontSize: 11, fontWeight: FontWeight.bold,
-                  ),
+            Row(
+              children: [
+                Flexible(
+                  child: Text(label, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
                 ),
+                if (deltaStr != null) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    deltaStr,
+                    style: TextStyle(
+                      color: isPos ? Colors.green : Colors.red,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
               ],
-            ]),
+            ),
           ],
         ),
       ),

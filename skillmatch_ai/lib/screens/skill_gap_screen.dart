@@ -1,6 +1,7 @@
 // screens/skill_gap_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import '../models/skill_gap.dart';
 import '../services/api_service.dart';
 import '../widgets/skill_chip.dart';
 
@@ -16,7 +17,7 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
   final _skillsCtrl = TextEditingController();
   bool _isLoading = false;
   String? _error;
-  Map<String, dynamic>? _result;
+  SkillGapResult? _result;
 
   Future<void> _analyze() async {
     final job = _jobCtrl.text.trim();
@@ -36,8 +37,8 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
     }
   }
 
-  Future<void> _showResources(String skill) async {
-    showModalBottomSheet(
+  void _showResources(String skill) {
+    showModalBottomSheet(  // ignore: unawaited_futures
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -116,10 +117,11 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
 
   Widget _buildResults(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final score = (_result!['completion_score'] as num?)?.toDouble() ?? 0;
-    final matched = List<String>.from(_result!['matched_skills'] ?? []);
-    final missing = List<String>.from(_result!['missing_skills'] ?? []);
-    final msg = _result!['message'] ?? '';
+    final r = _result!;
+    final score = r.completionScore;
+    final matched = r.matchedSkills;
+    final missing = r.missingSkills;
+    final msg = r.message;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -136,7 +138,7 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
           ),
           child: Column(
             children: [
-              Text(_result!['target_job'] ?? '', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(r.targetJob, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
               Stack(
                 alignment: Alignment.center,
@@ -157,8 +159,8 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
               const SizedBox(height: 12),
               Text(msg, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13)),
               const SizedBox(height: 8),
-              Text('${matched.length} of ${_result!['total_required']} required skills matched',
-                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+              Text('${matched.length} of ${r.totalRequired} required skills matched',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
             ],
           ),
         ).animate().fadeIn().scale(begin: const Offset(0.95, 0.95)),
@@ -168,7 +170,7 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
         // Matched skills
         if (matched.isNotEmpty) ...[
           Text('✅ Skills You Have (${matched.length})',
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           const SizedBox(height: 10),
           Wrap(spacing: 8, runSpacing: 8,
             children: matched.map((s) => SkillChip(skill: s, type: SkillChipType.present)).toList(),
@@ -179,7 +181,7 @@ class _SkillGapScreenState extends State<SkillGapScreen> {
         // Missing skills — tappable to show resources
         if (missing.isNotEmpty) ...[
           Text('❌ Missing Skills (${missing.length}) — Tap for resources',
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           const SizedBox(height: 10),
           Wrap(spacing: 8, runSpacing: 8,
             children: missing.map((s) => SkillChip(
@@ -207,7 +209,7 @@ class _ResourcesSheet extends StatefulWidget {
 
 class _ResourcesSheetState extends State<_ResourcesSheet> {
   bool _loading = true;
-  List<dynamic> _resources = [];
+  List<LearningResource> _resources = [];
   String? _error;
 
   @override
@@ -218,8 +220,8 @@ class _ResourcesSheetState extends State<_ResourcesSheet> {
 
   Future<void> _load() async {
     try {
-      final data = await widget.api.skillResources(widget.skill);
-      setState(() { _resources = data['resources'] ?? []; _loading = false; });
+      final resources = await widget.api.skillResources(widget.skill);
+      setState(() { _resources = resources; _loading = false; });
     } catch (e) {
       setState(() { _error = ApiService.extractError(e); _loading = false; });
     }
@@ -238,9 +240,9 @@ class _ResourcesSheetState extends State<_ResourcesSheet> {
         child: Column(
           children: [
             Container(width: 40, height: 4, margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
             Text('Learn: ${widget.skill}',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
             Text('AI-generated learning resources', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
             const SizedBox(height: 16),
@@ -257,16 +259,15 @@ class _ResourcesSheetState extends State<_ResourcesSheet> {
                     return ListTile(
                       leading: CircleAvatar(
                         backgroundColor: cs.primaryContainer,
-                        child: Text(_typeIcon(r['type'] ?? ''),
-                          style: const TextStyle(fontSize: 18)),
+                        child: Text(r.emoji, style: const TextStyle(fontSize: 18)),
                       ),
-                      title: Text(r['title'] ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
+                      title: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w600)),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('${r['platform']} • ${r['duration']}',
-                            style: TextStyle(color: cs.primary, fontSize: 12, fontWeight: FontWeight.w500)),
-                          Text(r['description'] ?? '', style: const TextStyle(fontSize: 12)),
+                          Text('${r.platform} • ${r.duration}',
+                              style: TextStyle(color: cs.primary, fontSize: 12, fontWeight: FontWeight.w500)),
+                          Text(r.description, style: const TextStyle(fontSize: 12)),
                         ],
                       ),
                       isThreeLine: true,
@@ -280,14 +281,5 @@ class _ResourcesSheetState extends State<_ResourcesSheet> {
     );
   }
 
-  String _typeIcon(String type) {
-    switch (type.toLowerCase()) {
-      case 'course': return '🎓';
-      case 'book': return '📚';
-      case 'video': return '▶️';
-      case 'documentation': return '📄';
-      case 'tutorial': return '🛠️';
-      default: return '🔗';
-    }
-  }
+
 }
