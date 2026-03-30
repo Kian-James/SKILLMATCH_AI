@@ -1,0 +1,11 @@
+# Python
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+
+# Env files
+.env
+
+# Mac
+.DS_Store

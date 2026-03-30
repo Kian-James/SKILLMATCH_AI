@@ -1,0 +1,3569 @@
+{
+  "generated_at": "2026-03-30T10:55:18Z",
+  "model_used": "meta-llama/Meta-Llama-3-8B-Instruct",
+  "families_discovered": [
+    "Software Engineering",
+    "Data Science",
+    "AI/ML Engineering",
+    "Cloud Computing",
+    "Cybersecurity",
+    "Networking",
+    "Embedded Systems",
+    "Game Development",
+    "Blockchain Development",
+    "QA/Testing",
+    "Electrical Engineering",
+    "Mechanical Engineering",
+    "Civil Engineering",
+    "Chemical Engineering",
+    "Aerospace Engineering",
+    "Biomedical Engineering",
+    "Industrial Engineering",
+    "Environmental Engineering",
+    "Structural Engineering",
+    "Systems Engineering",
+    "Automotive Engineering",
+    "Robotics Engineering",
+    "Manufacturing Engineering",
+    "Petroleum Engineering",
+    "Materials Science",
+    "Nuclear Engineering",
+    "Computer Vision",
+    "Natural Language Processing",
+    "Full Stack Development",
+    "Backend Development",
+    "Frontend Development",
+    "DevOps Engineering",
+    "Database Administration",
+    "Data Analytics",
+    "Business Intelligence",
+    "IT Project Management",
+    "Technical Writing",
+    "UX/UI Design",
+    "Product Management",
+    "Agile Development",
+    "Scrum Master",
+    "Digital Marketing",
+    "E-commerce Development",
+    "Web Development",
+    "Mobile App Development",
+    "Network Administration",
+    "Database Security",
+    "Artificial Intelligence",
+    "Machine Learning Engineering"
+  ],
+  "stats": {
+    "raw_roles_generated": 245,
+    "after_deduplication": 170,
+    "already_in_firestore": 0,
+    "newly_uploaded": 169
+  },
+  "roles": [
+    {
+      "job_title": "Architect",
+      "skills": [
+        "NoSQL",
+        "Database modeling",
+        "DevOps",
+        "Serverless Computing",
+        "Database security",
+        "Data Virtualization",
+        "Data warehousing",
+        "Kubernetes",
+        "Information Architecture",
+        "API Design",
+        "Information Modeling",
+        "Taxonomy Management",
+        "Big Data",
+        "Data architecture",
+        "Scalability and performance"
+      ],
+      "certifications": [
+        "Microsoft Certified: Azure Solutions Architect Expert",
+        "Oracle Certified Master - Database Administration",
+        "AWS Certified Solutions Architect",
+        "Microsoft Certified: Data Platform Developer Associate"
+      ],
+      "family": "Software Engineering"
+    },
+    {
+      "job_title": "Engineer",
+      "skills": [
+        "Traffic Signal Control",
+        "Equipment operation",
+        "Landslide Hazard Assessment",
+        "Medical Imaging Software",
+        "Traffic Simulation",
+        "Tissue Engineering Modeling",
+        "Aerodynamic design",
+        "Tissue Engineering",
+        "Tissue Regeneration",
+        "Build automation",
+        "Kubernetes",
+        "Process simulation",
+        "Orchestration tools",
+        "Tissue Engineering Software",
+        "Security best practices"
+      ],
+      "certifications": [
+        "Certified Biomedical Equipment Technician (CBET)",
+        "Certified DevOps Engineer",
+        "Google Cloud Certified - Professional Cloud Developer",
+        "AWS Certified DevOps Engineer"
+      ],
+      "family": "Software Engineering"
+    },
+    {
+      "job_title": "Full Stack Developer",
+      "skills": [
+        "Event-Driven Architecture",
+        "Vue.js",
+        "Low-Latency Systems",
+        "Python",
+        "Node.js",
+        "Go",
+        "Django",
+        "Serverless Computing",
+        "NoSQL",
+        "Flask",
+        "Message Queuing",
+        "API Design",
+        "Stream Processing",
+        "Real-Time Data Processing",
+        "Databases"
+      ],
+      "certifications": [
+        "Microsoft Certified: Azure Developer Associate",
+        "Google Cloud Certified - Professional Cloud Developer"
+      ],
+      "family": "Software Engineering"
+    },
+    {
+      "job_title": "Cybersecurity Engineer",
+      "skills": [
+        "Threat Analysis",
+        "Vulnerability Assessment",
+        "Incident Response",
+        "Penetration Testing",
+        "Network Security",
+        "Firewalls",
+        "Encryption",
+        "Access Control",
+        "Authentication",
+        "Authorization"
+      ],
+      "certifications": [
+        "CompTIA Security+",
+        "CISSP"
+      ],
+      "family": "Software Engineering"
+    },
+    {
+      "job_title": "Artificial Intelligence Engineer",
+      "skills": [
+        "Machine Learning",
+        "Deep Learning",
+        "Neural Networks",
+        "Natural Language Processing",
+        "Computer Vision",
+        "Data Science",
+        "Statistics",
+        "Mathematics",
+        "Programming Languages",
+        "Data Analysis"
+      ],
+      "certifications": [
+        "Google Cloud Certified Professional Machine Learning Engineer"
+      ],
+      "family": "Software Engineering"
+    },
+    {
+      "job_title": "Data Scientist",
+      "skills": [
+        "Python",
+        "Data analysis",
+        "Julia",
+        "Statistical modeling",
+        "Machine learning",
+        "Data mining",
+        "Data storage",
+        "Deep Learning",
+        "Statistical Analysis",
+        "Cloud Computing",
+        "Data cleaning",
+        "R",
+        "Big Data Analytics",
+        "Python Programming",
+        "Data Mining"
+      ],
+      "certifications": [
+        "Certified Data Scientist by Data Science Council of America",
+        "Google Cloud Certified - Professional Data Engineer",
+        "Certified Analytics Professional by Institute for Operations Research and the Management Sciences",
+        "Certified Data Scientist (CDS)"
+      ],
+      "family": "Data Science"
+    },
+    {
+      "job_title": "Business Intelligence Developer",
+      "skills": [
+        "Business Analytics",
+        "Data Visualization",
+        "Oracle Data Integrator",
+        "SQL",
+        "Data Warehousing",
+        "ETL Development",
+        "Tableau",
+        "ETL Tools",
+        "Power BI",
+        "SQL Server Integration Services",
+        "Data Modeling",
+        "Microsoft SSIS",
+        "Data Marts",
+        "Database Design",
+        "Data Governance"
+      ],
+      "certifications": [
+        "Microsoft Certified: Data Analyst Associate",
+        "Microsoft Certified: Data Platform Developer Associate",
+        "Oracle Certified Professional: Data Integrator",
+        "Tableau Certified Associate"
+      ],
+      "family": "Data Science"
+    },
+    {
+      "job_title": "Data Engineer",
+      "skills": [
+        "Data Pipelining",
+        "Data Storage",
+        "Cloud Data Modeling",
+        "Big Data",
+        "Streaming Data",
+        "Cloud Computing",
+        "Apache Spark",
+        "Data Pipelines",
+        "Big Data Processing",
+        "Cloud Data Architecture",
+        "Data Architecture",
+        "Data Security",
+        "Cloud Data Security",
+        "Cloud Data Migration",
+        "Cloud Data Warehousing"
+      ],
+      "certifications": [
+        "Certified Data Engineer (CDE)",
+        "Certified Data Engineer",
+        "Google Cloud Certified - Professional Data Engineer",
+        "Microsoft Certified: Azure Data Engineer Associate"
+      ],
+      "family": "Data Science"
+    },
+    {
+      "job_title": "Quantitative Analyst",
+      "skills": [
+        "Data Visualization",
+        "Derivatives Pricing",
+        "Mathematical Finance",
+        "Financial Modeling",
+        "Mathematical Modeling",
+        "Quantitative Finance",
+        "Statistical Analysis",
+        "Market Data Analysis",
+        "High-Frequency Trading",
+        "Programming Languages",
+        "Algorithmic Trading",
+        "Optimization Techniques",
+        "Risk Management"
+      ],
+      "certifications": [
+        "Chartered Financial Analyst (CFA)",
+        "Certified Quantitative Analyst (CQA)"
+      ],
+      "family": "Data Science"
+    },
+    {
+      "job_title": "Computer Vision Engineer",
+      "skills": [
+        "Optical flow",
+        "Python",
+        "Object detection",
+        "Convolutional Neural Networks",
+        "3D reconstruction",
+        "Image processing",
+        "OpenCV",
+        "3D Reconstruction",
+        "Image segmentation",
+        "Machine learning",
+        "Feature extraction",
+        "Deep Learning",
+        "Computer Vision Algorithms",
+        "Feature Extraction",
+        "Image Processing"
+      ],
+      "certifications": [
+        "CVAP",
+        "ICV",
+        "Microsoft Certified: Azure AI Engineer Associate",
+        "Certified Data Scientist (CDS)"
+      ],
+      "family": "AI/ML Engineering"
+    },
+    {
+      "job_title": "Natural Language Processing Engineer",
+      "skills": [
+        "Python",
+        "Word embeddings",
+        "Topic modeling",
+        "Speech recognition",
+        "Speech Recognition",
+        "Sentiment analysis",
+        "Dependency Parsing",
+        "Spacy",
+        "Part-of-speech tagging",
+        "Part-of-Speech Tagging",
+        "Named Entity Recognition",
+        "Java",
+        "Language models",
+        "Topic Modeling",
+        "Named entity recognition"
+      ],
+      "certifications": [
+        "NLTK (Natural Language Toolkit) Certification",
+        "Certified Data Scientist - Certified Data Scientist",
+        "Stanford Natural Language Processing with Deep Learning Specialization",
+        "Amazon Certified - Machine Learning - Specialty"
+      ],
+      "family": "AI/ML Engineering"
+    },
+    {
+      "job_title": "Machine Learning Engineer",
+      "skills": [
+        "Model evaluation",
+        "Supervised Learning",
+        "Python",
+        "Gradient Boosting",
+        "Model deployment",
+        "Unsupervised learning",
+        "Reinforcement Learning",
+        "Hyperparameter tuning",
+        "Deep learning",
+        "Model selection",
+        "R",
+        "Supervised learning",
+        "Unsupervised Learning",
+        "Neural Networks",
+        "Scikit-learn"
+      ],
+      "certifications": [
+        "Certified Data Scientist by Data Science Council of America",
+        "Machine Learning Certification by Microsoft",
+        "Certified Analytics Professional (CAP)",
+        "Certified Data Scientist (CDS)"
+      ],
+      "family": "AI/ML Engineering"
+    },
+    {
+      "job_title": "Research Scientist",
+      "skills": [
+        "Python",
+        "Ensemble methods",
+        "Data analysis",
+        "Active learning",
+        "Computer Vision",
+        "Generative models",
+        "LaTeX",
+        "Mathematical Modeling",
+        "Deep learning frameworks",
+        "Catalysis",
+        "Unsupervised learning",
+        "Deep Learning",
+        "Experimental Design",
+        "Statistical Analysis",
+        "Material synthesis"
+      ],
+      "certifications": [
+        "PhD in Computer Science",
+        "Certified Data Scientist (CDS)",
+        "ICML",
+        "Certified Analytics Professional (CAP)"
+      ],
+      "family": "AI/ML Engineering"
+    },
+    {
+      "job_title": "Ethics Engineer",
+      "skills": [
+        "Ethics Frameworks",
+        "Bias Detection",
+        "Fairness Metrics",
+        "Explainability Techniques",
+        "Transparency Methods",
+        "Human-Centered Design",
+        "Communication Skills",
+        "Project Management",
+        "Data Governance",
+        "Regulatory Compliance"
+      ],
+      "certifications": [],
+      "family": "AI/ML Engineering"
+    },
+    {
+      "job_title": "Solutions Architect",
+      "skills": [
+        "Cloud Migration Planning",
+        "Cloud Cost Optimization",
+        "Cloud Security Architecture",
+        "Cloud Governance Frameworks",
+        "Cloud Service Level Agreements",
+        "Cloud Vendor Management",
+        "Cloud Strategy Development",
+        "Cloud Risk Management",
+        "Cloud Compliance",
+        "Cloud Infrastructure Design"
+      ],
+      "certifications": [
+        "AWS Certified Solutions Architect - Professional",
+        "Microsoft Certified: Azure Solutions Architect Expert"
+      ],
+      "family": "Cloud Computing"
+    },
+    {
+      "job_title": "Operations Engineer",
+      "skills": [
+        "Cloud Monitoring Tools",
+        "Cloud Logging and Analytics",
+        "Cloud Security Operations",
+        "Cloud Incident Management",
+        "Cloud Change Management",
+        "Cloud Backup and Recovery",
+        "Cloud Disaster Recovery",
+        "Cloud Capacity Planning",
+        "Cloud Performance Optimization",
+        "Cloud Automation Tools"
+      ],
+      "certifications": [
+        "AWS Certified Cloud Practitioner - Professional",
+        "Google Cloud Certified - Professional Cloud Developer"
+      ],
+      "family": "Cloud Computing"
+    },
+    {
+      "job_title": "Devops Engineer",
+      "skills": [
+        "Cloud Continuous Integration",
+        "Cloud Continuous Deployment",
+        "Cloud Continuous Testing",
+        "Cloud Infrastructure as Code",
+        "Cloud Automation Tools",
+        "Cloud Monitoring Tools",
+        "Cloud Logging and Analytics",
+        "Cloud Security Compliance",
+        "Cloud Performance Optimization",
+        "Cloud Scalability"
+      ],
+      "certifications": [
+        "AWS Certified DevOps Engineer - Professional"
+      ],
+      "family": "Cloud Computing"
+    },
+    {
+      "job_title": "Cloud Security Engineer",
+      "skills": [
+        "Cloud Application Security",
+        "Security Information and Event Management",
+        "Cloud Data Security",
+        "Identity and Access Management",
+        "Threat Detection and Response",
+        "Cloud Security Tools",
+        "Cloud Security Architecture",
+        "Data Encryption",
+        "Cloud Security Compliance",
+        "Cloud Identity and Access Management",
+        "Cloud Network Security",
+        "Cloud Penetration Testing",
+        "Cloud Threat Intelligence",
+        "Cloud Security Governance",
+        "Cloud Security Risk Management"
+      ],
+      "certifications": [
+        "AWS Certified Security - Specialty",
+        "CompTIA Security+",
+        "Certified Information Systems Security Professional (CISSP)"
+      ],
+      "family": "Cloud Computing"
+    },
+    {
+      "job_title": "Security Architect",
+      "skills": [
+        "Cloud Security Governance",
+        "Compliance and Risk Management",
+        "Cloud Migration Planning",
+        "Cloud Security Architecture",
+        "Identity and Access Management",
+        "Cloud Security Monitoring",
+        "Cloud Security Auditing",
+        "Cloud Security Compliance",
+        "Cloud Security Threat Modeling",
+        "Cloud Security Incident Response"
+      ],
+      "certifications": [
+        "CompTIA Cloud+",
+        "AWS Certified Security - Specialty"
+      ],
+      "family": "Cybersecurity"
+    },
+    {
+      "job_title": "Penetration Tester",
+      "skills": [
+        "Network Protocol Analysis",
+        "Operating System Exploitation",
+        "Web Application Security",
+        "Network Security Architecture",
+        "Cryptography",
+        "Reverse Engineering",
+        "Bug Bounty Hunting",
+        "Vulnerability Assessment",
+        "Network Traffic Analysis",
+        "Incident Response"
+      ],
+      "certifications": [
+        "OSCP",
+        "GPEN"
+      ],
+      "family": "Cybersecurity"
+    },
+    {
+      "job_title": "Chief Information Security Officer",
+      "skills": [
+        "Information Security Governance",
+        "Compliance and Risk Management",
+        "Security Policy Development",
+        "Security Awareness Training",
+        "Security Budget Planning",
+        "Security Team Management",
+        "Security Program Development",
+        "Security Metrics and Reporting",
+        "Security Communication",
+        "Security Leadership"
+      ],
+      "certifications": [
+        "CISSP",
+        "CISM"
+      ],
+      "family": "Cybersecurity"
+    },
+    {
+      "job_title": "Siem Analyst",
+      "skills": [
+        "SIEM System Administration",
+        "Log Analysis and Reporting",
+        "Threat Detection and Response",
+        "Incident Response",
+        "Security Monitoring",
+        "Security Information Management",
+        "Event Correlation and Analysis",
+        "Security Analytics",
+        "Security Orchestration",
+        "Security Automation"
+      ],
+      "certifications": [
+        "CompTIA Security+",
+        "GIAC Security Essentials"
+      ],
+      "family": "Cybersecurity"
+    },
+    {
+      "job_title": "Security Engineer",
+      "skills": [
+        "DevSecOps",
+        "Cloud Security",
+        "Authentication",
+        "Vulnerability Management",
+        "API Security",
+        "Mobile Application Security",
+        "Secure Software Development Life Cycle",
+        "Vulnerability Assessment",
+        "Encryption",
+        "Secure Coding Practices",
+        "Security Testing",
+        "Secure Data Storage",
+        "Access Control",
+        "Authorization",
+        "OWASP Top 10"
+      ],
+      "certifications": [
+        "OWASP Certified Security Specialist",
+        "Certified Secure Software Lifecycle Professional (CSSLP)",
+        "OWASP Web Security Testing Certification"
+      ],
+      "family": "Cybersecurity"
+    },
+    {
+      "job_title": "Network Architect",
+      "skills": [
+        "Network Performance Optimization",
+        "Network security best practices",
+        "Network Automation",
+        "Network troubleshooting",
+        "Switching fundamentals",
+        "Network performance monitoring",
+        "Cloud Networking",
+        "Network segmentation",
+        "Network Configuration Management",
+        "Network routing",
+        "Firewall configuration",
+        "Network Virtualization",
+        "Network Protocols",
+        "Quality of Service (QoS)",
+        "Network Scalability"
+      ],
+      "certifications": [
+        "CCIE",
+        "CCNP",
+        "CCNA",
+        "Cisco CCNP Enterprise"
+      ],
+      "family": "Networking"
+    },
+    {
+      "job_title": "Network Engineer",
+      "skills": [
+        "Network automation scripting",
+        "Cloud network performance optimization",
+        "Network Performance Optimization",
+        "Cloud network scalability",
+        "Cloud network migration",
+        "Network virtualization",
+        "Network Automation",
+        "Network performance optimization",
+        "Cloud network security",
+        "Network security hardening",
+        "Cloud Networking",
+        "Cloud networking fundamentals",
+        "Cloud network automation",
+        "Network troubleshooting tools",
+        "Network device configuration"
+      ],
+      "certifications": [
+        "Azure Certified Solutions Architect",
+        "AWS Certified Solutions Architect",
+        "CCNP",
+        "CCNA"
+      ],
+      "family": "Networking"
+    },
+    {
+      "job_title": "Network Security Engineer",
+      "skills": [
+        "Network threat analysis",
+        "Intrusion Detection Systems",
+        "Network security architecture",
+        "Network security best practices",
+        "Virtual Private Networks (VPNs)",
+        "Network penetration testing",
+        "Network vulnerability assessment",
+        "Network security design",
+        "Compliance with Security Standards",
+        "Network security monitoring",
+        "Secure Network Design",
+        "Network security compliance",
+        "Security Information and Event Management (SIEM)",
+        "Network security fundamentals",
+        "Firewall Configuration"
+      ],
+      "certifications": [
+        "CEH",
+        "CompTIA Security+",
+        "CISSP"
+      ],
+      "family": "Networking"
+    },
+    {
+      "job_title": "Network Operations Center Engineer",
+      "skills": [
+        "Network monitoring tools",
+        "Network performance analysis",
+        "Network troubleshooting techniques",
+        "Network incident management",
+        "Network problem management",
+        "Network change management",
+        "Network capacity planning",
+        "Network service level agreement (SLA) management",
+        "Network service desk operations",
+        "Network technical support"
+      ],
+      "certifications": [],
+      "family": "Networking"
+    },
+    {
+      "job_title": "Embedded Systems Engineer",
+      "skills": [
+        "C programming",
+        "Microcontroller programming",
+        "FPGA design",
+        "Digital logic design",
+        "Embedded Linux",
+        "RTOS configuration",
+        "Hardware debugging",
+        "Verilog",
+        "System-on-Chip (SoC) design",
+        "Embedded software testing"
+      ],
+      "certifications": [
+        "ARM Certified Embedded Systems Engineer",
+        "FPGA Certified Engineer"
+      ],
+      "family": "Embedded Systems"
+    },
+    {
+      "job_title": "Developer",
+      "skills": [
+        "RTOS configuration",
+        "Embedded Linux",
+        "Firmware development",
+        "C programming",
+        "Microcontroller programming",
+        "Digital signal processing",
+        "Interrupt-driven programming",
+        "Multithreading",
+        "Memory management",
+        "Device driver development"
+      ],
+      "certifications": [],
+      "family": "Embedded Systems"
+    },
+    {
+      "job_title": "Embedded Systems Architect",
+      "skills": [
+        "System architecture",
+        "Software design patterns",
+        "Embedded Linux",
+        "Firmware development",
+        "C programming",
+        "Microcontroller programming",
+        "Digital signal processing",
+        "Network protocols",
+        "Security protocols",
+        "Software testing methodologies"
+      ],
+      "certifications": [],
+      "family": "Embedded Systems"
+    },
+    {
+      "job_title": "Digital Signal Processing Engineer",
+      "skills": [
+        "Digital signal processing",
+        "Embedded Linux",
+        "FPGA design",
+        "C programming",
+        "Microcontroller programming",
+        "Analog-to-digital conversion",
+        "Digital-to-analog conversion",
+        "Filter design",
+        "Signal processing algorithms",
+        "Embedded software testing"
+      ],
+      "certifications": [],
+      "family": "Embedded Systems"
+    },
+    {
+      "job_title": "Hardware Engineer",
+      "skills": [
+        "Circuit design",
+        "PCB design",
+        "Microcontroller programming",
+        "FPGA design",
+        "Analog circuit design",
+        "Digital logic design",
+        "System-on-Chip (SoC) design",
+        "Power management",
+        "Thermal management",
+        "Electromagnetic interference (EMI) reduction"
+      ],
+      "certifications": [
+        "IEEE Certified Engineer",
+        "FPGA Certified Engineer"
+      ],
+      "family": "Embedded Systems"
+    },
+    {
+      "job_title": "Programmer",
+      "skills": [
+        "C++",
+        "Game Engines",
+        "3D Graphics",
+        "Physics Engines",
+        "Scripting Languages",
+        "Game Development Pipelines",
+        "Collaboration Tools",
+        "Version Control Systems",
+        "Agile Methodologies",
+        "Debugging Techniques"
+      ],
+      "certifications": [],
+      "family": "Game Development"
+    },
+    {
+      "job_title": "Artist",
+      "skills": [
+        "Blender",
+        "Maya",
+        "3D Modeling",
+        "Texturing",
+        "Shading",
+        "Lighting",
+        "Animation Principles",
+        "Character Design",
+        "Concept Art",
+        "Visual Storytelling"
+      ],
+      "certifications": [],
+      "family": "Game Development"
+    },
+    {
+      "job_title": "Designer",
+      "skills": [
+        "Design Leadership",
+        "Training Needs Assessment",
+        "E-Learning Authoring Tools",
+        "Game Theories",
+        "Human-Centered Design",
+        "Service Design Principles",
+        "Design Systems",
+        "Design Strategy",
+        "Gamification",
+        "Storytelling",
+        "Curriculum Development",
+        "Prototyping",
+        "User Research",
+        "Interaction Design Principles",
+        "Design Collaboration"
+      ],
+      "certifications": [
+        "Certified Professional in Learning and Performance (CPLP)",
+        "Certified Instructional Designer (CID)"
+      ],
+      "family": "Game Development"
+    },
+    {
+      "job_title": "Producer",
+      "skills": [
+        "Project Management",
+        "Budgeting",
+        "Scheduling",
+        "Risk Management",
+        "Team Leadership",
+        "Communication",
+        "Stakeholder Management",
+        "Game Development Pipelines",
+        "Agile Methodologies",
+        "Scrum Framework"
+      ],
+      "certifications": [
+        "PRINCE2",
+        "PMP"
+      ],
+      "family": "Game Development"
+    },
+    {
+      "job_title": "Tester",
+      "skills": [
+        "Bug Tracking",
+        "Test Automation",
+        "Collaboration Tools",
+        "Test Execution",
+        "Medical Device Packaging Validation",
+        "Medical Device Labeling Compliance",
+        "Test Planning",
+        "Sterilization Validation",
+        "Human Factors Engineering",
+        "Medical Device Regulatory Compliance",
+        "Medical Device Design Validation",
+        "Agile Methodologies",
+        "Medical Device Design Verification",
+        "Debugging Techniques",
+        "Biocompatibility Testing"
+      ],
+      "certifications": [
+        "Certified Biomedical Equipment Technician (CBET)",
+        "Certified Clinical Engineer (CCE)",
+        "ISTQB"
+      ],
+      "family": "Game Development"
+    },
+    {
+      "job_title": "Blockchain Architect",
+      "skills": [
+        "Smart contract design",
+        "Blockchain network architecture",
+        "Consensus algorithm implementation",
+        "Cryptographic hash functions",
+        "Digital signatures",
+        "Blockchain scalability solutions",
+        "Blockchain security best practices",
+        "Blockchain data modeling",
+        "Blockchain testing frameworks",
+        "Blockchain deployment strategies"
+      ],
+      "certifications": [
+        "Certified Blockchain Developer (CBD)",
+        "Certified Ethereum Developer (CED)"
+      ],
+      "family": "Blockchain Development"
+    },
+    {
+      "job_title": "Blockchain Security Engineer",
+      "skills": [
+        "Vulnerability assessment and penetration testing",
+        "Security auditing and compliance",
+        "Threat modeling and risk assessment",
+        "Blockchain security protocols",
+        "Cryptographic key management",
+        "Secure coding practices",
+        "Blockchain incident response",
+        "Blockchain security testing",
+        "Blockchain security frameworks",
+        "Compliance with regulatory standards"
+      ],
+      "certifications": [
+        "Certified Information Systems Security Professional (CISSP)",
+        "Certified Cloud Security Professional (CCSP)"
+      ],
+      "family": "Blockchain Development"
+    },
+    {
+      "job_title": "Blockchain Developer",
+      "skills": [
+        "Programming languages (e.g., Solidity, Java, Python)",
+        "Blockchain development frameworks (e.g., Truffle, Web3)",
+        "Smart contract development and testing",
+        "Blockchain network integration",
+        "Cryptographic libraries and tools",
+        "Blockchain data storage and retrieval",
+        "Blockchain user interface design",
+        "Blockchain performance optimization",
+        "Blockchain debugging and troubleshooting",
+        "Blockchain deployment and maintenance"
+      ],
+      "certifications": [],
+      "family": "Blockchain Development"
+    },
+    {
+      "job_title": "Blockchain Data Scientist",
+      "skills": [
+        "Data analysis and visualization tools (e.g., Tableau, Power BI)",
+        "Machine learning algorithms and models",
+        "Blockchain data processing and storage",
+        "Blockchain data mining and analytics",
+        "Blockchain data visualization",
+        "Blockchain data security and governance",
+        "Blockchain data quality and integrity",
+        "Blockchain data architecture and design",
+        "Blockchain data governance and compliance",
+        "Blockchain data science frameworks"
+      ],
+      "certifications": [
+        "Certified Data Scientist (CDS)",
+        "Certified Analytics Professional (CAP)"
+      ],
+      "family": "Blockchain Development"
+    },
+    {
+      "job_title": "Blockchain Project Manager",
+      "skills": [
+        "Project management methodologies (e.g., Agile, Scrum)",
+        "Blockchain project planning and estimation",
+        "Blockchain project scheduling and resource allocation",
+        "Blockchain project risk management",
+        "Blockchain project quality assurance",
+        "Blockchain project communication and stakeholder management",
+        "Blockchain project budgeting and cost management",
+        "Blockchain project monitoring and control",
+        "Blockchain project evaluation and closure",
+        "Blockchain project management tools and software"
+      ],
+      "certifications": [
+        "Project Management Professional (PMP)",
+        "Certified Associate in Project Management (CAPM)"
+      ],
+      "family": "Blockchain Development"
+    },
+    {
+      "job_title": "Test Automation Engineer",
+      "skills": [
+        "Selenium",
+        "Appium",
+        "JUnit",
+        "TestNG",
+        "Cucumber",
+        "Java",
+        "Python",
+        "JavaScript",
+        "API testing",
+        "UI testing"
+      ],
+      "certifications": [
+        "ISTQB Certified Tester Foundation Level",
+        "ISTQB Certified Tester Advanced Level"
+      ],
+      "family": "QA/Testing"
+    },
+    {
+      "job_title": "Performance Tester",
+      "skills": [
+        "LoadRunner",
+        "JMeter",
+        "Gatling",
+        "Apache JMeter",
+        "Load testing",
+        "Stress testing",
+        "Performance analysis",
+        "SQL",
+        "NoSQL",
+        "Cloud computing"
+      ],
+      "certifications": [
+        "ISTQB Certified Tester Foundation Level",
+        "HP LoadRunner Certified"
+      ],
+      "family": "QA/Testing"
+    },
+    {
+      "job_title": "Security Tester",
+      "skills": [
+        "OWASP ZAP",
+        "Burp Suite",
+        "Nmap",
+        "Metasploit",
+        "Penetration testing",
+        "Vulnerability assessment",
+        "SQL injection",
+        "Cross-site scripting",
+        "Secure coding practices",
+        "Threat modeling"
+      ],
+      "certifications": [
+        "OSCP",
+        "CEH Certified Ethical Hacker"
+      ],
+      "family": "QA/Testing"
+    },
+    {
+      "job_title": "Devops Tester",
+      "skills": [
+        "Jenkins",
+        "Docker",
+        "Kubernetes",
+        "CI/CD pipelines",
+        "Automated testing",
+        "Continuous integration",
+        "Cloud computing",
+        "Containerization",
+        "Orchestration",
+        "Infrastructure as code"
+      ],
+      "certifications": [
+        "AWS Certified DevOps Engineer",
+        "Azure DevOps Engineer Expert"
+      ],
+      "family": "QA/Testing"
+    },
+    {
+      "job_title": "Manual Tester",
+      "skills": [
+        "Test planning",
+        "Test case development",
+        "Test execution",
+        "Test reporting",
+        "Defect management",
+        "Test environment setup",
+        "SQL",
+        "NoSQL",
+        "Cloud computing",
+        "Agile methodologies"
+      ],
+      "certifications": [
+        "ISTQB Certified Tester Foundation Level"
+      ],
+      "family": "QA/Testing"
+    },
+    {
+      "job_title": "Power Systems Engineer",
+      "skills": [
+        "Power system analysis",
+        "Electromagnetic transient analysis",
+        "Power system stability analysis",
+        "Circuit analysis",
+        "Electrical network modeling",
+        "Electrical power distribution",
+        "Power system design",
+        "Electrical system simulation",
+        "Electrical safety standards",
+        "High voltage engineering"
+      ],
+      "certifications": [
+        "IEEE Certified Power Engineer",
+        "PE (Professional Engineer) License"
+      ],
+      "family": "Electrical Engineering"
+    },
+    {
+      "job_title": "Electrical Hardware Engineer",
+      "skills": [
+        "Electrical system design",
+        "High-speed digital design",
+        "Electrical system verification",
+        "Reliability engineering",
+        "Embedded systems development",
+        "Microcontroller programming",
+        "Electrical system simulation",
+        "Electrical safety standards",
+        "Failure mode and effects analysis (FMEA)",
+        "Electrical system validation",
+        "Analog circuit design",
+        "Electrical system qualification",
+        "Electrical system testing",
+        "Digital circuit design",
+        "Electrical system integration"
+      ],
+      "certifications": [
+        "PE (Professional Engineer) License"
+      ],
+      "family": "Electrical Engineering"
+    },
+    {
+      "job_title": "Electrical Controls Engineer",
+      "skills": [
+        "Programmable logic controller (PLC) programming",
+        "Industrial control systems (ICS)",
+        "Electrical control panel design",
+        "Electrical system simulation",
+        "Electrical safety standards",
+        "Reliability engineering",
+        "Failure mode and effects analysis (FMEA)",
+        "Electrical motor control",
+        "Electrical power transmission",
+        "Electrical power distribution"
+      ],
+      "certifications": [],
+      "family": "Electrical Engineering"
+    },
+    {
+      "job_title": "Electrical Power Engineer",
+      "skills": [
+        "Electrical power generation",
+        "Electrical power transmission",
+        "Electrical power distribution",
+        "Electrical system simulation",
+        "Electrical safety standards",
+        "High voltage engineering",
+        "Electrical power quality",
+        "Electrical power factor correction",
+        "Electrical system reliability",
+        "Electrical system availability"
+      ],
+      "certifications": [
+        "IEEE Certified Power Engineer",
+        "PE (Professional Engineer) License"
+      ],
+      "family": "Electrical Engineering"
+    },
+    {
+      "job_title": "Mechanical Design Engineer",
+      "skills": [
+        "SolidWorks",
+        "CATIA",
+        "Finite Element Analysis",
+        "Computer-Aided Design",
+        "Mechanical Systems Design",
+        "3D Modeling",
+        "Assembly Design",
+        "Mechanical Component Optimization",
+        "Design for Manufacturing",
+        "Design for Assembly"
+      ],
+      "certifications": [],
+      "family": "Mechanical Engineering"
+    },
+    {
+      "job_title": "Robotics Engineer",
+      "skills": [
+        "Robot kinematics",
+        "C++ Programming",
+        "Computer Vision",
+        "Robot simulation",
+        "Machine learning",
+        "Robotics programming",
+        "Robotics Vision",
+        "Mechanical Systems Control",
+        "Robot Operating System (ROS)",
+        "Robot motion planning",
+        "Human-robot interaction",
+        "Embedded systems",
+        "Robot Operating System",
+        "Robot dynamics",
+        "Robot control systems"
+      ],
+      "certifications": [
+        "Certified Robotics Engineer by International Society of Robotics Engineers",
+        "Robotics Certification by Robotics Industries Association"
+      ],
+      "family": "Mechanical Engineering"
+    },
+    {
+      "job_title": "Product Development Engineer",
+      "skills": [
+        "Product Development Lifecycle",
+        "Design for Six Sigma",
+        "Lean Manufacturing",
+        "Mechanical Component Testing",
+        "Prototype Development",
+        "Product Testing and Validation",
+        "Failure Mode and Effects Analysis",
+        "Design of Experiments",
+        "Mechanical Systems Reliability",
+        "Quality Control"
+      ],
+      "certifications": [
+        "ASME Certification"
+      ],
+      "family": "Mechanical Engineering"
+    },
+    {
+      "job_title": "Aerospace Engineer",
+      "skills": [
+        "Aerodynamics",
+        "Structural Analysis",
+        "Thermal Analysis",
+        "Materials Science",
+        "Finite Element Analysis",
+        "Computational Fluid Dynamics",
+        "Propulsion Systems",
+        "Aerospace Systems Design",
+        "Structural Integrity",
+        "Materials Selection"
+      ],
+      "certifications": [
+        "FAA Certification",
+        "SAE Certification"
+      ],
+      "family": "Mechanical Engineering"
+    },
+    {
+      "job_title": "Manufacturing Engineer",
+      "skills": [
+        "Manufacturing Process Design",
+        "Supply Chain Management",
+        "Production Planning",
+        "Quality Control",
+        "Lean Manufacturing",
+        "Six Sigma",
+        "Manufacturing Systems Optimization",
+        "Inventory Management",
+        "Production Scheduling",
+        "Manufacturing Systems Integration"
+      ],
+      "certifications": [
+        "ASQ Certification",
+        "APICS Certification"
+      ],
+      "family": "Mechanical Engineering"
+    },
+    {
+      "job_title": "Water Resources Engineer",
+      "skills": [
+        "Water quality monitoring",
+        "Wastewater Treatment",
+        "Water resources management",
+        "Hydrology",
+        "Water Quality Modeling",
+        "Hydrologic modeling",
+        "Water supply system design",
+        "Wastewater treatment system design",
+        "Drought Management",
+        "Water Conservation",
+        "Water Resources Management",
+        "GIS mapping",
+        "Stormwater Management",
+        "Water resources planning",
+        "Water Supply Systems"
+      ],
+      "certifications": [
+        "PE (Professional Engineer)",
+        "PE Water Resources",
+        "AWRA (Association of Water Resources Engineers) Certification",
+        "ASCE Water Resources"
+      ],
+      "family": "Civil Engineering"
+    },
+    {
+      "job_title": "Manager",
+      "skills": [
+        "Operations management",
+        "Market research",
+        "Process automation",
+        "Instructional Design",
+        "Technical roadmapping",
+        "Safety Management",
+        "Vendor management",
+        "Business continuity planning",
+        "Paid advertising",
+        "Customer segmentation",
+        "Data analysis",
+        "Contract Administration",
+        "Information Architecture",
+        "Construction Scheduling",
+        "Product launch planning"
+      ],
+      "certifications": [
+        "PMP (Project Management Professional)",
+        "Certified Technical Communication (CTC)",
+        "Certified Professional in Learning and Performance (CPLP)",
+        "Certified Associate in Project Management (CAPM)"
+      ],
+      "family": "Civil Engineering"
+    },
+    {
+      "job_title": "Operator",
+      "skills": [
+        "Process control systems",
+        "Instrumentation",
+        "Valve operation",
+        "Pump operation",
+        "Compressor operation",
+        "Boiler operation",
+        "Steam system operation",
+        "Cooling system operation",
+        "Wastewater treatment",
+        "Emergency response"
+      ],
+      "certifications": [
+        "OSHA Certification"
+      ],
+      "family": "Chemical Engineering"
+    },
+    {
+      "job_title": "Design Engineer",
+      "skills": [
+        "Equipment design",
+        "CAD software",
+        "Finite element analysis",
+        "Computational fluid dynamics",
+        "Heat transfer",
+        "Mass transfer",
+        "Thermodynamics",
+        "Materials science",
+        "Manufacturing processes",
+        "Design for manufacturability"
+      ],
+      "certifications": [
+        "API 650 Certification",
+        "ASME Certification"
+      ],
+      "family": "Chemical Engineering"
+    },
+    {
+      "job_title": "Systems Engineer",
+      "skills": [
+        "Rocket propulsion",
+        "Systems analysis",
+        "Aerospace standards",
+        "Communication protocols",
+        "Propulsion system integration",
+        "Fluid dynamics",
+        "Propulsion system analysis",
+        "Systems design",
+        "Rocket motor design",
+        "Requirements management",
+        "Systems engineering methodologies",
+        "Risk management",
+        "Thermodynamics",
+        "Propulsion system design",
+        "System simulation"
+      ],
+      "certifications": [
+        "INCOSE Systems Engineering Certification",
+        "ASME Aerospace Engineering Certification",
+        "AS9100 Aerospace Standard",
+        "SAE International Certification"
+      ],
+      "family": "Aerospace Engineering"
+    },
+    {
+      "job_title": "Structural Analysis Engineer",
+      "skills": [
+        "Mechanical testing",
+        "Finite element modeling",
+        "Structural analysis software",
+        "CAD Design",
+        "Linear Algebra",
+        "Ansys Software",
+        "Geometric Nonlinear Analysis",
+        "MATLAB Programming",
+        "Structural optimization",
+        "Structural integrity",
+        "Computational methods",
+        "Python Programming",
+        "Material science",
+        "Finite element analysis",
+        "Structural Dynamics"
+      ],
+      "certifications": [
+        "ASME Mechanical Engineering Certification",
+        "PE Structural Engineer",
+        "SECB Certification",
+        "Certified Engineer in Training (EIT)"
+      ],
+      "family": "Aerospace Engineering"
+    },
+    {
+      "job_title": "Integration Engineer",
+      "skills": [
+        "Integration and testing",
+        "Systems engineering methodologies",
+        "Communication protocols",
+        "System simulation",
+        "Systems integration",
+        "Systems testing",
+        "Systems validation",
+        "Systems verification",
+        "System integration planning",
+        "System integration execution"
+      ],
+      "certifications": [
+        "INCOSE Systems Engineering Certification",
+        "AS9100 Aerospace Standard"
+      ],
+      "family": "Aerospace Engineering"
+    },
+    {
+      "job_title": "Specialist",
+      "skills": [
+        "Magnetic Resonance Imaging (MRI)",
+        "Computed Tomography (CT) Scanning",
+        "Ultrasound Imaging",
+        "Positron Emission Tomography (PET) Imaging",
+        "Image Reconstruction Algorithms",
+        "Image Processing Techniques",
+        "Medical Imaging Software",
+        "Image Analysis",
+        "Medical Imaging Physics",
+        "Radiation Safety"
+      ],
+      "certifications": [],
+      "family": "Biomedical Engineering"
+    },
+    {
+      "job_title": "Manufacturing Systems Engineer",
+      "skills": [
+        "Operations Research",
+        "Predictive Maintenance",
+        "Supply chain management",
+        "Six Sigma",
+        "Robotics programming",
+        "Manufacturing Execution Systems",
+        "Inventory control systems",
+        "Lean Manufacturing",
+        "Supply Chain Management",
+        "Mechanical systems design",
+        "Manufacturing Process Optimization",
+        "Finite element analysis",
+        "Discrete Event Simulation",
+        "Thermal management",
+        "Quality Control"
+      ],
+      "certifications": [
+        "APICS Certified Supply Chain Professional (CSCP)",
+        "ASQ Certified Supply Chain Manager (CSCM)",
+        "Certified Manufacturing Engineer (CMfgE)",
+        "Certified Supply Chain Professional (CSCP)"
+      ],
+      "family": "Industrial Engineering"
+    },
+    {
+      "job_title": "Ergonomics Specialist",
+      "skills": [
+        "Human Factors Engineering",
+        "Workplace Design",
+        "Musculoskeletal Disorder Prevention",
+        "Ergonomic Assessments",
+        "Workplace Safety",
+        "Occupational Health",
+        "Biomechanics",
+        "Anthropometry",
+        "Ergonomic Design",
+        "Accessibility Design"
+      ],
+      "certifications": [
+        "Certified Professional Ergonomist (CPE)",
+        "Certified Safety Professional (CSP)"
+      ],
+      "family": "Industrial Engineering"
+    },
+    {
+      "job_title": "Maintenance Planner",
+      "skills": [
+        "Reliability-Centered Maintenance (RCM)",
+        "Maintenance Scheduling",
+        "Work Order Management",
+        "Inventory Management",
+        "Supply Chain Management",
+        "Maintenance Budgeting",
+        "Maintenance Performance Metrics",
+        "Equipment Maintenance",
+        "Asset Management",
+        "Predictive Maintenance"
+      ],
+      "certifications": [
+        "Certified Maintenance and Reliability Professional (CMRP)"
+      ],
+      "family": "Industrial Engineering"
+    },
+    {
+      "job_title": "Quality Engineer",
+      "skills": [
+        "Quality control procedures",
+        "Lean manufacturing principles",
+        "ISO 9001",
+        "Statistical Process Control (SPC)",
+        "Auditing and inspection",
+        "Total Quality Management (TQM)",
+        "Failure Mode and Effects Analysis (FMEA)",
+        "Design of Experiments (DOE)",
+        "Root Cause Analysis (RCA)",
+        "Design of experiments",
+        "Quality Metrics",
+        "Regulatory compliance",
+        "Quality management systems",
+        "Six Sigma methodology",
+        "Quality Management Systems"
+      ],
+      "certifications": [
+        "Certified Six Sigma Black Belt (CSSBB)",
+        "ASQ Certified Quality Engineer (CQE)",
+        "ASQ Certified Six Sigma Black Belt",
+        "Certified Quality Engineer (CQE)"
+      ],
+      "family": "Industrial Engineering"
+    },
+    {
+      "job_title": "Operations Research Analyst",
+      "skills": [
+        "Linear Programming",
+        "Integer Programming",
+        "Dynamic Programming",
+        "Stochastic Processes",
+        "Simulation Modeling",
+        "Optimization Techniques",
+        "Data Analysis",
+        "Statistical Modeling",
+        "Machine Learning",
+        "Predictive Analytics"
+      ],
+      "certifications": [],
+      "family": "Industrial Engineering"
+    },
+    {
+      "job_title": "Air Quality Engineer",
+      "skills": [
+        "Air pollution modeling",
+        "Environmental impact assessment",
+        "Emissions inventory development",
+        "Air quality monitoring system design",
+        "Regulatory compliance",
+        "Environmental permitting",
+        "Air quality modeling software",
+        "GIS mapping",
+        "Statistical analysis",
+        "Data visualization"
+      ],
+      "certifications": [
+        "NEBOSH IGC",
+        "OSHA 30-Hour"
+      ],
+      "family": "Environmental Engineering"
+    },
+    {
+      "job_title": "Sustainability Consultant",
+      "skills": [
+        "Sustainability assessment",
+        "Environmental impact analysis",
+        "Greenhouse gas emissions reduction",
+        "Sustainable development",
+        "Stakeholder engagement",
+        "Supply chain analysis",
+        "Life cycle assessment",
+        "Carbon footprint analysis",
+        "Sustainable materials selection",
+        "Waste reduction strategies"
+      ],
+      "certifications": [
+        "LEED AP BD+C",
+        "CSCP"
+      ],
+      "family": "Environmental Engineering"
+    },
+    {
+      "job_title": "Environmental Remediation Engineer",
+      "skills": [
+        "Environmental remediation",
+        "Site investigation and characterization",
+        "Remediation system design",
+        "Contaminant transport modeling",
+        "Risk assessment",
+        "Regulatory compliance",
+        "Environmental permitting",
+        "Remediation project management",
+        "Site closure planning",
+        "Brownfield redevelopment"
+      ],
+      "certifications": [
+        "NEBOSH IGC",
+        "OSHA 40-Hour"
+      ],
+      "family": "Environmental Engineering"
+    },
+    {
+      "job_title": "Climate Change Analyst",
+      "skills": [
+        "Climate change modeling",
+        "Greenhouse gas emissions analysis",
+        "Climate change impact assessment",
+        "Sustainable development",
+        "Stakeholder engagement",
+        "Climate change policy analysis",
+        "Carbon pricing",
+        "Climate change mitigation strategies",
+        "Climate change adaptation planning",
+        "Sustainable infrastructure planning"
+      ],
+      "certifications": [
+        "CSCP",
+        "LEED AP BD+C"
+      ],
+      "family": "Environmental Engineering"
+    },
+    {
+      "job_title": "Bridge Design Engineer",
+      "skills": [
+        "Bridge Design Software",
+        "Structural Steel Design",
+        "Concrete Design",
+        "Geotechnical Engineering",
+        "Hydraulic Engineering",
+        "Transportation Engineering",
+        "Civil 3D Software",
+        "Revit Software",
+        "STAAD Software",
+        "SAP2000 Software"
+      ],
+      "certifications": [
+        "PE Structural Engineer"
+      ],
+      "family": "Structural Engineering"
+    },
+    {
+      "job_title": "Structural Integrity Engineer",
+      "skills": [
+        "Fracture Mechanics",
+        "Fatigue Analysis",
+        "Failure Analysis",
+        "Materials Science",
+        "Computational Mechanics",
+        "Finite Element Analysis (FEA)",
+        "Linear Elastic Fracture Mechanics",
+        "Structural Reliability",
+        "Probabilistic Analysis",
+        "Risk Assessment"
+      ],
+      "certifications": [
+        "ASNT Level III Certification"
+      ],
+      "family": "Structural Engineering"
+    },
+    {
+      "job_title": "Wind Engineering Specialist",
+      "skills": [
+        "Wind Tunnel Testing",
+        "Computational Fluid Dynamics (CFD)",
+        "Wind Loading Analysis",
+        "Structural Dynamics",
+        "Aerodynamics",
+        "Wind Resistance",
+        "Building Codes",
+        "Structural Analysis",
+        "Wind Tunnel Simulation",
+        "Computational Modeling"
+      ],
+      "certifications": [
+        "PE Structural Engineer"
+      ],
+      "family": "Structural Engineering"
+    },
+    {
+      "job_title": "Building Information Modeling Engineer",
+      "skills": [
+        "Autodesk Revit",
+        "Graphisoft ArchiCAD",
+        "Bentley Systems",
+        "Building Information Modeling (BIM)",
+        "Computer-Aided Design (CAD)",
+        "Geometric Modeling",
+        "Parametric Modeling",
+        "3D Modeling",
+        "Collaboration Tools",
+        "Data Management"
+      ],
+      "certifications": [],
+      "family": "Structural Engineering"
+    },
+    {
+      "job_title": "Systems Architect",
+      "skills": [
+        "Cloud computing",
+        "Network protocols",
+        "System design",
+        "API integration",
+        "Security architecture",
+        "DevOps practices",
+        "Containerization",
+        "Microservices",
+        "Scalability",
+        "High availability"
+      ],
+      "certifications": [
+        "AWS Certified Solutions Architect - Professional",
+        "Microsoft Certified: Azure Solutions Architect Expert"
+      ],
+      "family": "Systems Engineering"
+    },
+    {
+      "job_title": "Release Engineer",
+      "skills": [
+        "DevOps Tools Integration",
+        "Build automation",
+        "Automated Testing",
+        "Rollback and Recovery",
+        "Deployment Strategies",
+        "Release Management Tools",
+        "Version control",
+        "Release Metrics and Reporting",
+        "Automated testing",
+        "CI/CD Pipeline Management",
+        "Release Planning",
+        "Logging frameworks",
+        "Release management",
+        "Error tracking",
+        "Build Automation"
+      ],
+      "certifications": [
+        "Certified Release Engineer",
+        "ITIL Foundation"
+      ],
+      "family": "Systems Engineering"
+    },
+    {
+      "job_title": "Cloud Engineer",
+      "skills": [
+        "Virtualization",
+        "Cloud Migration",
+        "Cloud platforms",
+        "Kubernetes",
+        "Security best practices",
+        "AWS CloudFormation",
+        "Backup and recovery",
+        "Cloud Monitoring",
+        "Networking fundamentals",
+        "Google Cloud Deployment Manager",
+        "Serverless Architecture",
+        "Disaster recovery",
+        "Cloud cost optimization",
+        "Cloud migration",
+        "Cloud Cost Optimization"
+      ],
+      "certifications": [
+        "AWS Certified Cloud Practitioner - Essentials",
+        "Microsoft Certified: Azure Developer Associate",
+        "AWS Certified Solutions Architect - Associate",
+        "Google Cloud Certified - Professional Cloud Developer"
+      ],
+      "family": "Systems Engineering"
+    },
+    {
+      "job_title": "Vehicle Systems Engineer",
+      "skills": [
+        "Finite Element Analysis (FEA)",
+        "Computer-Aided Design (CAD)",
+        "Automotive Electronics",
+        "Vehicle Dynamics",
+        "Powertrain Systems",
+        "Thermal Management",
+        "Electrical Architecture",
+        "Systems Integration",
+        "Testing and Validation",
+        "ISO 26262"
+      ],
+      "certifications": [
+        "ASAM MCD-1",
+        "SAE J3016"
+      ],
+      "family": "Automotive Engineering"
+    },
+    {
+      "job_title": "Vehicle Engineer",
+      "skills": [
+        "Autopilot Systems",
+        "Safety-Critical Systems",
+        "Motion Planning",
+        "Vehicle dynamics",
+        "C++ Programming",
+        "Computer Vision",
+        "Machine learning",
+        "GPS and mapping",
+        "Motion planning",
+        "Sensor Fusion",
+        "Lidar Technology",
+        "GPS and Mapping",
+        "Safety-critical systems",
+        "ISO 26262",
+        "Autopilot systems"
+      ],
+      "certifications": [],
+      "family": "Automotive Engineering"
+    },
+    {
+      "job_title": "Vehicle Aerodynamics Engineer",
+      "skills": [
+        "Computational Fluid Dynamics (CFD)",
+        "Wind Tunnel Testing",
+        "Aerodynamic Simulation",
+        "Drag Reduction",
+        "Downforce Optimization",
+        "Airflow Management",
+        "Vehicle Performance",
+        "Aerodynamic Testing",
+        "Computational Modeling",
+        "ANSYS Fluent"
+      ],
+      "certifications": [],
+      "family": "Automotive Engineering"
+    },
+    {
+      "job_title": "Electrical And Electronics Engineer",
+      "skills": [
+        "Electrical Circuit Design",
+        "Power Electronics",
+        "Embedded Systems",
+        "Automotive Electronics",
+        "Electrical Architecture",
+        "System Integration",
+        "Testing and Validation",
+        "Electrical Safety",
+        "Reliability Engineering",
+        "ISO 26262"
+      ],
+      "certifications": [
+        "PE Electrical Engineering",
+        "ASAM MCD-1"
+      ],
+      "family": "Automotive Engineering"
+    },
+    {
+      "job_title": "Vehicle Safety Engineer",
+      "skills": [
+        "Safety-Critical Systems",
+        "Risk Assessment",
+        "Failure Mode and Effects Analysis (FMEA)",
+        "Safety Standards (e.g. ISO 26262)",
+        "Vehicle Dynamics",
+        "Crashworthiness Analysis",
+        "Safety Testing",
+        "Regulatory Compliance",
+        "Vehicle Safety Regulations",
+        "Human Factors Engineering"
+      ],
+      "certifications": [
+        "SAE J3016",
+        "ASAM MCD-1"
+      ],
+      "family": "Automotive Engineering"
+    },
+    {
+      "job_title": "Human-Robot Interaction Designer",
+      "skills": [
+        "Human-computer interaction",
+        "Usability testing",
+        "User experience (UX) design",
+        "Robotics programming",
+        "Sensor integration",
+        "Actuator control",
+        "Robot kinematics",
+        "Robot dynamics",
+        "Robot motion planning",
+        "Safety protocols"
+      ],
+      "certifications": [],
+      "family": "Robotics Engineering"
+    },
+    {
+      "job_title": "Robotics Research Scientist",
+      "skills": [
+        "Machine learning",
+        "Deep learning",
+        "Computer vision",
+        "Robotics programming",
+        "Robotics hardware design",
+        "Robotics software development",
+        "Robot kinematics",
+        "Robot dynamics",
+        "Robot motion planning",
+        "Robot learning"
+      ],
+      "certifications": [
+        "PhD in Robotics or related field",
+        "Certified Robotics Engineer (CRE)"
+      ],
+      "family": "Robotics Engineering"
+    },
+    {
+      "job_title": "Robotics Systems Integrator",
+      "skills": [
+        "Robotics programming",
+        "Robotics hardware design",
+        "Robotics software development",
+        "Sensor integration",
+        "Actuator control",
+        "Robot kinematics",
+        "Robot dynamics",
+        "Robot motion planning",
+        "Robot learning",
+        "System integration"
+      ],
+      "certifications": [
+        "Certified Robotics Engineer (CRE)",
+        "Certified System Integrator (CSI)"
+      ],
+      "family": "Robotics Engineering"
+    },
+    {
+      "job_title": "Manufacturing Process Engineer",
+      "skills": [
+        "Design for manufacturability",
+        "Lean manufacturing principles",
+        "Six Sigma methodology",
+        "Manufacturing execution systems",
+        "Robotics programming",
+        "PLC programming",
+        "Mechanical systems design",
+        "Thermal management",
+        "Materials science",
+        "Finite element analysis"
+      ],
+      "certifications": [
+        "ASQ Certified Six Sigma Black Belt",
+        "API 650 Inspector Certification"
+      ],
+      "family": "Manufacturing Engineering"
+    },
+    {
+      "job_title": "Automation Engineer",
+      "skills": [
+        "Robotics programming",
+        "PLC programming",
+        "SCADA systems",
+        "HMI development",
+        "Machine vision",
+        "Conveyor systems design",
+        "Pneumatic and hydraulic systems",
+        "Mechanical systems design",
+        "Electrical systems design",
+        "Safety protocols and procedures"
+      ],
+      "certifications": [
+        "Certified Automation Professional (CAP)",
+        "Certified Control Systems Technician (CCST)"
+      ],
+      "family": "Manufacturing Engineering"
+    },
+    {
+      "job_title": "Industrial Engineer",
+      "skills": [
+        "Lean manufacturing principles",
+        "Six Sigma methodology",
+        "Time and motion study",
+        "Work measurement and analysis",
+        "Ergonomics and human factors",
+        "Workplace design and layout",
+        "Manufacturing systems design",
+        "Supply chain management",
+        "Inventory control systems",
+        "Material handling systems"
+      ],
+      "certifications": [
+        "ASQ Certified Six Sigma Black Belt",
+        "ASQ Certified Industrial Engineer (CIE)"
+      ],
+      "family": "Manufacturing Engineering"
+    },
+    {
+      "job_title": "Reservoir Engineer",
+      "skills": [
+        "Reservoir modeling",
+        "Well performance analysis",
+        "Fluid flow simulation",
+        "Reservoir characterization",
+        "Petroleum engineering economics",
+        "Drilling and completion design",
+        "Production optimization",
+        "Geological modeling",
+        "Seismic interpretation",
+        "Well placement optimization"
+      ],
+      "certifications": [
+        "SPE (Society of Petroleum Engineers) Certification Program",
+        "API (American Petroleum Institute) Certification Program"
+      ],
+      "family": "Petroleum Engineering"
+    },
+    {
+      "job_title": "Drilling Engineer",
+      "skills": [
+        "Drilling operations management",
+        "Well planning and design",
+        "Drilling fluids and solids control",
+        "Drilling equipment selection and maintenance",
+        "Well control and safety procedures",
+        "Drilling optimization and performance improvement",
+        "Geological and geophysical data interpretation",
+        "Drilling and completion cost estimation",
+        "Drilling and completion risk management",
+        "Drilling and completion data analysis"
+      ],
+      "certifications": [
+        "API (American Petroleum Institute) Certification Program",
+        "SPE (Society of Petroleum Engineers) Drilling and Completion Certification"
+      ],
+      "family": "Petroleum Engineering"
+    },
+    {
+      "job_title": "Production Engineer",
+      "skills": [
+        "Well performance improvement and optimization",
+        "Production forecasting and modeling",
+        "Well intervention and workover planning",
+        "Production data analysis and interpretation",
+        "Well testing and analysis",
+        "Reservoir management and surveillance",
+        "Production optimization and maximization",
+        "Well placement and completion design",
+        "Production cost estimation and management",
+        "Production risk management"
+      ],
+      "certifications": [
+        "SPE (Society of Petroleum Engineers) Production and Operations Certification Program"
+      ],
+      "family": "Petroleum Engineering"
+    },
+    {
+      "job_title": "Petroleum Geologist",
+      "skills": [
+        "Geological mapping and interpretation",
+        "Seismic data analysis and interpretation",
+        "Geological modeling and simulation",
+        "Well site selection and planning",
+        "Geological and geophysical data integration",
+        "Petroleum system analysis and modeling",
+        "Exploration and discovery of new hydrocarbon plays",
+        "Geological risk assessment and mitigation",
+        "Geological data analysis and interpretation",
+        "Geological and geophysical data integration"
+      ],
+      "certifications": [],
+      "family": "Petroleum Engineering"
+    },
+    {
+      "job_title": "Petroleum Operations Manager",
+      "skills": [
+        "Operations management and supervision",
+        "Project management and coordination",
+        "Budgeting and cost control",
+        "Risk management and mitigation",
+        "Operations planning and scheduling",
+        "Team leadership and development",
+        "Communication and stakeholder management",
+        "Operations data analysis and interpretation",
+        "Operations improvement and optimization",
+        "Operations security and safety management"
+      ],
+      "certifications": [
+        "API (American Petroleum Institute) Certification Program",
+        "SPE (Society of Petroleum Engineers) Certification Program"
+      ],
+      "family": "Petroleum Engineering"
+    },
+    {
+      "job_title": "Materials Scientist",
+      "skills": [
+        "Crystallography",
+        "X-Ray Diffraction",
+        "Scanning Electron Microscopy",
+        "Materials Characterization",
+        "Thermodynamics",
+        "Phase Equilibria",
+        "Computational Materials Science",
+        "Density Functional Theory",
+        "Molecular Dynamics",
+        "Finite Element Analysis"
+      ],
+      "certifications": [],
+      "family": "Materials Science"
+    },
+    {
+      "job_title": "Metallurgist",
+      "skills": [
+        "Metal Extraction",
+        "Steel Production",
+        "Alloy Design",
+        "Welding Engineering",
+        "Heat Treatment",
+        "Corrosion Resistance",
+        "Materials Selection",
+        "Failure Analysis",
+        "Non-Destructive Testing",
+        "Materials Testing"
+      ],
+      "certifications": [
+        "AWS Certified Welding Inspector",
+        "ASME Boiler and Pressure Vessel Code"
+      ],
+      "family": "Materials Science"
+    },
+    {
+      "job_title": "Polymers Engineer",
+      "skills": [
+        "Polymer Synthesis",
+        "Polymer Characterization",
+        "Polymer Rheology",
+        "Polymer Processing",
+        "Thermoplastics",
+        "Thermosets",
+        "Composite Materials",
+        "Polymer Blending",
+        "Polymer Additives",
+        "Polymer Testing"
+      ],
+      "certifications": [
+        "Society of Plastics Engineers (SPE) Certified Plastics Engineer"
+      ],
+      "family": "Materials Science"
+    },
+    {
+      "job_title": "Ceramic Engineer",
+      "skills": [
+        "Ceramic Processing",
+        "Ceramic Forming",
+        "Ceramic Densification",
+        "Ceramic Properties",
+        "Ceramic Applications",
+        "Ceramic Materials Science",
+        "Ceramic Manufacturing",
+        "Ceramic Testing",
+        "Ceramic Failure Analysis",
+        "Ceramic Repair"
+      ],
+      "certifications": [],
+      "family": "Materials Science"
+    },
+    {
+      "job_title": "Materials Geologist",
+      "skills": [
+        "Geological Mapping",
+        "Geological Sampling",
+        "Rock Properties",
+        "Mineralogy",
+        "Geochemistry",
+        "Geophysics",
+        "Geological Modeling",
+        "Geological Data Analysis",
+        "Geological Interpretation",
+        "Geological Mapping Software"
+      ],
+      "certifications": [
+        "American Institute of Professional Geologists (AIPG) Certified Professional Geologist"
+      ],
+      "family": "Materials Science"
+    },
+    {
+      "job_title": "Nuclear Reactor Operator",
+      "skills": [
+        "Nuclear power plant operation",
+        "Radiation detection and measurement",
+        "Emergency core cooling system operation",
+        "Nuclear reactor control systems",
+        "Radiation safety procedures",
+        "Nuclear power plant maintenance",
+        "Regulatory compliance",
+        "Nuclear reactor fuel management",
+        "Nuclear power plant electrical systems",
+        "Nuclear power plant instrumentation and control"
+      ],
+      "certifications": [
+        "NRC Operator License",
+        "ASME NQA-1"
+      ],
+      "family": "Nuclear Engineering"
+    },
+    {
+      "job_title": "Nuclear Fuel Cycle Engineer",
+      "skills": [
+        "Nuclear fuel cycle processes",
+        "Nuclear fuel fabrication",
+        "Nuclear fuel reprocessing",
+        "Nuclear waste management",
+        "Radioactive waste storage and disposal",
+        "Nuclear fuel cycle safety",
+        "Nuclear fuel cycle economics",
+        "Nuclear fuel cycle policy",
+        "Nuclear fuel cycle regulations",
+        "Nuclear fuel cycle industry standards"
+      ],
+      "certifications": [
+        "ASME NQA-1",
+        "ANSI N45.2.6"
+      ],
+      "family": "Nuclear Engineering"
+    },
+    {
+      "job_title": "Nuclear Power Plant Maintenance Manager",
+      "skills": [
+        "Nuclear power plant maintenance planning",
+        "Nuclear power plant maintenance execution",
+        "Nuclear power plant maintenance scheduling",
+        "Nuclear power plant maintenance budgeting",
+        "Nuclear power plant maintenance personnel management",
+        "Nuclear power plant maintenance quality control",
+        "Nuclear power plant maintenance safety procedures",
+        "Nuclear power plant maintenance regulatory compliance",
+        "Nuclear power plant maintenance industry standards",
+        "Nuclear power plant maintenance best practices"
+      ],
+      "certifications": [
+        "ASME NQA-1",
+        "API 570"
+      ],
+      "family": "Nuclear Engineering"
+    },
+    {
+      "job_title": "Nuclear Safety Engineer",
+      "skills": [
+        "Nuclear safety analysis",
+        "Nuclear safety design",
+        "Nuclear safety testing",
+        "Nuclear safety evaluation",
+        "Nuclear safety regulations",
+        "Nuclear safety industry standards",
+        "Nuclear safety best practices",
+        "Nuclear safety risk assessment",
+        "Nuclear safety risk mitigation",
+        "Nuclear safety emergency preparedness"
+      ],
+      "certifications": [
+        "ANSI N45.2.6",
+        "ASME NQA-1"
+      ],
+      "family": "Nuclear Engineering"
+    },
+    {
+      "job_title": "Nuclear Waste Management Engineer",
+      "skills": [
+        "Nuclear waste characterization",
+        "Nuclear waste storage and disposal",
+        "Nuclear waste transportation",
+        "Nuclear waste treatment",
+        "Nuclear waste management regulations",
+        "Nuclear waste management industry standards",
+        "Nuclear waste management best practices",
+        "Nuclear waste management risk assessment",
+        "Nuclear waste management risk mitigation",
+        "Nuclear waste management emergency preparedness"
+      ],
+      "certifications": [
+        "ASME NQA-1",
+        "ANSI N45.2.6"
+      ],
+      "family": "Nuclear Engineering"
+    },
+    {
+      "job_title": "Image Processing Developer",
+      "skills": [
+        "Image filtering",
+        "Image enhancement",
+        "Image compression",
+        "Image registration",
+        "Image segmentation",
+        "3D image processing",
+        "Image feature extraction",
+        "Image classification",
+        "Image retrieval",
+        "Computer vision libraries"
+      ],
+      "certifications": [],
+      "family": "Computer Vision"
+    },
+    {
+      "job_title": "Computer Vision Data Analyst",
+      "skills": [
+        "Data preprocessing",
+        "Data visualization",
+        "Data mining",
+        "Machine learning",
+        "Deep learning",
+        "Computer vision algorithms",
+        "Image feature extraction",
+        "Pattern recognition",
+        "Image classification",
+        "Data analysis"
+      ],
+      "certifications": [
+        "Certified Data Scientist",
+        "Certified Analytics Professional"
+      ],
+      "family": "Computer Vision"
+    },
+    {
+      "job_title": "Robotics Perception Engineer",
+      "skills": [
+        "Sensor fusion",
+        "Object recognition",
+        "Scene understanding",
+        "Motion planning",
+        "Robot kinematics",
+        "Robot dynamics",
+        "Computer vision algorithms",
+        "Machine learning",
+        "Deep learning",
+        "Robot control systems"
+      ],
+      "certifications": [
+        "Certified Robotics Engineer",
+        "ICRA"
+      ],
+      "family": "Computer Vision"
+    },
+    {
+      "job_title": "Text Classifier",
+      "skills": [
+        "Named Entity Recognition",
+        "Part-of-Speech Tagging",
+        "Sentiment Analysis",
+        "Text Preprocessing",
+        "Machine Learning",
+        "Deep Learning",
+        "Natural Language Toolkit",
+        "spaCy",
+        "Regular Expressions",
+        "Information Retrieval"
+      ],
+      "certifications": [],
+      "family": "Natural Language Processing"
+    },
+    {
+      "job_title": "Conversational Ai Designer",
+      "skills": [
+        "Dialogue Management",
+        "Intent Recognition",
+        "Contextual Understanding",
+        "Emotional Intelligence",
+        "Natural Language Generation",
+        "Speech Recognition",
+        "Text-to-Speech",
+        "Chatbot Development",
+        "User Experience Design",
+        "Human-Computer Interaction"
+      ],
+      "certifications": [],
+      "family": "Natural Language Processing"
+    },
+    {
+      "job_title": "Information Retrieval Specialist",
+      "skills": [
+        "Search Engine Optimization",
+        "Indexing and Querying",
+        "Ranking and Retrieval",
+        "Information Extraction",
+        "Document Clustering",
+        "Topic Modeling",
+        "Text Mining",
+        "Data Visualization",
+        "SQL and NoSQL Databases",
+        "Cloud Computing"
+      ],
+      "certifications": [],
+      "family": "Natural Language Processing"
+    },
+    {
+      "job_title": "Language Model Trainer",
+      "skills": [
+        "Neural Network Architectures",
+        "Word Embeddings",
+        "Language Model Fine-Tuning",
+        "Transfer Learning",
+        "Model Evaluation Metrics",
+        "Deep Learning Frameworks",
+        "GPU Acceleration",
+        "Model Deployment",
+        "Cloud Computing",
+        "Containerization"
+      ],
+      "certifications": [],
+      "family": "Natural Language Processing"
+    },
+    {
+      "job_title": "Speech Recognition Engineer",
+      "skills": [
+        "Speech Feature Extraction",
+        "Noise Reduction",
+        "Text-to-Speech",
+        "Speech Synthesis",
+        "Deep Learning",
+        "Audio File Formats",
+        "Neural Networks",
+        "Speech Signal Processing",
+        "Data Annotation Tools",
+        "Hidden Markov Models",
+        "Speech Enhancement",
+        "Acoustic Modeling",
+        "Speech Recognition Algorithms",
+        "Machine Learning",
+        "Noise Reduction Techniques"
+      ],
+      "certifications": [
+        "Certified Speech-Language Pathologist (C-SLP)",
+        "Certified Audiologist (CCC-A)",
+        "Certified Data Scientist - Certified Data Scientist",
+        "Amazon Certified - Machine Learning - Specialty"
+      ],
+      "family": "Natural Language Processing"
+    },
+    {
+      "job_title": "Software Engineer",
+      "skills": [
+        "Vue.js",
+        "Redux",
+        "Node.js",
+        "RESTful APIs",
+        "Agile Methodologies",
+        "HTML5",
+        "Webpack",
+        "Babel",
+        "HTML/CSS",
+        "JavaScript",
+        "Express",
+        "React",
+        "SQL",
+        "TypeScript",
+        "CSS3"
+      ],
+      "certifications": [
+        "AWS Certified Developer - Associate",
+        "Microsoft Certified: Azure Developer Associate"
+      ],
+      "family": "Full Stack Development"
+    },
+    {
+      "job_title": "Full Stack Engineer",
+      "skills": [
+        "Cross-Site Request Forgery (CSRF)",
+        "Kubernetes",
+        "Web Application Firewall (WAF)",
+        "Spring Boot",
+        "Apache Cassandra",
+        "Java",
+        "Apache Kafka",
+        "Nginx",
+        "Docker",
+        "MySQL",
+        "Hibernate",
+        "Microservices Architecture",
+        "Apache",
+        "Continuous Integration",
+        "Laravel"
+      ],
+      "certifications": [
+        "Red Hat Certified Engineer in Red Hat Enterprise Linux",
+        "Oracle Certified Java Programmer",
+        "Certified Web Application Security Specialist (CWASS)",
+        "Certified Information Systems Security Professional (CISSP)"
+      ],
+      "family": "Full Stack Development"
+    },
+    {
+      "job_title": "Microservices Architect",
+      "skills": [
+        "Service-Oriented Architecture",
+        "Microservices Design",
+        "API Gateway",
+        "Service Registry",
+        "Load Balancing",
+        "Circuit Breaker",
+        "Service Discovery",
+        "Event-Driven Architecture",
+        "Message Queue",
+        "API Security"
+      ],
+      "certifications": [
+        "Certified Solutions Architect",
+        "AWS Certified Solutions Architect - Professional"
+      ],
+      "family": "Backend Development"
+    },
+    {
+      "job_title": "Web Application Developer",
+      "skills": [
+        "HTML5",
+        "CSS3",
+        "JavaScript",
+        "TypeScript",
+        "Node.js",
+        "Express.js",
+        "Django",
+        "Flask",
+        "RESTful APIs",
+        "WebSockets"
+      ],
+      "certifications": [
+        "CompTIA Web Developer",
+        "Microsoft Certified: Azure Developer Associate"
+      ],
+      "family": "Frontend Development"
+    },
+    {
+      "job_title": "User Interface Designer",
+      "skills": [
+        "Sketch",
+        "Figma",
+        "Adobe XD",
+        "UI Design",
+        "User Experience (UX)",
+        "Interaction Design",
+        "Visual Design",
+        "Wireframing",
+        "Prototyping",
+        "Usability Testing"
+      ],
+      "certifications": [
+        "Certified UX Designer (CUXD)",
+        "Human-Centered Design Certification"
+      ],
+      "family": "Frontend Development"
+    },
+    {
+      "job_title": "Frontend Architect",
+      "skills": [
+        "Architecture Patterns",
+        "Microservices",
+        "Containerization",
+        "Cloud Computing",
+        "DevOps",
+        "CI/CD Pipelines",
+        "Kubernetes",
+        "Docker",
+        "Container Orchestration",
+        "Service Mesh"
+      ],
+      "certifications": [
+        "AWS Certified Solutions Architect - Associate",
+        "Google Cloud Certified - Professional Cloud Developer"
+      ],
+      "family": "Frontend Development"
+    },
+    {
+      "job_title": "Web Accessibility Specialist",
+      "skills": [
+        "WCAG 2.1",
+        "Section 508",
+        "Accessibility Testing",
+        "Screen Reader Software",
+        "Keyboard Navigation",
+        "High Contrast Mode",
+        "Closed Captions",
+        "Audio Descriptions",
+        "Inclusive Design",
+        "Universal Design"
+      ],
+      "certifications": [
+        "Certified Accessibility Specialist (CAS)",
+        "Accessibility Certification Board (ACB)"
+      ],
+      "family": "Frontend Development"
+    },
+    {
+      "job_title": "Cloud Infrastructure Engineer",
+      "skills": [
+        "AWS CloudFormation",
+        "Kubernetes",
+        "Docker",
+        "Ansible",
+        "CI/CD Pipeline Management",
+        "Cloud Security",
+        "Serverless Architecture",
+        "Container Orchestration",
+        "Monitoring and Logging",
+        "Cloud Cost Optimization"
+      ],
+      "certifications": [
+        "AWS Certified Solutions Architect",
+        "Google Cloud Certified - Professional Cloud Developer"
+      ],
+      "family": "DevOps Engineering"
+    },
+    {
+      "job_title": "Site Reliability Engineer",
+      "skills": [
+        "Monitoring and Logging",
+        "Error Analysis and Debugging",
+        "Capacity Planning",
+        "Performance Tuning",
+        "System Design",
+        "Service Level Agreement",
+        "Incident Management",
+        "Change Management",
+        "Automated Testing",
+        "Cloud Cost Optimization"
+      ],
+      "certifications": [
+        "Google Cloud Certified - Professional Cloud Developer",
+        "AWS Certified DevOps Engineer"
+      ],
+      "family": "DevOps Engineering"
+    },
+    {
+      "job_title": "Continuous Integration Engineer",
+      "skills": [
+        "CI/CD Pipeline Management",
+        "Automated Testing",
+        "Build Automation",
+        "Version Control Systems",
+        "Release Management Tools",
+        "Continuous Deployment",
+        "Continuous Monitoring",
+        "Automated Code Review",
+        "Code Quality Metrics",
+        "DevOps Tools Integration"
+      ],
+      "certifications": [
+        "Certified Continuous Integration Engineer",
+        "Jenkins Certified Engineer"
+      ],
+      "family": "DevOps Engineering"
+    },
+    {
+      "job_title": "Security Specialist",
+      "skills": [
+        "Database vulnerability assessment",
+        "SQL injection prevention",
+        "Data encryption",
+        "Access control and authentication",
+        "Database auditing and logging",
+        "Compliance and regulatory requirements",
+        "Database security frameworks",
+        "Penetration testing",
+        "Threat modeling",
+        "Incident response"
+      ],
+      "certifications": [
+        "CompTIA Security+",
+        "Certified Information Systems Security Professional (CISSP)"
+      ],
+      "family": "Database Administration"
+    },
+    {
+      "job_title": "Performance Engineer",
+      "skills": [
+        "Cloud database performance optimization",
+        "Data warehousing and ETL",
+        "Stress Testing",
+        "UI Performance",
+        "Indexing and caching",
+        "Performance Optimization",
+        "Data compression and encryption",
+        "Concurrency and locking",
+        "Database Performance",
+        "Load Testing",
+        "Profiling Tools",
+        "Cloud Performance",
+        "Network Performance",
+        "Query optimization",
+        "Database partitioning and sharding"
+      ],
+      "certifications": [],
+      "family": "Database Administration"
+    },
+    {
+      "job_title": "Backup And Recovery Specialist",
+      "skills": [
+        "Backup and recovery strategies",
+        "Data replication and mirroring",
+        "Database snapshot and cloning",
+        "Data archiving and purging",
+        "Database disaster recovery",
+        "Data protection and retention",
+        "Data backup and restore",
+        "Database high availability",
+        "Data integrity and validation",
+        "Data recovery and restore"
+      ],
+      "certifications": [
+        "Veritas Certified Specialist - Backup and Recovery",
+        "EMC Proven Professional - Data Protection"
+      ],
+      "family": "Database Administration"
+    },
+    {
+      "job_title": "Migration Specialist",
+      "skills": [
+        "Database migration strategies",
+        "Data conversion and transformation",
+        "Database schema migration",
+        "Data validation and testing",
+        "Database compatibility and interoperability",
+        "Cloud database migration",
+        "Database performance tuning",
+        "Database security and compliance",
+        "Database backup and recovery",
+        "Database high availability"
+      ],
+      "certifications": [
+        "Microsoft Certified: Azure Database Migration Engineer Associate",
+        "Oracle Certified Professional - Database Administration"
+      ],
+      "family": "Database Administration"
+    },
+    {
+      "job_title": "Predictive Modeling Analyst",
+      "skills": [
+        "Regression Analysis",
+        "Machine Learning",
+        "Statistical Modeling",
+        "Time Series Analysis",
+        "Data Mining",
+        "Predictive Analytics",
+        "Data Visualization",
+        "Statistical Computing",
+        "Mathematical Modeling",
+        "Optimization Techniques"
+      ],
+      "certifications": [
+        "Certified Analytics Professional (CAP)",
+        "Certified Data Scientist (CDS)"
+      ],
+      "family": "Data Analytics"
+    },
+    {
+      "job_title": "Data Analyst",
+      "skills": [
+        "Excel",
+        "SQL",
+        "Data Visualization",
+        "Statistical Analysis",
+        "Data Mining",
+        "Machine Learning",
+        "Tableau",
+        "Power BI",
+        "Python",
+        "R"
+      ],
+      "certifications": [],
+      "family": "Business Intelligence"
+    },
+    {
+      "job_title": "Business Intelligence Architect",
+      "skills": [
+        "Data Architecture",
+        "Business Analytics",
+        "Data Governance",
+        "Data Security",
+        "Cloud Computing",
+        "Big Data",
+        "Data Warehousing",
+        "Data Modeling",
+        "ETL Tools",
+        "Data Integration"
+      ],
+      "certifications": [
+        "IBM Certified Application Developer - Data and Analytics",
+        "SAS Certified Data Scientist"
+      ],
+      "family": "Business Intelligence"
+    },
+    {
+      "job_title": "Business Intelligence Manager",
+      "skills": [
+        "Project Management",
+        "Data Governance",
+        "Data Security",
+        "Business Analytics",
+        "Data Warehousing",
+        "Data Modeling",
+        "ETL Tools",
+        "Data Integration",
+        "Cloud Computing",
+        "Big Data"
+      ],
+      "certifications": [],
+      "family": "Business Intelligence"
+    },
+    {
+      "job_title": "Project Manager",
+      "skills": [
+        "Project Management Methodologies",
+        "Agile Frameworks",
+        "Scrum Master Certification",
+        "Project Scheduling",
+        "Resource Allocation",
+        "Risk Management",
+        "Budgeting",
+        "Team Leadership",
+        "Communication Skills",
+        "Stakeholder Management"
+      ],
+      "certifications": [
+        "PMP",
+        "PRINCE2"
+      ],
+      "family": "IT Project Management"
+    },
+    {
+      "job_title": "Program Manager",
+      "skills": [
+        "Strategic Planning",
+        "Portfolio Management",
+        "Program Governance",
+        "Risk Management",
+        "Budgeting",
+        "Resource Allocation",
+        "Team Leadership",
+        "Communication Skills",
+        "Stakeholder Management",
+        "Change Management"
+      ],
+      "certifications": [
+        "PgMP",
+        "PRINCE2"
+      ],
+      "family": "IT Project Management"
+    },
+    {
+      "job_title": "Project Coordinator",
+      "skills": [
+        "Record Keeping",
+        "Conflict resolution",
+        "Reporting",
+        "Stakeholder Management",
+        "Agile methodology",
+        "Kanban board management",
+        "Data Entry",
+        "Meeting facilitation",
+        "Backlog management",
+        "Project Administration",
+        "Process improvement",
+        "Time Management",
+        "Project planning",
+        "Sprint planning",
+        "Team Collaboration"
+      ],
+      "certifications": [],
+      "family": "IT Project Management"
+    },
+    {
+      "job_title": "Project Scheduler",
+      "skills": [
+        "Project Scheduling",
+        "Resource Allocation",
+        "Gantt Charts",
+        "Critical Path Method",
+        "Scheduling Software",
+        "Resource Levelling",
+        "Buffering",
+        "Float Management",
+        "Dependency Management",
+        "Risk Management"
+      ],
+      "certifications": [
+        "PRINCE2"
+      ],
+      "family": "IT Project Management"
+    },
+    {
+      "job_title": "Project Director",
+      "skills": [
+        "Strategic Planning",
+        "Program Governance",
+        "Risk Management",
+        "Budgeting",
+        "Resource Allocation",
+        "Team Leadership",
+        "Communication Skills",
+        "Stakeholder Management",
+        "Change Management",
+        "Governance"
+      ],
+      "certifications": [
+        "PMP",
+        "PgMP"
+      ],
+      "family": "IT Project Management"
+    },
+    {
+      "job_title": "Writer",
+      "skills": [
+        "Product Requirements",
+        "Product Management",
+        "Information Architecture",
+        "Technical Communication",
+        "User Research",
+        "XML documentation",
+        "Content Governance",
+        "User Experience",
+        "MadCap Flare",
+        "Microsoft Office",
+        "Content Strategy",
+        "API documentation",
+        "Product Development",
+        "Adobe FrameMaker",
+        "Content Design"
+      ],
+      "certifications": [],
+      "family": "Technical Writing"
+    },
+    {
+      "job_title": "Researcher",
+      "skills": [
+        "User Research Methods",
+        "Qualitative Data Analysis",
+        "Quantitative Data Analysis",
+        "Survey Design",
+        "Interview Techniques",
+        "Usability Testing",
+        "A/B Testing",
+        "Data Visualization",
+        "Research Ethics",
+        "Human-Centered Design"
+      ],
+      "certifications": [],
+      "family": "UX/UI Design"
+    },
+    {
+      "job_title": "Owner",
+      "skills": [
+        "Stakeholder management",
+        "Release planning",
+        "Market research",
+        "Backlog refinement",
+        "User story writing",
+        "Business analysis",
+        "Customer needs analysis",
+        "Business case development",
+        "Prioritization techniques",
+        "Competitor research",
+        "Agile methodologies",
+        "Product roadmap development",
+        "Product management",
+        "Customer feedback analysis",
+        "Cross-functional team collaboration"
+      ],
+      "certifications": [
+        "Certified Product Owner (CSPO)",
+        "Certified Agile Product Manager (CAPM)"
+      ],
+      "family": "Product Management"
+    },
+    {
+      "job_title": "Strategist",
+      "skills": [
+        "Market analysis",
+        "Competitor research",
+        "Customer feedback analysis",
+        "Product positioning",
+        "Business case development",
+        "Market sizing and forecasting",
+        "Product roadmap development",
+        "Stakeholder management",
+        "Cross-functional team collaboration",
+        "Innovation strategy"
+      ],
+      "certifications": [],
+      "family": "Product Management"
+    },
+    {
+      "job_title": "Lead",
+      "skills": [
+        "Agile project management",
+        "Scrum framework",
+        "Kanban methodology",
+        "Jira software",
+        "Asana project management",
+        "Version control systems",
+        "Continuous Integration",
+        "Continuous Deployment",
+        "Test-driven development",
+        "Behavior-driven development"
+      ],
+      "certifications": [
+        "Certified Scrum Master (CSM)",
+        "Certified Agile Practitioner (CAPM)"
+      ],
+      "family": "Agile Development"
+    },
+    {
+      "job_title": "Process Specialist",
+      "skills": [
+        "Scrum framework",
+        "Agile coaching",
+        "Team facilitation",
+        "Process improvement",
+        "Change management",
+        "Collaboration tools",
+        "Communication skills",
+        "Conflict resolution",
+        "Meeting facilitation",
+        "Team building"
+      ],
+      "certifications": [
+        "CSPO",
+        "PSPO"
+      ],
+      "family": "Scrum Master"
+    },
+    {
+      "job_title": "Project Management Specialist",
+      "skills": [
+        "Project management",
+        "Agile methodology",
+        "Scrum framework",
+        "Project planning",
+        "Resource allocation",
+        "Risk management",
+        "Budgeting",
+        "Time management",
+        "Team leadership",
+        "Communication skills"
+      ],
+      "certifications": [
+        "PMP",
+        "Agile PM"
+      ],
+      "family": "Scrum Master"
+    },
+    {
+      "job_title": "Scrum Master",
+      "skills": [
+        "Scrum framework",
+        "Agile coaching",
+        "Team facilitation",
+        "Process improvement",
+        "Change management",
+        "Collaboration tools",
+        "Communication skills",
+        "Conflict resolution",
+        "Meeting facilitation",
+        "Team building"
+      ],
+      "certifications": [
+        "CSM",
+        "PSM"
+      ],
+      "family": "Scrum Master"
+    },
+    {
+      "job_title": "Agile Coach",
+      "skills": [
+        "Agile methodology",
+        "Scrum framework",
+        "Agile coaching",
+        "Team facilitation",
+        "Process improvement",
+        "Change management",
+        "Collaboration tools",
+        "Communication skills",
+        "Conflict resolution",
+        "Team building"
+      ],
+      "certifications": [
+        "CSPO",
+        "ACP"
+      ],
+      "family": "Scrum Master"
+    },
+    {
+      "job_title": "Digital Marketing Specialist",
+      "skills": [
+        "Google Analytics",
+        "Facebook Ads",
+        "Instagram Ads",
+        "Twitter Ads",
+        "AdWords",
+        "SEO",
+        "Content Marketing",
+        "Email Marketing",
+        "Social Media Management",
+        "PPC"
+      ],
+      "certifications": [
+        "Google Analytics Certification",
+        "Facebook Blueprint Certification"
+      ],
+      "family": "Digital Marketing"
+    },
+    {
+      "job_title": "Content Strategist",
+      "skills": [
+        "Content Creation",
+        "Copywriting",
+        "Content Calendar",
+        "Content Optimization",
+        "SEO Writing",
+        "Blog Management",
+        "Social Media Content",
+        "Email Newsletter",
+        "Video Scriptwriting",
+        "Infographic Design"
+      ],
+      "certifications": [],
+      "family": "Digital Marketing"
+    },
+    {
+      "job_title": "Social Media Manager",
+      "skills": [
+        "Social Media Planning",
+        "Social Media Execution",
+        "Social Media Analytics",
+        "Social Media Monitoring",
+        "Social Media Reporting",
+        "Social Media Advertising",
+        "Social Media Engagement",
+        "Social Media Content",
+        "Social Media Crisis Management",
+        "Social Media Policy"
+      ],
+      "certifications": [],
+      "family": "Digital Marketing"
+    },
+    {
+      "job_title": "Seo Specialist",
+      "skills": [
+        "Keyword Research",
+        "On-Page Optimization",
+        "Technical SEO",
+        "Link Building",
+        "Content Optimization",
+        "Local SEO",
+        "Mobile-Friendly Website",
+        "Page Speed Optimization",
+        "XML Sitemap",
+        "Robots.txt"
+      ],
+      "certifications": [
+        "Google Analytics Certification",
+        "SEMrush Certification"
+      ],
+      "family": "Digital Marketing"
+    },
+    {
+      "job_title": "Paid Advertising Specialist",
+      "skills": [
+        "Google Ads",
+        "Facebook Ads",
+        "Twitter Ads",
+        "LinkedIn Ads",
+        "Native Ads",
+        "Display Ads",
+        "Video Ads",
+        "Influencer Marketing",
+        "Ad Copywriting",
+        "Ad Targeting"
+      ],
+      "certifications": [
+        "Google Ads Certification",
+        "Facebook Blueprint Certification"
+      ],
+      "family": "Digital Marketing"
+    },
+    {
+      "job_title": "E-Commerce Developer",
+      "skills": [
+        "Responsive web design",
+        "Containerization with Docker",
+        "Spring Boot",
+        "Redux",
+        "BEM methodology",
+        "API Gateway",
+        "Webpack",
+        "React",
+        "Accessibility guidelines",
+        "Java",
+        "Apache Kafka",
+        "MySQL",
+        "Hibernate",
+        "SCSS",
+        "RESTful API design"
+      ],
+      "certifications": [
+        "AWS Certified Developer",
+        "Google Cloud Certified - Professional Cloud Developer"
+      ],
+      "family": "E-commerce Development"
+    },
+    {
+      "job_title": "E-Commerce Analyst",
+      "skills": [
+        "SQL",
+        "Data modeling",
+        "Data visualization",
+        "Tableau",
+        "Power BI",
+        "Google Data Studio",
+        "Data warehousing",
+        "ETL process",
+        "Data quality control",
+        "Business intelligence"
+      ],
+      "certifications": [
+        "Google Data Analytics Certification"
+      ],
+      "family": "E-commerce Development"
+    },
+    {
+      "job_title": "E-Commerce Devops Engineer",
+      "skills": [
+        "Kubernetes",
+        "Containerization with Docker",
+        "CI/CD pipelines",
+        "Jenkins",
+        "Git",
+        "Agile development",
+        "Cloud infrastructure",
+        "Serverless architecture",
+        "Monitoring and logging",
+        "Security best practices"
+      ],
+      "certifications": [
+        "AWS Certified DevOps Engineer",
+        "Microsoft Certified: Azure Developer Associate"
+      ],
+      "family": "E-commerce Development"
+    },
+    {
+      "job_title": "E-Commerce Quality Assurance Engineer",
+      "skills": [
+        "Test-driven development",
+        "Behavior-driven development",
+        "Cypress",
+        "Jest",
+        "Selenium",
+        "Appium",
+        "Test automation frameworks",
+        "UI testing",
+        "API testing",
+        "Performance testing"
+      ],
+      "certifications": [],
+      "family": "E-commerce Development"
+    },
+    {
+      "job_title": "Frontend Developer",
+      "skills": [
+        "HTML5",
+        "CSS3",
+        "JavaScript",
+        "React",
+        "Angular",
+        "Vue.js",
+        "TypeScript",
+        "WebAssembly",
+        "Responsive Web Design",
+        "Accessibility Guidelines"
+      ],
+      "certifications": [],
+      "family": "Web Development"
+    },
+    {
+      "job_title": "Web Security Specialist",
+      "skills": [
+        "OWASP",
+        "SQL Injection",
+        "Cross-Site Scripting",
+        "Cross-Site Request Forgery",
+        "Secure Coding Practices",
+        "Penetration Testing",
+        "Vulnerability Assessment",
+        "Web Application Firewall",
+        "Secure Coding Standards",
+        "Secure Authentication"
+      ],
+      "certifications": [
+        "OWASP Certified Web Security Specialist",
+        "CompTIA Security+"
+      ],
+      "family": "Web Development"
+    },
+    {
+      "job_title": "Ux/Ui Designer",
+      "skills": [
+        "Prototyping",
+        "User Research",
+        "User Experience Design",
+        "User Interface Design",
+        "Design Principles",
+        "Visual Design",
+        "Usability Testing",
+        "Accessibility Guidelines",
+        "Design Tools",
+        "Interaction Design",
+        "Wireframing",
+        "Design Systems"
+      ],
+      "certifications": [
+        "Certified Interaction Designer",
+        "Adobe Certified Experience Designer",
+        "Certified UX Designer"
+      ],
+      "family": "Web Development"
+    },
+    {
+      "job_title": "Web Performance Engineer",
+      "skills": [
+        "Web Performance Optimization",
+        "Page Speed",
+        "Web Vitals",
+        "Lighthouse",
+        "WebAssembly",
+        "Service Worker",
+        "Cache API",
+        "Web Storage",
+        "Content Delivery Network",
+        "CDN Configuration"
+      ],
+      "certifications": [],
+      "family": "Web Development"
+    },
+    {
+      "job_title": "App Architect",
+      "skills": [
+        "Cloud Architecture",
+        "API Design",
+        "Microservices",
+        "Containerization",
+        "DevOps",
+        "Agile Methodologies",
+        "Scrum Master",
+        "Kubernetes",
+        "Docker",
+        "CI/CD Pipelines"
+      ],
+      "certifications": [
+        "AWS Certified Solutions Architect",
+        "Google Cloud Certified - Professional Cloud Architect"
+      ],
+      "family": "Mobile App Development"
+    },
+    {
+      "job_title": "Quality Assurance Engineer",
+      "skills": [
+        "Test Automation",
+        "UI Testing",
+        "API Testing",
+        "Mobile App Testing",
+        "Test Planning",
+        "Test Execution",
+        "Test Reporting",
+        "Agile Methodologies",
+        "Scrum Master",
+        "Defect Management"
+      ],
+      "certifications": [
+        "ISTQB Certified Tester Foundation"
+      ],
+      "family": "Mobile App Development"
+    },
+    {
+      "job_title": "Network Operations Center Manager",
+      "skills": [
+        "Network Monitoring Tools",
+        "Incident Management",
+        "Change Management",
+        "Network Performance Analysis",
+        "IT Service Management",
+        "Troubleshooting",
+        "Network Configuration Management",
+        "Network Security",
+        "Network Asset Management",
+        "Compliance Management"
+      ],
+      "certifications": [
+        "CompTIA Network+",
+        "Cisco CCNP Enterprise"
+      ],
+      "family": "Network Administration"
+    },
+    {
+      "job_title": "Network Administrator",
+      "skills": [
+        "Network Configuration",
+        "Network Troubleshooting",
+        "Network Performance Monitoring",
+        "Network Security",
+        "Network Asset Management",
+        "Network Backup and Recovery",
+        "Network Patch Management",
+        "Network Compliance Management",
+        "Network Documentation",
+        "Network Maintenance"
+      ],
+      "certifications": [
+        "CompTIA A+",
+        "CompTIA Network+"
+      ],
+      "family": "Network Administration"
+    },
+    {
+      "job_title": "Database Security Architect",
+      "skills": [
+        "SQL Injection Prevention",
+        "Data Masking",
+        "Access Control",
+        "Data Encryption",
+        "Compliance Auditing",
+        "Risk Assessment",
+        "Security Information and Event Management (SIEM)",
+        "Cloud Security",
+        "Network Segmentation",
+        "Identity and Access Management (IAM)"
+      ],
+      "certifications": [
+        "CompTIA Security+",
+        "CISSP-ISSAP"
+      ],
+      "family": "Database Security"
+    },
+    {
+      "job_title": "Database Vulnerability Assessor",
+      "skills": [
+        "Vulnerability Scanning",
+        "Penetration Testing",
+        "Compliance Auditing",
+        "Risk Assessment",
+        "Security Orchestration Automation and Response (SOAR)",
+        "Cloud Security",
+        "Network Segmentation",
+        "Identity and Access Management (IAM)",
+        "Threat Intelligence",
+        "Incident Response"
+      ],
+      "certifications": [
+        "OSCP",
+        "CompTIA PenTest+"
+      ],
+      "family": "Database Security"
+    },
+    {
+      "job_title": "Database Security Consultant",
+      "skills": [
+        "Security Assessment",
+        "Compliance Auditing",
+        "Risk Assessment",
+        "Security Information and Event Management (SIEM)",
+        "Cloud Security",
+        "Network Segmentation",
+        "Identity and Access Management (IAM)",
+        "Threat Intelligence",
+        "Incident Response",
+        "Security Orchestration Automation and Response (SOAR)"
+      ],
+      "certifications": [
+        "CISSP",
+        "CISM"
+      ],
+      "family": "Database Security"
+    },
+    {
+      "job_title": "Database Compliance Officer",
+      "skills": [
+        "Compliance Auditing",
+        "Risk Assessment",
+        "Regulatory Compliance",
+        "Data Governance",
+        "Data Classification",
+        "Access Control",
+        "Data Encryption",
+        "Security Information and Event Management (SIEM)",
+        "Cloud Security",
+        "Network Segmentation"
+      ],
+      "certifications": [
+        "CIPP/US",
+        "CIPP/E"
+      ],
+      "family": "Database Security"
+    },
+    {
+      "job_title": "Database Security Engineer",
+      "skills": [
+        "Cloud Security",
+        "Network Segmentation",
+        "Identity and Access Management (IAM)",
+        "Data Encryption",
+        "Security Information and Event Management (SIEM)",
+        "Threat Intelligence",
+        "Incident Response",
+        "Security Orchestration Automation and Response (SOAR)",
+        "Penetration Testing",
+        "Vulnerability Scanning"
+      ],
+      "certifications": [
+        "CompTIA Security+",
+        "CISSP-ISSAP"
+      ],
+      "family": "Database Security"
+    },
+    {
+      "job_title": "Recommendation Systems Engineer",
+      "skills": [
+        "Collaborative Filtering",
+        "Content-Based Filtering",
+        "Hybrid Recommendation",
+        "Matrix Factorization",
+        "Deep Learning",
+        "Knowledge Graph",
+        "Graph-Based Methods",
+        "Clustering",
+        "Dimensionality Reduction",
+        "Personalization"
+      ],
+      "certifications": [
+        "Google Cloud Certified - Professional Machine Learning Engineer",
+        "Microsoft Certified: Azure AI Engineer Associate"
+      ],
+      "family": "Machine Learning Engineering"
+    },
+    {
+      "job_title": "Predictive Maintenance Engineer",
+      "skills": [
+        "Time Series Analysis",
+        "Predictive Modeling",
+        "Machine Learning",
+        "Deep Learning",
+        "Condition Monitoring",
+        "Anomaly Detection",
+        "Fault Detection",
+        "Predictive Analytics",
+        "Data Visualization",
+        "Equipment Monitoring"
+      ],
+      "certifications": [
+        "Google Cloud Certified - Professional Machine Learning Engineer",
+        "Certified Data Scientist - Certified Data Scientist"
+      ],
+      "family": "Machine Learning Engineering"
+    }
+  ]
+}
