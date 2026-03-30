@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── Layer 1: Install numpy first (torch depends on it) ─────────────────────
-RUN pip install --no-cache-dir numpy==1.26.4
+RUN pip install --no-cache-dir numpy==1.24.4
 
 # ── Layer 2: Install PyTorch CPU-only via direct wheel URL ─────────────────
 # Direct URL avoids pip having to resolve the extra index, faster + reliable
