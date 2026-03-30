@@ -1,4 +1,4 @@
-# Dockerfile - stable + optimized for Render free tier
+# Dockerfile - stable for Render free tier (FIXED)
 
 FROM python:3.11-slim
 
@@ -16,26 +16,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# ── Layer 1: Install core numeric stack (LOCKED) ─────────────────────
-RUN pip install --no-cache-dir \
-    numpy==1.24.4
+# ── Layer 1: Core numeric stack (FAISS-safe) ─────────────────────────
+RUN pip install --no-cache-dir numpy==1.24.4
 
-# ── Layer 2: Install PyTorch CPU ─────────────────────────────────────
+# ── Layer 2: PyTorch CPU ONLY (no CUDA) ──────────────────────────────
 RUN pip install --no-cache-dir \
     torch==2.3.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
-# ── Layer 3: ML dependencies (FAISS-compatible versions) ─────────────
+# ── Layer 3: ML dependencies (compatible versions) ───────────────────
 RUN pip install --no-cache-dir \
     faiss-cpu==1.7.4 \
     scikit-learn==1.3.2 \
     sentence-transformers==2.6.1
 
-# ── 🔥 CRITICAL: Re-lock NumPy AFTER installs ────────────────────────
+# ── Lock NumPy again (prevents hidden upgrades) ──────────────────────
 RUN pip install --no-cache-dir numpy==1.24.4 --force-reinstall
 
-# ── Layer 4: spaCy + model (stable install) ──────────────────────────
-RUN pip install --no-cache-dir spacy==3.7.4 && \
+# ── Layer 4: spaCy + model ───────────────────────────────────────────
+RUN pip install --no-cache-dir spacy==3.7.4 typer==0.9.0 && \
     pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
@@ -43,15 +42,15 @@ RUN pip install --no-cache-dir spacy==3.7.4 && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ── 🔥 CRITICAL AGAIN: Re-lock NumPy AFTER requirements ──────────────
+# ── Lock NumPy AGAIN (final protection) ──────────────────────────────
 RUN pip install --no-cache-dir numpy==1.24.4 --force-reinstall
 
-# ── Layer 6: Application code ────────────────────────────────────────
+# ── App code ─────────────────────────────────────────────────────────
 COPY . .
 
 RUN mkdir -p faiss_index embedding_cache
 
-# ── Environment optimizations (VERY IMPORTANT for Render) ───────────
+# ── Runtime optimizations ────────────────────────────────────────────
 ENV PORT=8000
 ENV OMP_NUM_THREADS=1
 ENV TRANSFORMERS_NO_ADVISORY_WARNINGS=1
