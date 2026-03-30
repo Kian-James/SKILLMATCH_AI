@@ -1,44 +1,51 @@
-# Dockerfile
-# Used by Render for the backend deployment.
-# Base image includes Tesseract OCR pre-installed.
-# Uses CPU-only PyTorch to keep image size manageable.
+# Dockerfile - optimised for Render free tier
+# Uses Python slim + installs torch CPU wheel directly (no CUDA bloat)
+# Layers ordered so heavy deps are cached and rarely rebuilt
 
 FROM python:3.11-slim
 
-# System dependencies
-# tesseract-ocr: OCR engine
-# poppler-utils: PDF to image conversion (pdf2image)
-# libgl1: required by some image processing libs
+# System deps in one layer - minimised to what's actually needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils \
     libgl1 \
     libglib2.0-0 \
+    gcc \
+    g++ \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy requirements first for Docker layer caching
-COPY ./backend/requirements.txt .
+# ── Layer 1: Install numpy first (torch depends on it) ─────────────────────
+RUN pip install --no-cache-dir numpy==1.26.4
 
-# Install CPU-only PyTorch first (avoids pulling CUDA build)
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-        torch==2.3.0+cpu \
-        --extra-index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r requirements.txt
+# ── Layer 2: Install PyTorch CPU-only via direct wheel URL ─────────────────
+# Direct URL avoids pip having to resolve the extra index, faster + reliable
+RUN pip install --no-cache-dir \
+    torch==2.3.0+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
 
-# Download spaCy model (sm fits Render free tier RAM)
-RUN python -m spacy download en_core_web_sm
+# ── Layer 3: Install remaining heavy ML deps ───────────────────────────────
+RUN pip install --no-cache-dir \
+    sentence-transformers==3.0.0 \
+    faiss-cpu==1.8.0 \
+    scikit-learn==1.4.2
 
-# Copy application code
+# ── Layer 4: Install spaCy + download sm model ─────────────────────────────
+RUN pip install --no-cache-dir spacy==3.7.4 && \
+    python -m spacy download en_core_web_sm
+
+# ── Layer 5: Install the rest of the requirements ─────────────────────────
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ── Layer 6: Application code (changes most often - last layer) ────────────
 COPY . .
 
-# Create directories for FAISS index and embedding cache
 RUN mkdir -p faiss_index embedding_cache
 
-# Render injects PORT at runtime — default to 8000 for local Docker runs
 ENV PORT=8000
 
 EXPOSE $PORT

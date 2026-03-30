@@ -13,16 +13,6 @@ Pillow==10.3.0
 pdf2image==1.17.0
 PyPDF2==3.0.1
 
-# NLP - en_core_web_sm on Render (sm fits free tier RAM, lg does not)
-spacy==3.7.4
-
-# Embeddings & ML - torch CPU only (smaller than CUDA build)
-torch==2.3.0+cpu
-sentence-transformers==3.0.0
-faiss-cpu==1.8.0
-scikit-learn==1.4.2
-numpy==1.26.4
-
 # HuggingFace
 huggingface_hub==0.23.1
 transformers==4.41.1
@@ -37,3 +27,7 @@ aiofiles==23.2.1
 tenacity==8.3.0
 loguru==0.7.2
 requests==2.31.0
+
+# NOTE: torch, faiss-cpu, sentence-transformers, scikit-learn,
+# numpy, and spacy are installed directly in the Dockerfile
+# as separate layers for better caching. Do NOT add them here.
