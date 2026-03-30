@@ -1,10 +1,8 @@
-# Dockerfile - optimised for Render free tier
-# Uses Python slim + installs torch CPU wheel directly (no CUDA bloat)
-# Layers ordered so heavy deps are cached and rarely rebuilt
+# Dockerfile - stable + optimized for Render free tier
 
 FROM python:3.11-slim
 
-# System deps in one layer - minimised to what's actually needed
+# ── System dependencies ───────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
@@ -18,36 +16,45 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# ── Layer 1: Install numpy first (torch depends on it) ─────────────────────
-RUN pip install --no-cache-dir numpy==1.24.4
+# ── Layer 1: Install core numeric stack (LOCKED) ─────────────────────
+RUN pip install --no-cache-dir \
+    numpy==1.24.4
 
-# ── Layer 2: Install PyTorch CPU-only via direct wheel URL ─────────────────
-# Direct URL avoids pip having to resolve the extra index, faster + reliable
+# ── Layer 2: Install PyTorch CPU ─────────────────────────────────────
 RUN pip install --no-cache-dir \
     torch==2.3.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
-# ── Layer 3: Install remaining heavy ML deps ───────────────────────────────
+# ── Layer 3: ML dependencies (FAISS-compatible versions) ─────────────
 RUN pip install --no-cache-dir \
-    sentence-transformers==3.0.0 \
-    faiss-cpu==1.8.0 \
-    scikit-learn==1.4.2
+    faiss-cpu==1.7.4 \
+    scikit-learn==1.3.2 \
+    sentence-transformers==2.6.1
 
-# ── Layer 4: Install spaCy + download sm model ─────────────────────────────
+# ── 🔥 CRITICAL: Re-lock NumPy AFTER installs ────────────────────────
+RUN pip install --no-cache-dir numpy==1.24.4 --force-reinstall
+
+# ── Layer 4: spaCy + model (stable install) ──────────────────────────
 RUN pip install --no-cache-dir spacy==3.7.4 && \
     pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
-# ── Layer 5: Install the rest of the requirements ─────────────────────────
+# ── Layer 5: App dependencies ────────────────────────────────────────
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ── Layer 6: Application code (changes most often - last layer) ────────────
+# ── 🔥 CRITICAL AGAIN: Re-lock NumPy AFTER requirements ──────────────
+RUN pip install --no-cache-dir numpy==1.24.4 --force-reinstall
+
+# ── Layer 6: Application code ────────────────────────────────────────
 COPY . .
 
 RUN mkdir -p faiss_index embedding_cache
 
+# ── Environment optimizations (VERY IMPORTANT for Render) ───────────
 ENV PORT=8000
+ENV OMP_NUM_THREADS=1
+ENV TRANSFORMERS_NO_ADVISORY_WARNINGS=1
 
 EXPOSE $PORT
 
