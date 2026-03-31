@@ -11,7 +11,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 class ApiService {
   // Change this to your deployed backend URL for production
-  static const String _baseUrl = 'http://10.0.2.2:8000/api/v1'; // Android emulator
+  static const String _baseUrl = 'https://skillmatch-ai-qopi.onrender.com/api/v1'; // Android emulator
   // static const String _baseUrl = 'http://localhost:8000/api/v1'; // iOS simulator / web
 
   late final Dio _dio;

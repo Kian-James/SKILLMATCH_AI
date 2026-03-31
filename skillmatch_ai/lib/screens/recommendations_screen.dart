@@ -4,7 +4,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import '../models/resume_analysis.dart';
 import '../services/api_service.dart';
 import '../widgets/skill_chip.dart';
 
@@ -22,7 +21,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
 
   bool _isLoading = false;
   String? _error;
-  List<JobMatch> _jobs = [];
+  List<Map<String, dynamic>> _jobs = [];
   int _querySkillCount = 0;
 
   Future<void> _recommend() async {
@@ -43,10 +42,11 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
     });
 
     try {
-      final matches = await _api.recommendJobs(skills: skills, certifications: certs);
+      final data = await _api.recommendJobs(skills: skills, certifications: certs);
+      final matches = List<Map<String, dynamic>>.from(data['top_matches'] ?? []);
       setState(() {
         _jobs = matches;
-        _querySkillCount = skills.length;
+        _querySkillCount = data['query_skill_count'] ?? skills.length;
       });
     } catch (e) {
       setState(() => _error = ApiService.extractError(e));
@@ -127,9 +127,9 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                   onPressed: _isLoading ? null : _recommend,
                   icon: _isLoading
                       ? const SizedBox(
-                    width: 16, height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.search),
                   label: const Text('Find Matching Jobs'),
                   style: FilledButton.styleFrom(
@@ -162,8 +162,8 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                 Text(
                   'Top ${_jobs.length} Matches',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                        fontWeight: FontWeight.w700,
+                      ),
                 ),
                 const Spacer(),
                 Text(
@@ -191,7 +191,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
 }
 
 class _JobCard extends StatefulWidget {
-  final JobMatch job;
+  final Map<String, dynamic> job;
   final int rank;
 
   const _JobCard({required this.job, required this.rank});
@@ -206,16 +206,16 @@ class _JobCardState extends State<_JobCard> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final score = widget.job.matchScore;
-    final skills = widget.job.skills;
-    final certs = widget.job.certifications;
+    final score = (widget.job['match_score'] as num?)?.toDouble() ?? 0.0;
+    final skills = List<String>.from(widget.job['skills'] ?? []);
+    final certs = List<String>.from(widget.job['certifications'] ?? []);
     final isTopMatch = widget.rank == 1;
 
-    final scoreColor = switch (widget.job.scoreLevel) {
-      ScoreLevel.high   => Colors.green,
-      ScoreLevel.medium => Colors.orange,
-      ScoreLevel.low    => cs.error,
-    };
+    final scoreColor = score >= 80
+        ? Colors.green
+        : score >= 60
+            ? Colors.orange
+            : cs.error;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -369,7 +369,7 @@ class _JobCardState extends State<_JobCard> {
               ),
             ),
             crossFadeState:
-            _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 250),
           ),
         ],
