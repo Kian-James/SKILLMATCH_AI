@@ -1,6 +1,3 @@
-# Dockerfile - optimised for Render free tier
-# Layers ordered so heavy deps are cached and rarely rebuilt
-
 FROM python:3.11-slim
 
 # System dependencies
@@ -17,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Layer 1: numpy first (torch depends on it)
+# Layer 1: numpy
 RUN pip install --no-cache-dir numpy==1.26.4
 
-# Layer 2: PyTorch CPU-only via direct index URL
+# Layer 2: PyTorch CPU only
 RUN pip install --no-cache-dir \
     torch==2.3.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
@@ -31,12 +28,11 @@ RUN pip install --no-cache-dir \
     faiss-cpu==1.8.0 \
     scikit-learn==1.4.2
 
-# Layer 4: spaCy + model
-# Hardcode the model name directly - do NOT use env var here,
-# the SPACY_MODEL env var is only for runtime (which model to load),
-# not for the build-time download command
+# Layer 4: spaCy + model via direct pip URL (no python -m spacy download)
+# Using the direct GitHub release URL is more reliable inside Docker
 RUN pip install --no-cache-dir spacy==3.7.4 && \
-    python -m spacy download en_core_web_sm
+    pip install --no-cache-dir \
+    https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # Layer 5: App requirements
 COPY requirements.txt .
