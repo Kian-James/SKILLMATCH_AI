@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     libgl1 \
     libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
     gcc \
     g++ \
     && apt-get clean \
