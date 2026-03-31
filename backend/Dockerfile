@@ -1,4 +1,4 @@
-# Dockerfile - stable for Render free tier (FIXED)
+# Dockerfile - stable for Render free tier (UPDATED)
 
 FROM python:3.11-slim
 
@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── Layer 1: Core numeric stack (FAISS-safe) ─────────────────────────
-RUN pip install --no-cache-dir numpy==1.24.4
+RUN pip install --no-cache-dir numpy==1.24.4 scipy==1.11.2
 
 # ── Layer 2: PyTorch CPU ONLY (no CUDA) ──────────────────────────────
 RUN pip install --no-cache-dir \
@@ -30,19 +30,16 @@ RUN pip install --no-cache-dir \
     scikit-learn==1.3.2 \
     sentence-transformers==2.6.1
 
-# ── Lock NumPy again (prevents hidden upgrades) ──────────────────────
-RUN pip install --no-cache-dir numpy==1.24.4 --force-reinstall
-
 # ── Layer 4: spaCy + model ───────────────────────────────────────────
 RUN pip install --no-cache-dir spacy==3.7.4 typer==0.9.0 && \
     pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
-# ── Layer 5: App dependencies ────────────────────────────────────────
+# ── Layer 5: App-specific dependencies ───────────────────────────────
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ── Lock NumPy AGAIN (final protection) ──────────────────────────────
+# ── Layer 6: Lock NumPy AGAIN (final protection) ────────────────────
 RUN pip install --no-cache-dir numpy==1.24.4 --force-reinstall
 
 # ── App code ─────────────────────────────────────────────────────────
@@ -57,4 +54,4 @@ ENV TRANSFORMERS_NO_ADVISORY_WARNINGS=1
 
 EXPOSE $PORT
 
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
