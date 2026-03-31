@@ -27,9 +27,10 @@ RUN pip install --no-cache-dir torch==2.3.0+cpu --index-url https://download.pyt
 # ── ML dependencies ─────────────────────────────────────────
 RUN pip install --no-cache-dir faiss-cpu==1.7.4 scikit-learn==1.3.2 sentence-transformers==2.6.1
 
-# ── spaCy + model ──────────────────────────────────────────
-RUN pip install --no-cache-dir spacy==3.7.4 typer==0.9.0
-RUN python -m spacy download en_core_web_sm
+# ── spaCy + English model + Typer ──────────────────────────
+RUN pip install --no-cache-dir spacy==3.7.4 typer==0.9.0 \
+    && python -m pip install --no-cache-dir \
+    https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # ── App-specific dependencies ───────────────────────────────
 COPY requirements.txt .
@@ -47,4 +48,5 @@ ENV TRANSFORMERS_NO_ADVISORY_WARNINGS=1
 
 EXPOSE $PORT
 
+# ── Command to run app ──────────────────────────────────────
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
