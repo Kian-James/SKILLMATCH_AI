@@ -54,8 +54,10 @@ LLM_MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
 # Set SPACY_MODEL=en_core_web_lg locally if you want the larger model
 SPACY_MODEL = os.getenv("SPACY_MODEL", "en_core_web_sm")
 
-# RoBERTa for embeddings
-ROBERTA_MODEL_ID = "sentence-transformers/all-roberta-large-v1"
+# Embedding model
+# all-MiniLM-L6-v2: 80MB, fast, fits Render free tier (512MB RAM)
+# all-roberta-large-v1: 1.3GB - too large for free tier, use locally if needed
+ROBERTA_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 
 # FAISS
 FAISS_INDEX_PATH = Path("faiss_index/job_embeddings.index")
