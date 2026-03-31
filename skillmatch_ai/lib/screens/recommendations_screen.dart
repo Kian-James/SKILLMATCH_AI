@@ -1,9 +1,8 @@
 // screens/recommendations_screen.dart
-// Standalone job recommendation screen.
-// User enters skills manually to get recommendations (or results auto-populate from Upload tab).
-
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+
+import '../models/resume_analysis.dart';
 import '../services/api_service.dart';
 import '../widgets/skill_chip.dart';
 
@@ -21,14 +20,15 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
 
   bool _isLoading = false;
   String? _error;
-  List<Map<String, dynamic>> _jobs = [];
+  List<JobMatch> _jobs = [];       // ← typed model, not Map
   int _querySkillCount = 0;
 
   Future<void> _recommend() async {
     final raw = _skillsCtrl.text.trim();
     if (raw.isEmpty) return;
 
-    final skills = raw.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final skills =
+    raw.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
     final certs = _certsCtrl.text
         .split(',')
         .map((s) => s.trim())
@@ -42,11 +42,12 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
     });
 
     try {
-      final data = await _api.recommendJobs(skills: skills, certifications: certs);
-      final matches = List<Map<String, dynamic>>.from(data['top_matches'] ?? []);
+      // recommendJobs now returns List<JobMatch> directly
+      final matches =
+      await _api.recommendJobs(skills: skills, certifications: certs);
       setState(() {
         _jobs = matches;
-        _querySkillCount = data['query_skill_count'] ?? skills.length;
+        _querySkillCount = skills.length;
       });
     } catch (e) {
       setState(() => _error = ApiService.extractError(e));
@@ -85,7 +86,8 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                 Expanded(
                   child: Text(
                     'Enter your skills below, or upload a resume on the Resume tab to auto-populate.',
-                    style: TextStyle(color: cs.onSecondaryContainer, fontSize: 13),
+                    style: TextStyle(
+                        color: cs.onSecondaryContainer, fontSize: 13),
                   ),
                 ),
               ],
@@ -127,14 +129,16 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                   onPressed: _isLoading ? null : _recommend,
                   icon: _isLoading
                       ? const SizedBox(
-                          width: 16, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                       : const Icon(Icons.search),
                   label: const Text('Find Matching Jobs'),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size(double.infinity, 50),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ],
@@ -161,14 +165,16 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
               children: [
                 Text(
                   'Top ${_jobs.length} Matches',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
                 Text(
                   'Based on $_querySkillCount skills',
-                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                  style:
+                  TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
                 ),
               ],
             ).animate().fadeIn(delay: 150.ms),
@@ -176,11 +182,11 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
             const SizedBox(height: 12),
 
             ..._jobs.asMap().entries.map((entry) {
-              final job = entry.value;
               final rank = entry.key + 1;
-              return _JobCard(job: job, rank: rank)
+              return _JobCard(job: entry.value, rank: rank)
                   .animate()
-                  .fadeIn(delay: Duration(milliseconds: 200 + rank * 80))
+                  .fadeIn(
+                  delay: Duration(milliseconds: 200 + rank * 80))
                   .slideX(begin: 0.05);
             }),
           ],
@@ -191,9 +197,8 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
 }
 
 class _JobCard extends StatefulWidget {
-  final Map<String, dynamic> job;
+  final JobMatch job;   // ← typed model
   final int rank;
-
   const _JobCard({required this.job, required this.rank});
 
   @override
@@ -206,16 +211,13 @@ class _JobCardState extends State<_JobCard> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final score = (widget.job['match_score'] as num?)?.toDouble() ?? 0.0;
-    final skills = List<String>.from(widget.job['skills'] ?? []);
-    final certs = List<String>.from(widget.job['certifications'] ?? []);
     final isTopMatch = widget.rank == 1;
 
-    final scoreColor = score >= 80
-        ? Colors.green
-        : score >= 60
-            ? Colors.orange
-            : cs.error;
+    final scoreColor = switch (widget.job.scoreLevel) {
+      ScoreLevel.high => Colors.green,
+      ScoreLevel.medium => Colors.orange,
+      ScoreLevel.low => cs.error,
+    };
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -233,7 +235,7 @@ class _JobCardState extends State<_JobCard> {
       ),
       child: Column(
         children: [
-          // Header row
+          // Header
           InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
             borderRadius: BorderRadius.circular(16),
@@ -241,7 +243,6 @@ class _JobCardState extends State<_JobCard> {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  // Rank badge
                   Container(
                     width: 40,
                     height: 40,
@@ -261,53 +262,45 @@ class _JobCardState extends State<_JobCard> {
                     ),
                   ),
                   const SizedBox(width: 14),
-
-                  // Title + subtitle
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.job['job_title'] ?? '',
+                          widget.job.jobTitle,
                           style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
-                          ),
+                              fontWeight: FontWeight.w700, fontSize: 15),
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          '${skills.length} required skills',
+                          '${widget.job.skills.length} required skills',
                           style: TextStyle(
-                            color: cs.onSurfaceVariant,
-                            fontSize: 12,
-                          ),
+                              color: cs.onSurfaceVariant, fontSize: 12),
                         ),
                       ],
                     ),
                   ),
-
-                  // Score badge
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 7),
                     decoration: BoxDecoration(
                       color: scoreColor.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      '${score.toStringAsFixed(0)}%',
+                      '${widget.job.matchScore.toStringAsFixed(0)}%',
                       style: TextStyle(
-                        color: scoreColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
+                          color: scoreColor,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14),
                     ),
                   ),
-
                   const SizedBox(width: 8),
                   AnimatedRotation(
                     turns: _expanded ? 0.5 : 0,
                     duration: const Duration(milliseconds: 200),
-                    child: Icon(Icons.keyboard_arrow_down, color: cs.onSurfaceVariant),
+                    child: Icon(Icons.keyboard_arrow_down,
+                        color: cs.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -324,52 +317,51 @@ class _JobCardState extends State<_JobCard> {
                 children: [
                   const Divider(height: 1),
                   const SizedBox(height: 14),
-
-                  if (skills.isNotEmpty) ...[
+                  if (widget.job.skills.isNotEmpty) ...[
                     Text(
                       'Required Skills',
                       style: TextStyle(
                         color: cs.onSurfaceVariant,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 6,
                       runSpacing: 6,
-                      children: skills
-                          .map((s) => SkillChip(skill: s, type: SkillChipType.present))
+                      children: widget.job.skills
+                          .map((s) => SkillChip(
+                          skill: s, type: SkillChipType.present))
                           .toList(),
                     ),
                     const SizedBox(height: 12),
                   ],
-
-                  if (certs.isNotEmpty) ...[
+                  if (widget.job.certifications.isNotEmpty) ...[
                     Text(
                       'Certifications',
                       style: TextStyle(
                         color: cs.onSurfaceVariant,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 6,
                       runSpacing: 6,
-                      children: certs
-                          .map((c) => SkillChip(skill: c, type: SkillChipType.cert))
+                      children: widget.job.certifications
+                          .map((c) => SkillChip(
+                          skill: c, type: SkillChipType.cert))
                           .toList(),
                     ),
                   ],
                 ],
               ),
             ),
-            crossFadeState:
-                _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            crossFadeState: _expanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 250),
           ),
         ],
