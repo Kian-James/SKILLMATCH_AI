@@ -1,13 +1,11 @@
 """
 ai_modules/nlp_processor.py
-Uses spaCy to extract skills and certifications from resume text.
+Extracts technical skills and certifications from resume text.
 
-Key improvements:
-- Certifications extracted first, then excluded from skill extraction
-- Broader cert patterns covering Cisco ITF+, Udemy, FreeCodeCamp, etc.
-- Noun chunk heuristic removed (was grabbing soft skills, cert names, summaries)
-- Soft skills explicitly excluded from the skill list
-- Skills matched only against curated technical ontology
+Strategy:
+1. Extract certifications with broad patterns, then deduplicate by keeping longest match
+2. Extract skills from curated ontology only — no noun chunk heuristic
+3. Exclude soft skills and cert fragments from skill results
 """
 
 from __future__ import annotations
@@ -24,9 +22,20 @@ from config import SPACY_MODEL
 
 
 # ─── Certification patterns ───────────────────────────────────────────────────
-# Ordered from most specific to least specific.
-# Each pattern captures the full certification name as it appears on a resume.
+# Each pattern tries to capture the full certification name in one match.
+# Patterns are checked and then deduplicated — longest match wins.
 CERT_PATTERNS = [
+    # Format: "Provider – Certification Name" (dash/em-dash variants)
+    r"\bUdemy\s*[–\-—]\s*[\w\s&()]+",
+    r"\bCoursera\s*[–\-—]\s*[\w\s&()]+",
+    r"\bedX\s*[–\-—]\s*[\w\s&()]+",
+    r"\bLinkedIn\s+Learning\s*[–\-—]\s*[\w\s&()]+",
+    r"\bFreeCodeCamp\s*[–\-—]\s*[\w\s&()]+",
+    # Format: "Provider – Name" where name bleeds into next cert (common in PDFs)
+    # Cisco specific — captures "Cisco – Certified Information Technology (ITF+)"
+    r"\bCisco\s*[–\-—]\s*[\w\s&()+]+",
+    r"\bCisco\s+Certified[\w\s&()]+",
+    r"\bCisco\s+(?:CCNA|CCNP|CCIE|CyberOps)[\w\s]*",
     # AWS
     r"\bAWS\s+Certified\s+[\w\s]+",
     # Google Cloud
@@ -35,10 +44,6 @@ CERT_PATTERNS = [
     # Microsoft
     r"\bMicrosoft\s+Certified[\w\s:]+",
     r"\bAZ-\d{3}\b",
-    # Cisco
-    r"\bCisco\s+(?:Certified\s+)?[\w\s]+(?:ITF\+|CCNA|CCNP|CCIE|CyberOps)[\w\s]*",
-    r"\bCisco\s+[\w\s]*ITF\+",
-    r"\b(?:CCNA|CCNP|CCIE)\b",
     # CompTIA
     r"\bCompTIA\s+[\w+]+",
     r"\bA\+\b",
@@ -46,76 +51,63 @@ CERT_PATTERNS = [
     r"\bSecurity\+\b",
     # Kubernetes
     r"\bCertified\s+Kubernetes\s+(?:Administrator|Developer|Security\s+Specialist)",
-    r"\bCKA\b",
-    r"\bCKAD\b",
-    r"\bCKS\b",
+    r"\bCKA\b", r"\bCKAD\b", r"\bCKS\b",
     # Security
     r"\bCertified\s+Ethical\s+Hacker",
-    r"\bCEH\b",
-    r"\bCISSP\b",
-    r"\bCISM\b",
-    r"\bOSCP\b",
-    # Project Management
-    r"\bPMP\b",
-    r"\bPRINCE2[\w\s]*",
-    r"\bScrumMaster\b",
-    r"\bCSM\b",
-    r"\bPSM\b",
+    r"\bCEH\b", r"\bCISSP\b", r"\bCISM\b", r"\bOSCP\b",
+    # Project Mgmt
+    r"\bPMP\b", r"\bPRINCE2[\w\s]*", r"\bScrumMaster\b", r"\bCSM\b", r"\bPSM\b",
     # Oracle / Red Hat
     r"\bOracle\s+Certified[\w\s]+",
     r"\bRed\s+Hat\s+Certified[\w\s]+",
-    r"\bRHCE\b",
-    r"\bRHCSA\b",
-    # TensorFlow / ML
+    r"\bRHCE\b", r"\bRHCSA\b",
+    # TensorFlow
     r"\bTensorFlow\s+Developer\s+Certificate",
-    # FreeCodeCamp — matches "FreeCodeCamp – Responsive Web Design" etc.
-    r"\bFreeCodeCamp\s*[–\-—]\s*[\w\s]+",
-    r"\bFreeCodeCamp\s+[\w\s]+(?:Certificate|Certification|Design|Database|Development)",
-    r"(?:Responsive\s+Web\s+Design|Relational\s+Database|JavaScript\s+Algorithms)\s+(?:FreeCodeCamp|Certificate)?",
-    # Udemy — matches "Udemy – Flutter Program Certified" etc.
-    r"\bUdemy\s*[–\-—]\s*[\w\s]+",
-    r"\bUdemy\s+[\w\s]+(?:Certificate|Certified|Course)?",
-    r"Flutter\s+Program\s+Certified(?:\s*FreeCodeCamp)?",
-    # Coursera / edX / LinkedIn Learning
-    r"\bCoursera\s*[–\-—]\s*[\w\s]+",
-    r"\bedX\s*[–\-—]\s*[\w\s]+",
-    r"\bLinkedIn\s+Learning\s*[–\-—]\s*[\w\s]+",
-    # Generic patterns — "Certified Information Technology (ITF+)"
+    # Generic "Certified Information Technology" style
     r"\bCertified\s+Information\s+Technology[\w\s()]+",
+    # FreeCodeCamp certs listed without dash: "Responsive Web Design FreeCodeCamp"
+    r"(?:Responsive\s+Web\s+Design|Relational\s+Database|JavaScript\s+Algorithms"
+    r"|Front\s+End\s+Development|Back\s+End\s+Development|Data\s+Visualization"
+    r"|Scientific\s+Computing|Machine\s+Learning|Quality\s+Assurance"
+    r"|College\s+Algebra)\s+(?:FreeCodeCamp|Certificate)?",
+    # "Flutter Program Certified" (Udemy cert often appears without provider)
+    r"\bFlutter\s+Program\s+Certif\w+",
+    # ITF+ standalone
     r"\bITF\+",
     # ISO
     r"\bISO\s+\d+[\w\s]*(?:Lead\s+Auditor|Lead\s+Implementer)?",
 ]
 
-# Soft skills to explicitly exclude — these are NOT technical skills
-SOFT_SKILLS_EXCLUDE = {
+# Soft skills — explicitly excluded from technical skill extraction
+SOFT_SKILLS_EXCLUDE: set[str] = {
     "adaptability", "time management", "problem solving", "problem-solving",
     "analytical thinking", "attention to detail", "communication",
     "written & verbal", "written and verbal", "teamwork", "leadership",
     "critical thinking", "creativity", "interpersonal skills", "work ethic",
     "multitasking", "organization", "collaboration", "flexibility",
     "decision making", "emotional intelligence", "conflict resolution",
-    "project management", "presentation skills", "negotiation",
-    "detail oriented", "detail-oriented", "fast learner", "self-motivated",
-    "strong work ethic", "verbal communication", "written communication",
+    "presentation skills", "negotiation", "detail oriented", "detail-oriented",
+    "fast learner", "self-motivated", "verbal communication", "written communication",
+    "strong work ethic", "hard skills", "soft skills",
 }
 
-# Words/phrases that appear in cert names but should NOT be extracted as skills
-CERT_KEYWORD_FRAGMENTS = {
-    "freecodecamp", "udemy", "coursera", "edx", "certified", "certification",
-    "certificate", "program certified",
+# Phrases that signal a cert context — used to filter skill matches
+CERT_PROVIDER_WORDS: set[str] = {
+    "freecodecamp", "udemy", "coursera", "edx", "cisco", "microsoft",
+    "google", "amazon", "oracle", "linkedin", "certified", "certification",
+    "certificate",
 }
 
-# Curated technical skills list — only real technical skills, no soft skills
+# Curated technical skills
 KNOWN_SKILLS: list[str] = [
-    # Programming Languages
+    # Languages
     "Python", "Java", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
     "Kotlin", "Swift", "R", "Scala", "PHP", "Ruby", "MATLAB", "Dart",
-    "Bash", "Shell", "PowerShell", "Groovy", "Lua", "Haskell", "Elixir",
-    # Web Frameworks & Libraries
+    "Bash", "Shell", "PowerShell", "Groovy", "Lua",
+    # Web Frameworks
     "React", "Angular", "Vue.js", "Node.js", "Django", "Flask", "FastAPI",
     "Spring Boot", "Express.js", "Next.js", "Nuxt.js", "Svelte", "jQuery",
-    "Laravel", "Ruby on Rails", "ASP.NET", "Blazor",
+    "Laravel", "Ruby on Rails", "ASP.NET",
     # Mobile
     "Flutter", "React Native", "Android", "iOS", "SwiftUI", "Jetpack Compose",
     # Data & ML
@@ -129,34 +121,34 @@ KNOWN_SKILLS: list[str] = [
     # Databases
     "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra",
     "DynamoDB", "Firebase", "Firestore", "BigQuery", "Snowflake", "SQLite",
-    "MariaDB", "Oracle Database", "MS SQL Server",
     # Networking & Security
     "TCP/IP", "GraphQL", "gRPC", "OAuth", "JWT", "REST API", "RESTful APIs",
-    "Penetration Testing", "SIEM", "Firewalls", "VPN", "DNS", "HTTP", "HTTPS",
+    "Penetration Testing", "SIEM", "Firewalls",
     # Tools
-    "Git", "GitHub", "GitLab", "Bitbucket", "Jira", "Confluence",
-    "Postman", "Swagger", "VS Code", "IntelliJ", "Eclipse", "Xcode",
-    "Figma", "Adobe XD", "Photoshop",
-    # Concepts & Methodologies
+    "Git", "GitHub", "GitLab", "Jira", "Postman", "Swagger", "Figma",
+    # Concepts & stacks
     "Machine Learning", "Deep Learning", "NLP", "Computer Vision",
     "Data Structures", "Algorithms", "Microservices", "CI/CD",
     "Agile", "Scrum", "System Design", "OOP", "Functional Programming",
     "Data Engineering", "MLOps", "DevOps", "Cloud Architecture",
-    "CRUD", "MVC", "MERN Stack", "MEAN Stack", "Full Stack Development",
-    "Backend Development", "Frontend Development", "Web Development",
-    "Mobile Development", "API Development", "Unit Testing", "TDD",
-    "Responsive Design", "Version Control", "Authentication", "Authorization",
-    "Role-Based Access Control", "Real-Time Data", "WebSockets",
+    "CRUD", "MERN Stack", "MEAN Stack",
+    "Full Stack Development", "Backend Development", "Frontend Development",
+    "Mobile Development", "Web Development", "API Development",
+    "Unit Testing", "TDD", "Responsive Design", "Version Control",
+    "Authentication", "Authorization", "Role-Based Access Control",
+    "Real-Time Data", "WebSockets",
+    "Flutter & Firebase Development", "Flutter & Firebase",
+    "Git Version Control",
+    "REST APIs & Backend Development",
+    "CRUD Application Development",
     "Blockchain", "Smart Contracts", "Solidity",
-    "Embedded Systems", "IoT", "RTOS", "Assembly",
-    "Cybersecurity", "Ethical Hacking", "Network Security",
+    "Embedded Systems", "IoT", "Cybersecurity",
     "Data Analysis", "Data Visualization", "Business Intelligence",
 ]
 
 
 @lru_cache(maxsize=1)
 def _load_nlp_model():
-    """Load spaCy model (cached singleton)."""
     try:
         nlp = spacy.load(SPACY_MODEL)
         logger.info(f"Loaded spaCy model: {SPACY_MODEL}")
@@ -168,33 +160,45 @@ def _load_nlp_model():
 
 
 def _build_phrase_matcher(nlp, skills: list[str]) -> PhraseMatcher:
-    """Build a spaCy PhraseMatcher from skill list."""
     matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
     patterns = [nlp.make_doc(skill.lower()) for skill in skills]
     matcher.add("SKILL", patterns)
     return matcher
 
 
-def _is_cert_fragment(text: str) -> bool:
-    """Return True if the text looks like it came from a certification name."""
-    lower = text.lower()
-    return any(frag in lower for frag in CERT_KEYWORD_FRAGMENTS)
+def _deduplicate_certs(raw_certs: list[str]) -> list[str]:
+    """
+    Remove cert duplicates by keeping the longest match when one string
+    is a substring of another.
+    e.g. "ITF+" is a substring of "Certified Information Technology (ITF+)"
+    so we keep the longer one only.
+    Also normalises spacing and trims trailing junk.
+    """
+    # Clean each cert
+    cleaned: list[str] = []
+    for c in raw_certs:
+        c = " ".join(c.split())  # collapse whitespace
+        c = c.strip(" –-—.,;:")  # strip leading/trailing punctuation
+        if len(c) > 2:
+            cleaned.append(c)
 
+    # Sort by length descending — longer = more specific
+    cleaned.sort(key=len, reverse=True)
 
-def _is_soft_skill(text: str) -> bool:
-    """Return True if the text is a soft skill that should be excluded."""
-    return text.lower().strip() in SOFT_SKILLS_EXCLUDE
+    kept: list[str] = []
+    for cert in cleaned:
+        cert_lower = cert.lower()
+        # Only keep if no already-kept cert contains this one as a substring
+        if not any(cert_lower in kept_cert.lower() for kept_cert in kept):
+            kept.append(cert)
+
+    return sorted(kept)
 
 
 class NLPProcessor:
     """
     Extracts technical skills and certifications from resume text.
-
-    Pipeline:
-    1. Extract certifications first using regex
-    2. Build a set of cert-related text to exclude from skills
-    3. Extract skills using PhraseMatcher against curated ontology only
-    4. Filter out anything that matched a certification or is a soft skill
+    Certifications are extracted first, then used to filter skill extraction.
     """
 
     def __init__(self, extra_skills: list[str] | None = None):
@@ -205,73 +209,69 @@ class NLPProcessor:
 
     def extract_certifications(self, text: str) -> list[str]:
         """
-        Extract certification names using regex patterns.
-        Runs BEFORE skill extraction so certs can be excluded from skills.
+        Extract and deduplicate certification names.
+        Keeps the longest match when overlapping patterns fire.
         """
-        found: set[str] = set()
+        raw: list[str] = []
         for pattern in CERT_PATTERNS:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for m in matches:
-                cleaned = " ".join(m.split()).strip(" –-—")
-                if len(cleaned) > 3:
-                    found.add(cleaned)
-        return sorted(found)
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                match_text = m.group().strip()
+                if len(match_text) > 3:
+                    raw.append(match_text)
 
-    def extract_skills(self, text: str, cert_text_lower: set[str]) -> list[str]:
+        return _deduplicate_certs(raw)
+
+    def extract_skills(self, text: str, cert_strings: list[str]) -> list[str]:
         """
-        Extract skills using PhraseMatcher against the curated skills ontology.
-        Excludes anything that:
-        - Is part of a certification name
-        - Is a known soft skill
-        - Is a cert keyword fragment (FreeCodeCamp, Udemy, etc.)
+        Extract skills from the curated ontology.
+        Filters out matches that appear inside a certification string.
         """
+        # Build a set of all lowercase words that appear in cert names
+        cert_context_words: set[str] = set()
+        for cert in cert_strings:
+            for word in cert.lower().split():
+                if len(word) > 3:
+                    cert_context_words.add(word)
+        cert_context_words.update(CERT_PROVIDER_WORDS)
+
         doc = self.nlp(text)
         matches = self.matcher(doc)
 
         raw_skills: set[str] = set()
         for match_id, start, end in matches:
-            span_text = doc[start:end].text.strip()
-
-            # Skip if this skill text appears inside a certification string
-            if span_text.lower() in cert_text_lower:
-                continue
+            span = doc[start:end]
+            span_text = span.text.strip()
 
             # Skip soft skills
-            if _is_soft_skill(span_text):
+            if span_text.lower() in SOFT_SKILLS_EXCLUDE:
                 continue
 
-            # Skip cert keyword fragments
-            if _is_cert_fragment(span_text):
+            # Skip if the span itself is entirely cert provider words
+            span_words = span_text.lower().split()
+            if all(w in cert_context_words for w in span_words):
+                continue
+
+            # Skip if this exact text appears verbatim in a cert name
+            span_lower = span_text.lower()
+            if any(span_lower in cert.lower() and
+                   any(w in cert.lower() for w in CERT_PROVIDER_WORDS)
+                   for cert in cert_strings):
                 continue
 
             raw_skills.add(span_text)
 
-        # Normalize and deduplicate
         normalized = [self.normalizer.normalize(s) for s in raw_skills]
         return sorted(set(filter(None, normalized)))
 
     def process(self, raw_text: str) -> dict:
-        """
-        Full pipeline: text → certifications first, then skills.
-        Certifications are used to build an exclusion set for skill extraction.
-        """
+        """Full pipeline: clean → extract certs → extract skills."""
         cleaned = self._clean_text(raw_text)
 
-        # Step 1: Extract certifications
+        # Certs first
         certifications = self.extract_certifications(cleaned)
 
-        # Step 2: Build exclusion set from cert names
-        # Any word or phrase appearing in a cert name should not be a skill
-        cert_text_lower: set[str] = set()
-        for cert in certifications:
-            cert_text_lower.add(cert.lower())
-            # Also add individual words from cert names to catch fragments
-            for word in cert.lower().split():
-                if len(word) > 3:
-                    cert_text_lower.add(word)
-
-        # Step 3: Extract skills with cert exclusion
-        skills = self.extract_skills(cleaned, cert_text_lower)
+        # Skills with cert exclusion context
+        skills = self.extract_skills(cleaned, certifications)
 
         logger.info(
             f"NLP extracted {len(skills)} skills, {len(certifications)} certifications."
@@ -284,7 +284,6 @@ class NLPProcessor:
 
     @staticmethod
     def _clean_text(text: str) -> str:
-        """Remove noise from resume text."""
         text = re.sub(r"https?://\S+|www\.\S+", " ", text)
         text = re.sub(r"\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b", " ", text)
         text = re.sub(r"\+?\d[\d\s\-().]{7,}\d", " ", text)
