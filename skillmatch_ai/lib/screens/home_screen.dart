@@ -1,6 +1,7 @@
 // screens/home_screen.dart
-// Main shell with bottom navigation.
-// Shows banner for anonymous users encouraging account creation.
+// Main shell with 2-tab bottom nav: Home and Growth.
+// Jobs and Skill Gap are accessed via buttons on the Home tab,
+// only visible after a resume has been uploaded/scanned.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -8,8 +9,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../services/auth_service.dart';
 import 'upload_screen.dart';
-import 'recommendations_screen.dart';
-import 'skill_gap_screen.dart';
 import 'growth_chart_screen.dart';
 import 'auth/register_screen.dart';
 
@@ -25,32 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<Widget> _screens = const [
     UploadScreen(),
-    RecommendationsScreen(),
-    SkillGapScreen(),
     GrowthChartScreen(),
-  ];
-
-  final List<NavigationDestination> _destinations = const [
-    NavigationDestination(
-      icon: Icon(Icons.upload_file_outlined),
-      selectedIcon: Icon(Icons.upload_file),
-      label: 'Resume',
-    ),
-    NavigationDestination(
-      icon: Icon(Icons.work_outline),
-      selectedIcon: Icon(Icons.work),
-      label: 'Jobs',
-    ),
-    NavigationDestination(
-      icon: Icon(Icons.track_changes_outlined),
-      selectedIcon: Icon(Icons.track_changes),
-      label: 'Skill Gap',
-    ),
-    NavigationDestination(
-      icon: Icon(Icons.trending_up_outlined),
-      selectedIcon: Icon(Icons.trending_up),
-      label: 'Growth',
-    ),
   ];
 
   @override
@@ -60,9 +34,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_appBarTitle(_selectedIndex)),
+        title: const Text('SkillMatch AI'),
         actions: [
-          // User avatar / account button
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: IconButton(
@@ -85,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          // Anonymous user upgrade banner
           if (auth.isAnonymous) _buildAnonBanner(context),
           Expanded(child: _screens[_selectedIndex]),
         ],
@@ -93,14 +65,20 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (i) => setState(() => _selectedIndex = i),
-        destinations: _destinations,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.trending_up_outlined),
+            selectedIcon: Icon(Icons.trending_up),
+            label: 'Growth',
+          ),
+        ],
       ).animate().slideY(begin: 1, duration: 400.ms, curve: Curves.easeOut),
     );
-  }
-
-  String _appBarTitle(int index) {
-    const titles = ['Upload Resume', 'Job Matches', 'Skill Gap', 'Growth'];
-    return titles[index];
   }
 
   String _userInitial(AuthService auth) {
@@ -144,8 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 40,
-              height: 4,
+              width: 40, height: 4,
               margin: const EdgeInsets.only(bottom: 20),
               decoration: BoxDecoration(
                 color: Colors.grey[300],
@@ -154,16 +131,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.person_outline),
-              title: Text(
-                auth.isAnonymous
-                    ? 'Guest User'
-                    : (user?.displayName ?? 'User'),
-              ),
-              subtitle: Text(
-                auth.isAnonymous
-                    ? 'Not signed in permanently'
-                    : (user?.email ?? ''),
-              ),
+              title: Text(auth.isAnonymous ? 'Guest User' : (user?.displayName ?? 'User')),
+              subtitle: Text(auth.isAnonymous ? 'Not signed in permanently' : (user?.email ?? '')),
             ),
             if (auth.isAnonymous)
               ListTile(
@@ -172,10 +141,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 subtitle: const Text('Save progress permanently'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const RegisterScreen()),
-                  );
+                  Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const RegisterScreen()));
                 },
               ),
             const Divider(),

@@ -57,6 +57,35 @@ _client = InferenceClient(
 DEDUP_THRESHOLD = 0.92
 
 
+def sanitize_firestore_id(title: str) -> str:
+    """
+    Sanitize a job title for safe use as a Firestore document ID.
+
+    Firestore document IDs must not contain forward slashes ('/') as they are
+    interpreted as path separators, causing 'uneven path elements' errors.
+    Other problematic characters (backslash, dot) are also replaced.
+
+    The original title is always preserved in the document's data fields.
+
+    Args:
+        title: Raw job title string (e.g. "Ui/Ux Designer")
+
+    Returns:
+        A sanitized string safe to use as a Firestore document ID
+        (e.g. "Ui-Ux Designer")
+    """
+    if not title:
+        return "unknown"
+    # Replace path separators and dot (reserved in Firestore) with a dash
+    safe = re.sub(r'[/\\.]', '-', title)
+    # Collapse multiple consecutive dashes into one
+    safe = re.sub(r'-{2,}', '-', safe)
+    # Strip leading/trailing dashes
+    safe = safe.strip('-')
+    # Firestore doc IDs cannot be empty strings
+    return safe or "unknown"
+
+
 def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 1000, retries: int = 4) -> str:
     """
     Call LLM via HuggingFace InferenceClient chat_completion.
@@ -231,6 +260,7 @@ Rules:
 - Remove parenthetical qualifiers like "(NLP)", "(Backend)"
 - Keep engineering discipline in the title (e.g. "Electrical Engineer" stays as-is)
 - Use widely-recognized standard industry titles
+- IMPORTANT: Do NOT use slash characters (/) in titles. Write "UI UX Designer" not "UI/UX Designer".
 
 Titles to normalize:
 {json.dumps(batch, indent=2)}
@@ -314,8 +344,18 @@ def semantic_deduplicate(roles: list[dict]) -> list[dict]:
 
 
 def normalize_and_upload(roles: list[dict]) -> int:
-    """Final normalization pass then upload each role to Firestore."""
+    """Final normalization pass then upload each role to Firestore.
+
+    Writes directly to Firestore using a sanitized document ID so that
+    titles containing '/' (e.g. "UI/UX Designer") don't cause Firestore's
+    "uneven number of path elements" error. The original title is preserved
+    inside the document body.
+    """
+    import firebase_admin.firestore as _fs
+
     uploaded = 0
+    db = _fs.client()
+
     for role in roles:
         title = normalizer.normalize_job_title(role["normalized_title"])
         if not title or len(title) < 3:
@@ -328,8 +368,18 @@ def normalize_and_upload(roles: list[dict]) -> int:
             c.strip() for c in role.get("certifications", [])
             if isinstance(c, str) and len(c.strip()) > 3
         ))
+
+        # Sanitize for Firestore document ID: '/' is a path separator,
+        # causing "uneven path elements" errors (e.g. "UI/UX Designer").
+        # Original title is preserved in the document data untouched.
+        doc_id = sanitize_firestore_id(title)
+
         try:
-            upsert_job(job_title=title, skills=skills, certifications=certs)
+            db.collection("jobs").document(doc_id).set({
+                "job_title": title,
+                "skills": skills,
+                "certifications": certs,
+            })
             logger.info(f"  ok {title}  ({len(skills)} skills, {len(certs)} certs)")
             uploaded += 1
         except Exception as e:

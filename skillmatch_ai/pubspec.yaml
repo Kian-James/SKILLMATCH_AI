@@ -22,6 +22,7 @@ dependencies:
 
   # File picking
   file_picker: ^8.0.3
+  image_picker: ^1.1.2
 
   # Charts
   fl_chart: ^0.68.0

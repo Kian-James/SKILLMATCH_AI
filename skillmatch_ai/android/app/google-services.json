@@ -1,41 +1,42 @@
 {
   "project_info": {
-    "project_number": "771598992448",
-    "project_id": "skillmatch-ai-27c75",
-    "storage_bucket": "skillmatch-ai-27c75.firebasestorage.app"
+    "project_number": "807290065452",
+    "project_id": "skillmatch-ai-2c8cd",
+    "storage_bucket": "skillmatch-ai-2c8cd.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:771598992448:android:8f230354703adef5864ba5",
+        "mobilesdk_app_id": "1:807290065452:android:bc36ff01ab437329f83789",
         "android_client_info": {
           "package_name": "com.example.skillmatch_ai"
         }
       },
       "oauth_client": [
         {
-          "client_id": "771598992448-54109riool09939qmk1lv2694g9fj6vv.apps.googleusercontent.com",
+          "client_id": "807290065452-bdrccq1nmgme6cn3ev5lu375i125b2v3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.skillmatch_ai",
+            "certificate_hash": "e01ff0f3508b0c014a04b01b13e79bd0d9605082"
+          }
+        },
+        {
+          "client_id": "807290065452-0fsihbaj7vnohgqslkpogurf67ah7f5l.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyCBMO99XUTOx9eUo4QV-cwui8wC0FNB8_A"
+          "current_key": "AIzaSyATlVN0UbOB6a65kgq6ZoJVvKLnxJqCTyk"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "771598992448-54109riool09939qmk1lv2694g9fj6vv.apps.googleusercontent.com",
+              "client_id": "807290065452-0fsihbaj7vnohgqslkpogurf67ah7f5l.apps.googleusercontent.com",
               "client_type": 3
-            },
-            {
-              "client_id": "771598992448-7q8tsaft0cep4ei84a2ctlvacg92g5l1.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.example.skillmatchAi"
-              }
             }
           ]
         }
