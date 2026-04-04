@@ -40,13 +40,14 @@ class SkillGapResponse(BaseModel):
 
 @router.post("/skill-gap", response_model=SkillGapResponse)
 async def skill_gap(
-    body: SkillGapRequest,
-    user: AuthenticatedUser = Depends(get_current_user),  # 🔒
+        body: SkillGapRequest,
+        user: AuthenticatedUser = Depends(get_current_user),  # 🔒
 ):
     """Compute skill gap between user resume skills and a target job."""
     result = _job_service.compute_skill_gap(
         user_skills=body.user_skills,
         target_job_title=body.target_job,
+        user_certifications=body.user_certifications,
     )
 
     if not result.get("found"):
@@ -94,8 +95,8 @@ class ResourcesResponse(BaseModel):
 
 @router.get("/skill-resources/{skill}", response_model=ResourcesResponse)
 async def skill_resources(
-    skill: str,
-    user: AuthenticatedUser = Depends(get_current_user),  # 🔒
+        skill: str,
+        user: AuthenticatedUser = Depends(get_current_user),  # 🔒
 ):
     """
     Generate learning resources for a specific missing skill via Zephyr 7B.
