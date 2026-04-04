@@ -1,7 +1,9 @@
 """
 utils/skill_normalizer.py
-Normalizes skill names using synonym mapping and string cleanup.
-Prevents duplicates like "JS" vs "JavaScript", "ML" vs "Machine Learning".
+Normalizes skill names and removes duplicates including:
+- Case duplicates: "MERN Stack" vs "MERN stack"
+- Substring duplicates: "CRUD" inside "CRUD Application Development" → keep longer
+- Synonym duplicates: "JS" → "JavaScript"
 """
 
 from __future__ import annotations
@@ -9,7 +11,6 @@ from __future__ import annotations
 import re
 
 
-# Synonym map: canonical skill name → list of aliases (all lowercase for matching)
 SKILL_SYNONYMS: dict[str, list[str]] = {
     "JavaScript": ["js", "javascript", "java script", "ecmascript", "es6", "es2015"],
     "TypeScript": ["ts", "typescript"],
@@ -33,10 +34,7 @@ SKILL_SYNONYMS: dict[str, list[str]] = {
     "Amazon Web Services": ["aws", "amazon web services"],
     "Google Cloud Platform": ["gcp", "google cloud", "google cloud platform"],
     "Microsoft Azure": ["azure", "ms azure", "microsoft azure"],
-    "Continuous Integration": ["ci", "continuous integration"],
-    "Continuous Deployment": ["cd", "continuous deployment", "continuous delivery"],
     "CI/CD": ["cicd", "ci cd", "ci/cd"],
-    "Application Programming Interface": ["api", "apis", "rest api", "restful api"],
     "GraphQL": ["graphql"],
     "SQL": ["sql", "structured query language"],
     "NoSQL": ["nosql", "no-sql"],
@@ -46,11 +44,35 @@ SKILL_SYNONYMS: dict[str, list[str]] = {
     "HuggingFace": ["huggingface", "hugging face", "hf transformers"],
     "Agile": ["agile methodology", "agile development"],
     "Scrum": ["scrum methodology"],
-    "Git": ["git", "version control", "github", "gitlab", "bitbucket"],
+    # Git aliases — but NOT "Git Version Control" (that's a valid standalone skill)
+    "Git": ["git"],
     "Linux": ["linux", "ubuntu", "debian", "centos", "unix"],
     "Data Structures": ["data structures", "dsa", "data structures and algorithms"],
     "Object-Oriented Programming": ["oop", "object oriented", "object-oriented programming"],
     "Microservices": ["microservice", "microservices architecture"],
+    # MERN Stack aliases
+    "MERN Stack": ["mern stack", "mern"],
+    # Flutter & Firebase aliases
+    "Flutter & Firebase Development": [
+        "flutter & firebase development",
+        "flutter firebase development",
+        "flutter & firebase",
+        "flutter firebase",
+    ],
+    # CRUD aliases
+    "CRUD Application Development": [
+        "crud application development",
+        "crud based systems",
+        "crud operations",
+        "crud functionality",
+        "crud",
+    ],
+    # REST API aliases
+    "RESTful APIs": [
+        "restful apis", "rest apis", "rest api", "restful api",
+        "rest apis & backend development",
+        "application programming interface",
+    ],
 }
 
 # Reverse map: alias → canonical
@@ -61,56 +83,52 @@ for canonical, aliases in SKILL_SYNONYMS.items():
 
 
 class SkillNormalizer:
-    """
-    Normalizes raw skill strings to canonical form.
-    Also handles basic cleaning (punctuation stripping, whitespace).
-    """
 
     def normalize(self, raw_skill: str) -> str | None:
-        """
-        Normalize a raw skill string to its canonical name.
-        Returns None if the skill is noise (too short, numeric-only, etc.).
-        """
         cleaned = self._clean(raw_skill)
         if not cleaned or len(cleaned) < 2:
             return None
-
-        # Check synonym map
         lower = cleaned.lower()
         if lower in _REVERSE_MAP:
             return _REVERSE_MAP[lower]
-
-        # Return title-cased version if not in map
         return cleaned.strip()
 
     def normalize_job_title(self, title: str) -> str:
-        """
-        Normalize job titles to avoid duplicates.
-        e.g. "Software Engineer (Python)" → "Software Engineer"
-             "Python Software Engineer" → "Software Engineer"
-        """
-        # Remove parenthetical qualifiers
         title = re.sub(r"\s*\(.*?\)", "", title).strip()
-        # Remove leading language prefix ("Python Software Engineer" → "Software Engineer")
-        # This is a heuristic — the LLM also helps with this
         title = title.strip().title()
         return title
 
     def deduplicate_skills(self, skills: list[str]) -> list[str]:
         """
-        Normalize all skills in a list and remove duplicates.
+        Full deduplication pipeline:
+        1. Normalize synonyms (MERN stack → MERN Stack, CRUD → CRUD Application Development)
+        2. Remove case duplicates (case-insensitive seen set)
+        3. Remove substring duplicates — if "CRUD" is already covered by
+           "CRUD Application Development", drop the shorter one
         """
-        seen: set[str] = set()
-        result: list[str] = []
+        # Step 1: normalize
+        normalized: list[str] = []
+        seen_lower: set[str] = set()
         for s in skills:
-            normalized = self.normalize(s)
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                result.append(normalized)
-        return sorted(result)
+            norm = self.normalize(s)
+            if norm and norm.lower() not in seen_lower:
+                seen_lower.add(norm.lower())
+                normalized.append(norm)
+
+        # Step 2: remove substring duplicates
+        # Sort longest first so the more descriptive form is kept
+        normalized.sort(key=len, reverse=True)
+        final: list[str] = []
+        for skill in normalized:
+            skill_lower = skill.lower()
+            # Keep this skill only if no already-kept skill contains it as a substring
+            # e.g. drop "CRUD" if "CRUD Application Development" is already kept
+            if not any(skill_lower in kept.lower() for kept in final):
+                final.append(skill)
+
+        return sorted(final)
 
     @staticmethod
     def _clean(text: str) -> str:
-        """Remove extra punctuation and whitespace."""
-        text = re.sub(r"[^\w\s.#+/]", " ", text)
+        text = re.sub(r"[^\w\s.#+/&]", " ", text)
         return re.sub(r"\s+", " ", text).strip()

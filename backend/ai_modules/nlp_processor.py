@@ -24,21 +24,22 @@ from config import SPACY_MODEL
 # ─── Section header patterns ──────────────────────────────────────────────────
 # These identify where each resume section starts
 SKILLS_SECTION_HEADERS = [
-    r"(?:^|\n)\s*(?:SKILLS?|TECHNICAL\s+SKILLS?|CORE\s+SKILLS?|KEY\s+SKILLS?"
-    r"|COMPETENCIES|TECHNOLOGIES|TECH\s+STACK|EXPERTISE|TOOLS?\s+&\s+TECHNOLOGIES?)\s*(?:\n|:)",
+    # Matches with or without leading newline, handles PDF text that runs sections together
+    r"(?:^|\n|\s{2,})(?:SKILLS?|TECHNICAL\s+SKILLS?|CORE\s+SKILLS?|KEY\s+SKILLS?"
+    r"|COMPETENCIES|TECHNOLOGIES|TECH\s+STACK|EXPERTISE|TOOLS?\s+&\s+TECHNOLOGIES?"
+    r"|HARD\s+SKILLS?)\s*(?:\n|:|\s{2,})",
 ]
 
 CERT_SECTION_HEADERS = [
-    r"(?:^|\n)\s*(?:CERTIFICATIONS?|CERTIFICATES?|LICENSES?\s+&\s+CERTIFICATIONS?"
-    r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?)\s*(?:\n|:)",
+    r"(?:^|\n|\s{2,})(?:CERTIFICATIONS?|CERTIFICATES?|LICENSES?\s+&\s+CERTIFICATIONS?"
+    r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?)\s*(?:\n|:|\s{2,})",
 ]
 
-# Sections that come AFTER skills/certs — used to know where to stop reading
 NEXT_SECTION_HEADERS = [
-    r"(?:^|\n)\s*(?:EXPERIENCE|WORK\s+EXPERIENCE|EMPLOYMENT|PROJECTS?|EDUCATION"
-    r"|ACHIEVEMENTS?|AWARDS?|INTERESTS?|LANGUAGES?|REFERENCES?|PUBLICATIONS?"
-    r"|VOLUNTEER|EXTRACURRICULAR|ACTIVITIES|HOBBIES|SUMMARY|OBJECTIVE"
-    r"|PROFILE|ABOUT|CONTACT)\s*(?:\n|:)",
+    r"(?:^|\n|\s{2,})(?:EXPERIENCE|WORK\s+EXPERIENCE|EMPLOYMENT|PROJECTS?"
+    r"|EDUCATION|ACHIEVEMENTS?|AWARDS?|INTERESTS?|LANGUAGES?|REFERENCES?"
+    r"|PUBLICATIONS?|VOLUNTEER|EXTRACURRICULAR|ACTIVITIES|HOBBIES|SUMMARY"
+    r"|OBJECTIVE|PROFILE|ABOUT|CONTACT|SOFT\s+SKILLS?)\s*(?:\n|:|\s{2,})",
 ]
 
 # ─── Certification patterns ───────────────────────────────────────────────────
