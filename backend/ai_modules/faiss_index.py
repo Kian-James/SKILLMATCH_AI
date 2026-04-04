@@ -99,9 +99,9 @@ class FAISSIndex:
         logger.info(f"FAISS index built: {self.index.ntotal} vectors.")
 
     def search(
-        self,
-        query_embedding: np.ndarray,
-        top_k: int = 5,
+            self,
+            query_embedding: np.ndarray,
+            top_k: int = 5,
     ) -> list[dict]:
         """
         Find the top-K most similar jobs for a given query embedding.
@@ -121,12 +121,12 @@ class FAISSIndex:
             if idx < 0:
                 continue
             job_info = self.metadata[idx].copy()
-            # Scores from inner product on normalized vectors are in [-1, 1]
-            # Convert to percentage [0, 100]
-            match_pct = round(max(float(score), 0.0) * 100, 1)
-            job_info["match_score"] = match_pct
+            # Store raw cosine similarity for internal ranking only
+            # The displayed match_score is computed from actual skill overlap
+            # in the resume_service after FAISS retrieval
+            job_info["_cosine_sim"] = round(max(float(score), 0.0), 4)
+            job_info["match_score"] = round(max(float(score), 0.0) * 100, 1)
             results.append(job_info)
 
-        # Sort descending by match score
         results.sort(key=lambda x: x["match_score"], reverse=True)
         return results
