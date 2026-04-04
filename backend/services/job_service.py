@@ -27,7 +27,7 @@ from loguru import logger
 from services.firebase_service import fetch_all_jobs
 from ai_modules.embedding_engine import EmbeddingEngine
 from utils.skill_normalizer import SkillNormalizer
-from ai_modules.matching_config import (
+from matching_config import (
     KEYWORD_OVERLAP_THRESHOLD,
     SEMANTIC_SKILL_THRESHOLD,
     SEMANTIC_CERT_THRESHOLD,

@@ -19,7 +19,7 @@ from ai_modules.nlp_processor import NLPProcessor
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from utils.skill_normalizer import SkillNormalizer
-from ai_modules.matching_config import (
+from matching_config import (
     SKILL_WEIGHT,
     FAISS_WEIGHT,
     CERT_BONUS_MAX,
