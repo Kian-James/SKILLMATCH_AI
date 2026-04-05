@@ -19,14 +19,26 @@ from ai_modules.nlp_processor import NLPProcessor
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from utils.skill_normalizer import SkillNormalizer
-from matching_config import (
-    SKILL_WEIGHT,
-    FAISS_WEIGHT,
-    CERT_BONUS_MAX,
-    SEMANTIC_CERT_THRESHOLD,
-    ZERO_SKILL_SCORE_CAP,
-    VERBOSE_MATCH_LOGGING,
-)
+try:
+    from matching_config import (
+        SKILL_WEIGHT,
+        FAISS_WEIGHT,
+        CERT_BONUS_MAX,
+        SEMANTIC_CERT_THRESHOLD,
+        ZERO_SKILL_SCORE_CAP,
+        VERBOSE_MATCH_LOGGING,
+    )
+except ModuleNotFoundError:
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from matching_config import (
+        SKILL_WEIGHT,
+        FAISS_WEIGHT,
+        CERT_BONUS_MAX,
+        SEMANTIC_CERT_THRESHOLD,
+        ZERO_SKILL_SCORE_CAP,
+        VERBOSE_MATCH_LOGGING,
+    )
 
 
 class ResumeService:
@@ -87,7 +99,7 @@ class ResumeService:
                 user_skills=skills,
                 user_certs=certifications,
                 job=job,
-                faiss_score=job["faiss_score"],
+                faiss_score=job.get("faiss_score", job.get("match_score", 0.0)),
             )
             job_entry = {
                 "job_title": job["job_title"],
@@ -102,7 +114,7 @@ class ResumeService:
                 logger.info(
                     f"  {job['job_title']!r}: "
                     f"skill={unified['skill_score']:.1%} "
-                    f"faiss={job['faiss_score']:.3f} "
+                    f"faiss={job.get('faiss_score', 0):.3f} "
                     f"→ {unified['final_score_pct']}%"
                 )
 

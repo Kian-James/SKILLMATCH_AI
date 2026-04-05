@@ -27,17 +27,32 @@ from loguru import logger
 from services.firebase_service import fetch_all_jobs
 from ai_modules.embedding_engine import EmbeddingEngine
 from utils.skill_normalizer import SkillNormalizer
-from matching_config import (
-    KEYWORD_OVERLAP_THRESHOLD,
-    SEMANTIC_SKILL_THRESHOLD,
-    SEMANTIC_CERT_THRESHOLD,
-    JOB_TITLE_MATCH_THRESHOLD,
-    SKILL_WEIGHT,
-    FAISS_WEIGHT,
-    CERT_BONUS_MAX,
-    ZERO_SKILL_SCORE_CAP,
-    VERBOSE_MATCH_LOGGING,
-)
+try:
+    from matching_config import (
+        KEYWORD_OVERLAP_THRESHOLD,
+        SEMANTIC_SKILL_THRESHOLD,
+        SEMANTIC_CERT_THRESHOLD,
+        JOB_TITLE_MATCH_THRESHOLD,
+        SKILL_WEIGHT,
+        FAISS_WEIGHT,
+        CERT_BONUS_MAX,
+        ZERO_SKILL_SCORE_CAP,
+        VERBOSE_MATCH_LOGGING,
+    )
+except ModuleNotFoundError:
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from matching_config import (
+        KEYWORD_OVERLAP_THRESHOLD,
+        SEMANTIC_SKILL_THRESHOLD,
+        SEMANTIC_CERT_THRESHOLD,
+        JOB_TITLE_MATCH_THRESHOLD,
+        SKILL_WEIGHT,
+        FAISS_WEIGHT,
+        CERT_BONUS_MAX,
+        ZERO_SKILL_SCORE_CAP,
+        VERBOSE_MATCH_LOGGING,
+    )
 
 
 class JobService:
