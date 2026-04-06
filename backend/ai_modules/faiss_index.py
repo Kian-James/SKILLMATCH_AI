@@ -124,8 +124,9 @@ class FAISSIndex:
             # Store raw cosine similarity for internal ranking only
             # The displayed match_score is computed from actual skill overlap
             # in the resume_service after FAISS retrieval
-            job_info["_cosine_sim"] = round(max(float(score), 0.0), 4)
-            job_info["match_score"] = round(max(float(score), 0.0) * 100, 1)
+            raw_sim = round(max(float(score), 0.0), 4)
+            job_info["faiss_score"] = raw_sim   # 0.0-1.0 used for score blending
+            job_info["match_score"] = raw_sim   # will be overwritten by unified score
             results.append(job_info)
 
         results.sort(key=lambda x: x["match_score"], reverse=True)
