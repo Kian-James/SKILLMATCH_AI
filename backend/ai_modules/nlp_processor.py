@@ -1,11 +1,15 @@
 """
 ai_modules/nlp_processor.py
 
-Section-aware resume parser:
-1. Detects resume sections (Skills, Certifications, Projects, etc.)
-2. Extracts skills ONLY from the Skills section
-3. Extracts certifications ONLY from the Certifications section
-4. Falls back to full-text extraction if sections cannot be detected
+Section-aware resume parser.
+
+FIXES (v2):
+  BUG 1 - CERTIFICATIONS added to NEXT_SECTION_HEADERS (skills ran past cert block)
+  BUG 2 - CAREER OBJECTIVE / OBJECTIVE added to NEXT_SECTION_HEADERS
+  BUG 3 - TECHNOLOGIES/TECH STACK/TOOLS headers now require line-start anchor
+           to avoid false positives inside project bullet points like "Technologies: React"
+  BUG 5 - Expanded SOFT_SKILLS_EXCLUDE with generic phrases from experience text
+           + minimum skill length enforced in extract_skills
 """
 
 from __future__ import annotations
@@ -22,12 +26,16 @@ from config import SPACY_MODEL
 
 
 # ─── Section header patterns ──────────────────────────────────────────────────
-# These identify where each resume section starts
+
 SKILLS_SECTION_HEADERS = [
-    # Matches with or without leading newline, handles PDF text that runs sections together
-    r"(?:^|\n|\s{2,})(?:SKILLS?|TECHNICAL\s+SKILLS?|CORE\s+SKILLS?|KEY\s+SKILLS?"
-    r"|COMPETENCIES|TECHNOLOGIES|TECH\s+STACK|EXPERTISE|TOOLS?\s+&\s+TECHNOLOGIES?"
-    r"|HARD\s+SKILLS?)\s*(?:\n|:|\s{2,})",
+    # General skill headers — keep loose match (rarely appear inline)
+    r"(?:^|\n)(?:SKILLS?|TECHNICAL\s+SKILLS?|CORE\s+SKILLS?|KEY\s+SKILLS?"
+    r"|COMPETENCIES|HARD\s+SKILLS?)\s*(?:\n|:|\s{2,})",
+
+    # FIX BUG 3: Use end-of-line anchor ($) so "Technologies: React, Docker"
+    # (inline content after colon) is NOT matched, but "Technologies" or
+    # "Technologies:" on their own line ARE matched as section headers.
+    r"^(?:TECHNOLOGIES|TECH\s+STACK|TOOLS?\s+(?:&|AND)\s+TECHNOLOGIES?|EXPERTISE)\s*:?\s*$",
 ]
 
 CERT_SECTION_HEADERS = [
@@ -35,11 +43,15 @@ CERT_SECTION_HEADERS = [
     r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?)\s*(?:\n|:|\s{2,})",
 ]
 
+# FIX BUG 1 + BUG 2: Added CERTIFICATIONS? and CAREER OBJECTIVE / OBJECTIVE
 NEXT_SECTION_HEADERS = [
     r"(?:^|\n|\s{2,})(?:EXPERIENCE|WORK\s+EXPERIENCE|EMPLOYMENT|PROJECTS?"
     r"|EDUCATION|ACHIEVEMENTS?|AWARDS?|INTERESTS?|LANGUAGES?|REFERENCES?"
     r"|PUBLICATIONS?|VOLUNTEER|EXTRACURRICULAR|ACTIVITIES|HOBBIES|SUMMARY"
-    r"|OBJECTIVE|PROFILE|ABOUT|CONTACT|SOFT\s+SKILLS?)\s*(?:\n|:|\s{2,})",
+    r"|CAREER\s+OBJECTIVE|OBJECTIVE|PROFILE|ABOUT|CONTACT|SOFT\s+SKILLS?"
+    r"|CERTIFICATIONS?|CERTIFICATES?|LICENSES?\s+&\s+CERTIFICATIONS?"
+    r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?"
+    r")\s*(?:\n|:|\s{2,})",
 ]
 
 # ─── Certification patterns ───────────────────────────────────────────────────
@@ -69,6 +81,8 @@ CERT_PATTERNS = [
     r"\bRHCE\b", r"\bRHCSA\b",
     r"\bTensorFlow\s+Developer\s+Certificate",
     r"\bCertified\s+Information\s+Technology[\w\s()]+",
+    r"\bCertified\s+Software\s+Development\s+Professional",
+    r"\bCSDP\b",
     r"(?:Responsive\s+Web\s+Design|Relational\s+Database|JavaScript\s+Algorithms"
     r"|Front\s+End\s+Development|Back\s+End\s+Development|Data\s+Visualization"
     r"|Scientific\s+Computing|Machine\s+Learning|Quality\s+Assurance"
@@ -88,6 +102,11 @@ SOFT_SKILLS_EXCLUDE: set[str] = {
     "presentation skills", "negotiation", "detail oriented", "detail-oriented",
     "fast learner", "self-motivated", "verbal communication", "written communication",
     "strong work ethic", "hard skills", "soft skills",
+    # FIX BUG 5: generic non-technical phrases from experience/support roles
+    "customer service", "customer communication", "cross-team collaboration",
+    "documentation", "knowledge sharing", "analytical problem solving",
+    "it troubleshooting", "system support", "it support",
+    "project coordination", "technical documentation",
 }
 
 CERT_PROVIDER_WORDS: set[str] = {
@@ -132,17 +151,21 @@ KNOWN_SKILLS: list[str] = [
     "Blockchain", "Smart Contracts", "Solidity",
     "Embedded Systems", "IoT", "Cybersecurity",
     "Data Analysis", "Data Visualization", "Business Intelligence",
+    # Engineering / non-CS skills
+    "AutoCAD", "SolidWorks", "AutoCAD Plant 3D", "HVAC Design",
+    "Preventive Maintenance", "Root Cause Analysis", "GD&T", "FEA Analysis",
+    "Piping Design", "Engineering Calculations", "Cost Reduction",
+    "Project Management", "CAD", "Process Flow Diagrams",
+    # Networking / distributed systems
+    "Paxos", "Raft", "Microservices Architecture",
+    # Misc
+    "Microsoft Azure", "Version Control",
 ]
 
 
-# ─── Section extraction ────────────────────────────────────────────────────────
+# ─── Section extraction ───────────────────────────────────────────────────────
 
-def _extract_section(text: str, header_patterns: list[str]) -> str | None:
-    """
-    Find the text content of a resume section.
-    Returns the text between the section header and the next recognised section,
-    or None if the section is not found.
-    """
+def _extract_section(text: str, header_patterns: list[str], label: str = "section") -> str | None:
     combined_header = "|".join(f"(?:{p})" for p in header_patterns)
     combined_next   = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
 
@@ -153,24 +176,21 @@ def _extract_section(text: str, header_patterns: list[str]) -> str | None:
     section_start = header_match.end()
     section_text  = text[section_start:]
 
-    # Stop at the next known section header
     next_match = re.search(combined_next, section_text, re.IGNORECASE | re.MULTILINE)
     if next_match:
+        stopped_header = section_text[next_match.start():next_match.start()+30].strip()
+        logger.debug(f"{label} section ended at: '{stopped_header}'")
         section_text = section_text[:next_match.start()]
 
-    return section_text.strip()
+    return section_text.strip() or None
 
 
 def _extract_skills_section(text: str) -> str | None:
-    """Return the raw text of the Skills section."""
-    return _extract_section(text, SKILLS_SECTION_HEADERS)
+    return _extract_section(text, SKILLS_SECTION_HEADERS, "skills")
 
 
 def _extract_certs_section(text: str) -> str | None:
-    """Return the raw text of the Certifications section."""
-    # Try cert-specific headers first, then fall back to skills section
-    cert_text = _extract_section(text, CERT_SECTION_HEADERS)
-    return cert_text
+    return _extract_section(text, CERT_SECTION_HEADERS, "certs")
 
 
 # ─── NLP helpers ─────────────────────────────────────────────────────────────
@@ -195,21 +215,18 @@ def _build_phrase_matcher(nlp, skills: list[str]) -> PhraseMatcher:
 
 
 def _deduplicate_certs(raw_certs: list[str]) -> list[str]:
-    """Keep longest cert string when one is a substring of another."""
     cleaned: list[str] = []
     for c in raw_certs:
-        c = " ".join(c.split()).strip(" –-—.,;:")
+        c = " ".join(c.split()).strip(" \u2013-\u2014.,;:")
         if len(c) > 2:
             cleaned.append(c)
 
     cleaned.sort(key=len, reverse=True)
-
     kept: list[str] = []
     for cert in cleaned:
         cert_lower = cert.lower()
         if not any(cert_lower in kept_cert.lower() for kept_cert in kept):
             kept.append(cert)
-
     return sorted(kept)
 
 
@@ -247,6 +264,10 @@ class NLPProcessor:
         for match_id, start, end in matches:
             span_text = doc[start:end].text.strip()
 
+            # FIX BUG 5: enforce minimum meaningful length
+            if len(span_text) < 2:
+                continue
+
             if span_text.lower() in SOFT_SKILLS_EXCLUDE:
                 continue
 
@@ -268,7 +289,7 @@ class NLPProcessor:
     def process(self, raw_text: str) -> dict:
         cleaned = self._clean_text(raw_text)
 
-        # ── Certifications: use cert section if found, else full text ──────────
+        # ── Certifications ────────────────────────────────────────────────────
         cert_section = _extract_certs_section(cleaned)
         cert_text    = cert_section if cert_section else cleaned
         certifications = self.extract_certifications(cert_text)
@@ -277,7 +298,7 @@ class NLPProcessor:
             f"→ {len(certifications)} certifications"
         )
 
-        # ── Skills: use skills section if found, else full text ───────────────
+        # ── Skills ────────────────────────────────────────────────────────────
         skill_section = _extract_skills_section(cleaned)
         if skill_section:
             logger.info(
