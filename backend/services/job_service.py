@@ -37,6 +37,7 @@ try:
         FAISS_WEIGHT,
         CERT_BONUS_MAX,
         ZERO_SKILL_SCORE_CAP,
+        FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
     )
 except ModuleNotFoundError:
@@ -51,6 +52,7 @@ except ModuleNotFoundError:
         FAISS_WEIGHT,
         CERT_BONUS_MAX,
         ZERO_SKILL_SCORE_CAP,
+        FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
     )
 
@@ -187,14 +189,19 @@ class JobService:
         if required_certs:
             cert_bonus = (cert_matched / len(required_certs)) * CERT_BONUS_MAX
 
-        # Blend skill score + FAISS score
+        # Blend skill + FAISS scores.
+        # FAISS contribution is scaled by how many skills matched so it cannot
+        # inflate the score when only 1-2 skills are present (mirrors resume_service fix).
         if faiss_score is not None:
-            blended = skill_score * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT
+            faiss_multiplier = (
+                min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
+                if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
+            )
+            blended = skill_score * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT * faiss_multiplier
         else:
-            blended = skill_score  # skill-only if no FAISS score available
+            blended = skill_score  # skill-only when no FAISS score is available
 
-        # KEY FIX: if zero skills matched, cap the score
-        # This prevents FAISS similarity from showing 60% when 0 skills match
+        # Cap at ZERO_SKILL_SCORE_CAP when no skills matched
         if len(matched) == 0:
             blended = min(blended, ZERO_SKILL_SCORE_CAP)
 
@@ -202,6 +209,10 @@ class JobService:
 
         # ── Logging ───────────────────────────────────────────────────────────
         if VERBOSE_MATCH_LOGGING:
+            faiss_mult_val = (
+                min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
+                if faiss_score is not None and FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
+            )
             logger.info(
                 f"\n{'='*50}\n"
                 f"SKILL GAP: {job['job_title']!r}\n"
@@ -209,7 +220,8 @@ class JobService:
                 f"  Required skills: {required_skills}\n"
                 f"  Skill matches  :\n" + "\n".join(match_log) + "\n"
                                                                  f"  Skill score    : {len(matched)}/{total_required} = {skill_score:.1%}\n"
-                                                                 f"  FAISS score    : {faiss_score:.3f if faiss_score else 'N/A'}\n"
+                                                                 f"  FAISS score    : {faiss_score:.3f if faiss_score is not None else 'N/A'}\n"
+                                                                 f"  FAISS mult     : {faiss_mult_val:.2f} (scale threshold={FAISS_SKILL_SCALE_THRESHOLD})\n"
                                                                  f"  Cert bonus     : +{cert_bonus:.1%} ({cert_matched}/{len(required_certs)} certs)\n"
                                                                  f"  Zero-skill cap : {'applied' if len(matched)==0 else 'not needed'}\n"
                                                                  f"  FINAL SCORE    : {final_score}%\n"
