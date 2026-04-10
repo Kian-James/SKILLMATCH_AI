@@ -143,12 +143,22 @@ class ResumeService:
             }
             scored_jobs.append(job_entry)
             if VERBOSE_MATCH_LOGGING:
+                required = job.get("skills", [])
+                matched_set = set(unified["matched_skills"])
+                skill_lines = "\n".join(
+                    f"    {'✓' if s in matched_set else '✗'} {s}"
+                    for s in required
+                )
                 logger.info(
-                    f"  {job['job_title']!r}: "
-                    f"skill={unified['skill_score']:.1%} ({unified['matched_count']}/{len(job.get('skills', []))}) "
-                    f"faiss={raw_faiss:.3f} "
-                    f"cap={'applied' if unified['cap_applied'] else 'no'} "
-                    f"→ {unified['final_score_pct']}%"
+                    f"\n{'='*52}\n"
+                    f"TOP MATCH: {job['job_title']!r}\n"
+                    f"  Skill score : {unified['matched_count']}/{len(required)}"
+                    f" = {unified['skill_score']:.1%}\n"
+                    f"  FAISS score : {raw_faiss:.3f}\n"
+                    f"  Cap applied : {unified['cap_applied']}\n"
+                    f"  Final score : {unified['final_score_pct']}%\n"
+                    f"  Required skills:\n{skill_lines}\n"
+                    f"{'='*52}"
                 )
 
         # Sort by unified score descending
@@ -243,6 +253,11 @@ class ResumeService:
             if matched_by:
                 matched_count += 1
                 matched_skills.append(req_skill)  # FIX 3: add the job's label
+                if VERBOSE_MATCH_LOGGING:
+                    logger.debug(f"    ✓ {req_skill!r}  [{matched_by}]")
+            else:
+                if VERBOSE_MATCH_LOGGING:
+                    logger.debug(f"    ✗ {req_skill!r}  [no match]")
 
         skill_score = matched_count / len(required_skills)
 

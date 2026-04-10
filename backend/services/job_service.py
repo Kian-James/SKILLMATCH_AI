@@ -217,20 +217,20 @@ class JobService:
                 min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
                 if faiss_score is not None and FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
             )
+            skill_lines = "\n".join(match_log)
             logger.info(
-                f"\n{'='*50}\n"
-                f"SKILL GAP: {job['job_title']!r}\n"
-                f"  User skills    : {user_skills}\n"
-                f"  Required skills: {required_skills}\n"
-                f"  Skill matches  :\n" + "\n".join(match_log) + "\n"
-                                                                 f"  Skill score    : {len(matched)}/{total_required} = {skill_score:.1%}\n"
-                                                                 f"  FAISS score    : {faiss_score:.3f if faiss_score is not None else 'N/A'}\n"
-                                                                 f"  FAISS mult     : {faiss_mult_val:.2f} (scale threshold={FAISS_SKILL_SCALE_THRESHOLD})\n"
-                                                                 f"  Cert bonus     : +{cert_bonus:.1%} ({cert_matched}/{len(required_certs)} certs)\n"
-                                                                 f"  Zero-skill cap : {'applied' if len(matched)==0 else 'not needed'}\n"
-                                                                 f"  FINAL SCORE    : {final_score}%\n"
-                                                                 f"  Config weights : skill={SKILL_WEIGHT} faiss={FAISS_WEIGHT}\n"
-                                                                 f"{'='*50}"
+                f"\n{'='*52}\n"
+                f"SKILL GAP : {job['job_title']!r}\n"
+                f"  User skills ({len(user_skills)}): {user_skills}\n"
+                f"  Required skills ({total_required}):\n{skill_lines}\n"
+                f"  ─────────────────────────────────────\n"
+                f"  Matched     : {len(matched)}/{total_required} = {skill_score:.1%}\n"
+                f"  FAISS score : {faiss_score:.3f if faiss_score is not None else 'N/A'}"
+                f"  (mult={faiss_mult_val:.2f})\n"
+                f"  Cert bonus  : +{cert_bonus:.1%} ({cert_matched}/{len(required_certs)} certs)\n"
+                f"  Cap applied : {'YES' if len(matched)==0 else 'no'}\n"
+                f"  FINAL SCORE : {final_score}%\n"
+                f"{'='*52}"
             )
         else:
             logger.info(
