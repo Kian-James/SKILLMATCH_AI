@@ -56,12 +56,12 @@ NEXT_SECTION_HEADERS = [
 
 # ─── Certification patterns ───────────────────────────────────────────────────
 CERT_PATTERNS = [
-    r"\bUdemy\s*[–\-—]\s*[\w\s&()]+",
-    r"\bCoursera\s*[–\-—]\s*[\w\s&()]+",
-    r"\bedX\s*[–\-—]\s*[\w\s&()]+",
-    r"\bLinkedIn\s+Learning\s*[–\-—]\s*[\w\s&()]+",
-    r"\bFreeCodeCamp\s*[–\-—]\s*[\w\s&()]+",
-    r"\bCisco\s*[–\-—]\s*[\w\s&()+]+",
+    r"\bUdemy\s*[–\-—]\s*[^\n]+",
+    r"\bCoursera\s*[–\-—]\s*[^\n]+",
+    r"\bedX\s*[–\-—]\s*[^\n]+",
+    r"\bLinkedIn\s+Learning\s*[–\-—]\s*[^\n]+",
+    r"\bFreeCodeCamp\s*[–\-—]\s*[^\n]+",
+    r"\bCisco\s*[–\-—]\s*[^\n]+",
     r"\bCisco\s+Certified[\w\s&()]+",
     r"\bCisco\s+(?:CCNA|CCNP|CCIE|CyberOps)[\w\s]*",
     r"\bAWS\s+Certified\s+[\w\s]+",
@@ -215,6 +215,13 @@ def _build_phrase_matcher(nlp, skills: list[str]) -> PhraseMatcher:
 
 
 def _deduplicate_certs(raw_certs: list[str]) -> list[str]:
+    """
+    Deduplicates cert strings.
+    1. Substring containment: keeps the longer version.
+    2. Word-overlap: deduplicates same cert in different word order
+       e.g. "Responsive Web Design FreeCodeCamp" vs
+            "FreeCodeCamp – Responsive Web Design"
+    """
     cleaned: list[str] = []
     for c in raw_certs:
         c = " ".join(c.split()).strip(" \u2013-\u2014.,;:")
@@ -225,8 +232,23 @@ def _deduplicate_certs(raw_certs: list[str]) -> list[str]:
     kept: list[str] = []
     for cert in cleaned:
         cert_lower = cert.lower()
-        if not any(cert_lower in kept_cert.lower() for kept_cert in kept):
+        cert_words = set(w for w in re.split(r"\W+", cert_lower) if len(w) > 2)
+
+        if any(cert_lower in kept_cert.lower() for kept_cert in kept):
+            continue
+
+        is_dup = False
+        for kept_cert in kept:
+            kept_words = set(w for w in re.split(r"\W+", kept_cert.lower()) if len(w) > 2)
+            if cert_words and kept_words:
+                overlap = len(cert_words & kept_words) / min(len(cert_words), len(kept_words))
+                if overlap >= 0.80:
+                    is_dup = True
+                    break
+
+        if not is_dup:
             kept.append(cert)
+
     return sorted(kept)
 
 

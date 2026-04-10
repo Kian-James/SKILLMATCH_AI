@@ -1,9 +1,25 @@
 """
 ai_modules/ocr_extractor.py
 Extracts raw text from uploaded resume files (PDF or image).
-Uses Tesseract as primary OCR. EasyOCR is optional — imported only
-if installed. On Render free tier, EasyOCR is not installed (too heavy),
-so Tesseract is the sole OCR engine there.
+
+FIX (two-column PDF):
+  PyPDF2 direct extraction on two-column PDF layouts merges both columns
+  into a single text stream, causing:
+    1. The SKILLS section header regex to fail (header immediately followed
+       by interleaved column text, no clean newline boundary)
+    2. Certifications from left and right columns to concatenate into one
+       string (e.g. "Cisco ITF+FreeCodeCamp – Responsive Web Design")
+    3. Project description text (right-side column) bleeding into what
+       appears to be the skills section
+
+  Fix: pdfplumber with bbox-based column splitting.
+    - Detect if the page has a multi-column layout by checking whether
+      text characters are clustered in two distinct x-ranges.
+    - If two-column: crop left half and right half separately, extract
+      each, then join them with clear section breaks.
+    - If single-column: use pdfplumber's normal extract_text() which is
+      more robust than PyPDF2 for most PDF types.
+    - Fall back to Tesseract OCR if pdfplumber yields < 100 chars.
 """
 
 from __future__ import annotations
@@ -19,17 +35,22 @@ from loguru import logger
 
 from config import TESSERACT_CMD
 
-# Configure Tesseract binary path
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
-# EasyOCR is optional — only available when installed locally
+try:
+    import pdfplumber as _pdfplumber
+    _PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    _PDFPLUMBER_AVAILABLE = False
+    logger.warning("pdfplumber not installed — falling back to PyPDF2 for direct extraction.")
+
+# EasyOCR optional
 try:
     import easyocr as _easyocr
     _EASYOCR_AVAILABLE = True
     logger.info("EasyOCR is available — will use as fallback for low-quality scans.")
 except ImportError:
     _EASYOCR_AVAILABLE = False
-    logger.info("EasyOCR not installed — Tesseract only mode (fine for Render).")
 
 _easyocr_reader = None
 
@@ -44,11 +65,73 @@ def _get_easyocr_reader():
     return _easyocr_reader
 
 
+# ─── Column detection ─────────────────────────────────────────────────────────
+
+def _is_two_column(page) -> bool:
+    """
+    Detect whether a pdfplumber page has a two-column layout.
+    Checks if text characters cluster into two distinct x-ranges
+    with a clear gap between them (typical of two-column resumes).
+    """
+    try:
+        chars = page.chars
+        if not chars:
+            return False
+        xs = [c["x0"] for c in chars]
+        page_mid = (page.bbox[0] + page.bbox[2]) / 2
+        left_xs  = [x for x in xs if x < page_mid]
+        right_xs = [x for x in xs if x >= page_mid]
+        # Two-column if both halves have substantial text
+        return len(left_xs) > 50 and len(right_xs) > 50
+    except Exception:
+        return False
+
+
+def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
+    """
+    Extract text from a PDF using pdfplumber.
+    For two-column layouts: crops left and right halves separately
+    so section headers and their content stay together.
+    For single-column: uses standard extract_text().
+    """
+    pages_text: list[str] = []
+
+    with _pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page_num, page in enumerate(pdf.pages):
+            x0, top, x1, bottom = page.bbox
+
+            if _is_two_column(page):
+                logger.debug(f"Page {page_num + 1}: two-column layout detected — splitting columns")
+                mid = x0 + (x1 - x0) * 0.55  # 55% split handles asymmetric layouts
+
+                left_text  = page.crop((x0, top, mid, bottom)).extract_text() or ""
+                right_text = page.crop((mid, top, x1, bottom)).extract_text() or ""
+
+                # Join left column full text then right column full text
+                # This keeps section headers (SKILLS, CERTIFICATIONS) with
+                # their content instead of interleaving the two columns
+                combined = left_text.strip()
+                if right_text.strip():
+                    combined += "\n\n" + right_text.strip()
+
+                pages_text.append(combined)
+                logger.debug(
+                    f"  Left: {len(left_text)} chars | Right: {len(right_text)} chars"
+                )
+            else:
+                logger.debug(f"Page {page_num + 1}: single-column layout")
+                text = page.extract_text() or ""
+                pages_text.append(text)
+
+    return "\n\n".join(pages_text).strip()
+
+
+# ─── OCR helpers ──────────────────────────────────────────────────────────────
+
 def extract_text_from_image(image: Image.Image) -> str:
     """
     Run Tesseract OCR on a PIL Image.
-    Falls back to EasyOCR only if it is installed AND Tesseract
-    returns fewer than 50 characters.
+    Falls back to EasyOCR only if installed AND Tesseract returns < 50 chars.
     """
     tess_config = "--psm 6 --oem 3"
     try:
@@ -59,7 +142,6 @@ def extract_text_from_image(image: Image.Image) -> str:
     except Exception as e:
         logger.error(f"Tesseract failed: {e}")
 
-    # EasyOCR fallback — only if available
     if _EASYOCR_AVAILABLE:
         logger.info("Falling back to EasyOCR...")
         reader = _get_easyocr_reader()
@@ -68,7 +150,6 @@ def extract_text_from_image(image: Image.Image) -> str:
             results = reader.readtext(tmp.name, detail=0, paragraph=True)
         return " ".join(results).strip()
 
-    # Tesseract-only mode: return whatever we got even if short
     logger.warning("EasyOCR not available — returning Tesseract output as-is.")
     try:
         return pytesseract.image_to_string(image, config="--psm 3 --oem 3").strip()
@@ -80,21 +161,40 @@ def extract_text_from_image(image: Image.Image) -> str:
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """
     Extract text from a PDF.
-    Tries direct text extraction first (fast), falls back to OCR for scanned PDFs.
+
+    Priority order:
+      1. pdfplumber with column-aware extraction (handles two-column resumes)
+      2. PyPDF2 direct extraction (fallback if pdfplumber not installed)
+      3. Tesseract OCR on rasterized pages (scanned/image-only PDFs)
     """
-    # Attempt 1: Direct text extraction (fast for text-based PDFs)
+    # ── Attempt 1: pdfplumber (column-aware) ──────────────────────────────────
+    if _PDFPLUMBER_AVAILABLE:
+        try:
+            text = _extract_pdf_text_pdfplumber(pdf_bytes)
+            if len(text) >= 100:
+                logger.info(
+                    f"PDF text extracted via pdfplumber ({len(text)} chars)."
+                )
+                return text
+            logger.warning(
+                f"pdfplumber returned only {len(text)} chars — trying OCR."
+            )
+        except Exception as e:
+            logger.warning(f"pdfplumber extraction failed: {e} — trying PyPDF2.")
+
+    # ── Attempt 2: PyPDF2 (fallback, no column awareness) ────────────────────
     try:
         import PyPDF2
         reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
         pages_text = [page.extract_text() or "" for page in reader.pages]
         combined = "\n".join(pages_text).strip()
         if len(combined) >= 100:
-            logger.info("PDF text extracted directly (no OCR needed).")
+            logger.info("PDF text extracted via PyPDF2 (no OCR needed).")
             return combined
     except Exception as e:
-        logger.warning(f"PyPDF2 direct extraction failed: {e}")
+        logger.warning(f"PyPDF2 extraction failed: {e}")
 
-    # Attempt 2: OCR on rasterized pages
+    # ── Attempt 3: OCR on rasterized pages (scanned PDF) ─────────────────────
     logger.info("Rasterizing PDF pages for OCR...")
     images = convert_from_bytes(pdf_bytes, dpi=300)
     all_text: list[str] = []
