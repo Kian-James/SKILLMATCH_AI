@@ -268,10 +268,15 @@ class ResumeService:
         faiss_multiplier = min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD) if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
         blended = skill_score * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT * faiss_multiplier
 
-        # Cap to ZERO_SKILL_SCORE_CAP when no skills matched at all
+        # Cap everything to zero when no skills matched at all.
+        # cert_bonus is also zeroed here — certifications should only boost a
+        # score that already has skill matches, never create a score from nothing.
+        # Previously cert_bonus was added AFTER this block, which allowed it to
+        # bypass the cap and produce e.g. 8% despite 0 matched skills.
         cap_applied = False
         if matched_count == 0:
             blended = min(blended, ZERO_SKILL_SCORE_CAP)
+            cert_bonus = 0.0   # ← THE FIX: zero cert bonus when no skills match
             cap_applied = True
 
         final_pct = round(min((blended + cert_bonus) * 100, 100.0), 1)

@@ -201,9 +201,13 @@ class JobService:
         else:
             blended = skill_score  # skill-only when no FAISS score is available
 
-        # Cap at ZERO_SKILL_SCORE_CAP when no skills matched
+        # Cap at ZERO_SKILL_SCORE_CAP when no skills matched.
+        # cert_bonus is also zeroed — certifications must not create a score
+        # from nothing when zero skills match. Previously cert_bonus was added
+        # after this block, bypassing the cap entirely.
         if len(matched) == 0:
             blended = min(blended, ZERO_SKILL_SCORE_CAP)
+            cert_bonus = 0.0   # ← THE FIX: zero cert bonus when no skills match
 
         final_score = round(min((blended + cert_bonus) * 100, 100.0), 1)
 
