@@ -10,6 +10,16 @@ FIXES (v2):
            to avoid false positives inside project bullet points like "Technologies: React"
   BUG 5 - Expanded SOFT_SKILLS_EXCLUDE with generic phrases from experience text
            + minimum skill length enforced in extract_skills
+
+FIXES (v3):
+  BUG 6 - Projects section skills were bleeding into extraction when no Skills section
+           was found. Fallback now extracts from EXPERIENCE + SUMMARY only, explicitly
+           stripping the Projects block. This was the root cause of false 7-12% match
+           scores — project tech terms created a plausible embedding that FAISS matched
+           to loosely related jobs, and keyword overlap then gave matched_count=1,
+           bypassing ZERO_SKILL_SCORE_CAP.
+  BUG 7 - Added PROJECT_SECTION_HEADERS and _strip_projects_from_text() to surgically
+           remove the Projects section before any fallback full-text extraction.
 """
 
 from __future__ import annotations
@@ -41,6 +51,23 @@ SKILLS_SECTION_HEADERS = [
 CERT_SECTION_HEADERS = [
     r"(?:^|\n|\s{2,})(?:CERTIFICATIONS?|CERTIFICATES?|LICENSES?\s+&\s+CERTIFICATIONS?"
     r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?)\s*(?:\n|:|\s{2,})",
+]
+
+# FIX BUG 6/7: Projects section patterns — used to strip project blocks before
+# fallback extraction so project-mentioned tech terms don't pollute skill lists.
+PROJECT_SECTION_HEADERS = [
+    r"(?:^|\n|\s{2,})(?:PROJECTS?|PERSONAL\s+PROJECTS?|ACADEMIC\s+PROJECTS?"
+    r"|SIDE\s+PROJECTS?|KEY\s+PROJECTS?|NOTABLE\s+PROJECTS?"
+    r"|PROJECT\s+EXPERIENCE|PORTFOLIO)\s*(?:\n|:|\s{2,})",
+]
+
+# When no Skills section is found, we extract only from Summary + Experience,
+# never from Projects (too narrative) or Education (too broad).
+SAFE_FALLBACK_SECTION_HEADERS = [
+    r"(?:^|\n|\s{2,})(?:SUMMARY|PROFESSIONAL\s+SUMMARY|CAREER\s+SUMMARY"
+    r"|PROFILE|ABOUT\s+ME?|OVERVIEW)\s*(?:\n|:|\s{2,})",
+    r"(?:^|\n|\s{2,})(?:EXPERIENCE|WORK\s+EXPERIENCE|EMPLOYMENT\s+HISTORY"
+    r"|PROFESSIONAL\s+EXPERIENCE|WORK\s+HISTORY)\s*(?:\n|:|\s{2,})",
 ]
 
 # FIX BUG 1 + BUG 2: Added CERTIFICATIONS? and CAREER OBJECTIVE / OBJECTIVE
@@ -193,7 +220,62 @@ def _extract_certs_section(text: str) -> str | None:
     return _extract_section(text, CERT_SECTION_HEADERS, "certs")
 
 
-# ─── NLP helpers ─────────────────────────────────────────────────────────────
+def _strip_projects_from_text(text: str) -> str:
+    """
+    FIX BUG 6/7: Remove the Projects section from resume text entirely.
+    Projects describe what the candidate *built*, not what they *know* —
+    tech terms mentioned there are unreliable signals of proficiency.
+    Stripping prevents project tech terms from inflating the skill list
+    and creating false FAISS embedding similarity scores.
+    """
+    combined_project = "|".join(f"(?:{p})" for p in PROJECT_SECTION_HEADERS)
+    combined_next    = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
+
+    result = text
+    for match in re.finditer(combined_project, text, re.IGNORECASE | re.MULTILINE):
+        section_text = text[match.end():]
+        end_match = re.search(combined_next, section_text, re.IGNORECASE | re.MULTILINE)
+        if end_match:
+            section_end = match.end() + end_match.start()
+        else:
+            section_end = len(text)
+        # Replace the projects block with whitespace to preserve positions
+        result = result[:match.start()] + " " * (section_end - match.start()) + result[section_end:]
+        logger.debug(f"Stripped Projects section ({section_end - match.start()} chars)")
+        break  # only strip the first Projects block
+
+    return result
+
+
+def _extract_safe_fallback_text(text: str) -> str:
+    """
+    FIX BUG 6/7: When no Skills section is found, extract ONLY from
+    Summary and Experience sections — not from Projects or Education.
+    Falls back to full-text-minus-projects if those sections aren't found.
+    """
+    text_no_projects = _strip_projects_from_text(text)
+
+    combined_safe = "|".join(f"(?:{p})" for p in SAFE_FALLBACK_SECTION_HEADERS)
+    combined_next = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
+
+    # Collect all safe section matches
+    safe_chunks: list[str] = []
+    for match in re.finditer(combined_safe, text_no_projects, re.IGNORECASE | re.MULTILINE):
+        section_body = text_no_projects[match.end():]
+        end_match = re.search(combined_next, section_body, re.IGNORECASE | re.MULTILINE)
+        chunk = section_body[:end_match.start()] if end_match else section_body
+        if chunk.strip():
+            safe_chunks.append(chunk.strip())
+
+    if safe_chunks:
+        logger.info(f"Fallback: extracting skills from {len(safe_chunks)} safe section(s) (Summary/Experience only)")
+        return "\n\n".join(safe_chunks)
+
+    # Last resort: full text minus projects
+    logger.warning("No Summary/Experience sections found — using full text minus Projects for fallback")
+    return text_no_projects
+
+
 
 @lru_cache(maxsize=1)
 def _load_nlp_model():
@@ -312,6 +394,8 @@ class NLPProcessor:
         cleaned = self._clean_text(raw_text)
 
         # ── Certifications ────────────────────────────────────────────────────
+        # Certifications are extracted from the full text (including Projects)
+        # since certs are typically listed by name, not buried in narrative.
         cert_section = _extract_certs_section(cleaned)
         cert_text    = cert_section if cert_section else cleaned
         certifications = self.extract_certifications(cert_text)
@@ -321,6 +405,7 @@ class NLPProcessor:
         )
 
         # ── Skills ────────────────────────────────────────────────────────────
+        # Priority 1: Dedicated Skills / Technical Skills section (most reliable)
         skill_section = _extract_skills_section(cleaned)
         if skill_section:
             logger.info(
@@ -329,10 +414,20 @@ class NLPProcessor:
             )
             skills = self.extract_skills(skill_section, certifications)
         else:
+            # FIX BUG 6/7: DO NOT fall back to full-text extraction.
+            # Full-text includes the Projects section, which contains tech terms
+            # used in a narrative context ("built X using React") — these create
+            # false skill signals that produce inaccurate FAISS embeddings and
+            # bypass the ZERO_SKILL_SCORE_CAP via matched_count=1 keyword hits.
+            #
+            # Instead: extract from Summary + Experience sections only.
+            # These are where candidates intentionally list what they know.
             logger.warning(
-                "No Skills section detected — falling back to full-text extraction"
+                "No Skills section detected — "
+                "falling back to Summary/Experience extraction (Projects excluded)"
             )
-            skills = self.extract_skills(cleaned, certifications)
+            safe_text = _extract_safe_fallback_text(cleaned)
+            skills = self.extract_skills(safe_text, certifications)
 
         logger.info(f"NLP extracted {len(skills)} skills, {len(certifications)} certifications.")
         return {

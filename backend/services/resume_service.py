@@ -17,6 +17,17 @@ FIXES (v3):
            response so the frontend can show green chips consistent with the score.
            Previously only matched_count (int) was returned, causing the UI to show
            "0 matched" while the score was > 0 (e.g. Mobile App Developer 26% / 0 chips).
+
+FIXES (v4):
+  FIX 4 — Two-gate cap system in _compute_unified_score.
+           Gate 2 (MIN_MATCHED_SKILLS_FOR_SCORE) suppresses scores when fewer than
+           N skills matched, catching false positives that slipped past Gate 1
+           (ZERO_SKILL_SCORE_CAP) via a single accidental keyword overlap.
+           Root cause: Projects section tech terms were inflating extracted skill
+           lists → plausible FAISS embedding → 1 keyword match → 7-12% false score.
+           Solution: nlp_processor now strips Projects before fallback extraction
+           (see BUG 6/7 in nlp_processor.py), and Gate 2 here catches any residual
+           single-skill false positives that survive the NLP fix.
 """
 
 from __future__ import annotations
@@ -41,6 +52,7 @@ try:
         FAISS_MIN_SCORE_THRESHOLD,
         FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
+        MIN_MATCHED_SKILLS_FOR_SCORE,
     )
 except ModuleNotFoundError:
     import sys, os
@@ -56,6 +68,7 @@ except ModuleNotFoundError:
         FAISS_MIN_SCORE_THRESHOLD,
         FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
+        MIN_MATCHED_SKILLS_FOR_SCORE,
     )
 
 
@@ -283,16 +296,35 @@ class ResumeService:
         faiss_multiplier = min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD) if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
         blended = skill_score * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT * faiss_multiplier
 
-        # Cap everything to zero when no skills matched at all.
-        # cert_bonus is also zeroed here — certifications should only boost a
-        # score that already has skill matches, never create a score from nothing.
-        # Previously cert_bonus was added AFTER this block, which allowed it to
-        # bypass the cap and produce e.g. 8% despite 0 matched skills.
+        # FIX (v4): Two-gate cap system.
+        #
+        # Gate 1 — ZERO_SKILL_SCORE_CAP: suppress score if zero skills matched.
+        # Gate 2 — MIN_MATCHED_SKILLS_FOR_SCORE: suppress score if fewer than N
+        #   skills matched. This is the second line of defense against the
+        #   "Projects section bleed" false positive:
+        #
+        #   Scenario: resume has no Skills section → fallback extracted 0 real
+        #   skills but 1 project tech term slipped through (e.g. "React").
+        #   FAISS finds a Full Stack job (score 0.41). Keyword matcher hits
+        #   "React" → matched_count=1 → Gate 1 does NOT fire (count > 0).
+        #   Gate 2 fires: matched_count < MIN_MATCHED_SKILLS_FOR_SCORE=2 → 0%.
+        #
+        # cert_bonus is zeroed in both gates — certs should only amplify a real
+        # skill match, never create a score from nothing.
         cap_applied = False
         if matched_count == 0:
             blended = min(blended, ZERO_SKILL_SCORE_CAP)
-            cert_bonus = 0.0   # ← THE FIX: zero cert bonus when no skills match
+            cert_bonus = 0.0
             cap_applied = True
+        elif matched_count < MIN_MATCHED_SKILLS_FOR_SCORE:
+            blended = 0.0
+            cert_bonus = 0.0
+            cap_applied = True
+            if VERBOSE_MATCH_LOGGING:
+                logger.debug(
+                    f"    Score suppressed: matched_count={matched_count} "
+                    f"< MIN_MATCHED_SKILLS_FOR_SCORE={MIN_MATCHED_SKILLS_FOR_SCORE}"
+                )
 
         final_pct = round(min((blended + cert_bonus) * 100, 100.0), 1)
 

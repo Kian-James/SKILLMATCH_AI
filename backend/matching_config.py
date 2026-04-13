@@ -102,6 +102,17 @@ CERT_BONUS_MAX: float = 0.10
 # 0.15 = allow up to 15% from FAISS even with no skill matches
 ZERO_SKILL_SCORE_CAP: float = 0.0
 
+# Minimum number of required skills that must actually match before showing ANY
+# positive score for a job. This is the second line of defense against false
+# positives caused by semantic overlap in the embedding space.
+# Example: a resume with Python experience has an embedding vaguely similar to a
+# Blockchain Engineer job. FAISS finds it (score 0.38). The keyword matcher finds
+# 1 overlapping term ("development"), bypassing ZERO_SKILL_SCORE_CAP.
+# With MIN_MATCHED_SKILLS_FOR_SCORE=2, that job is suppressed to 0%.
+# 1 = at least 1 skill must match (minimal filtering)
+# 2 = at least 2 skills must match (recommended — eliminates most false positives)
+MIN_MATCHED_SKILLS_FOR_SCORE: int = 2
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 # Set to True to log detailed per-skill match breakdown
