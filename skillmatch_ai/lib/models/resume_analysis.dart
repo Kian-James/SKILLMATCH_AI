@@ -40,12 +40,18 @@ class JobMatch {
   final double matchScore;
   final List<String> skills;
   final List<String> certifications;
+  // matchedSkills: the subset of required job skills the user actually has,
+  // as determined by the backend scorer (exact + keyword + semantic match).
+  // Used by the UI to show green/red chips accurately instead of guessing
+  // via a simple string comparison between user skills and job skill names.
+  final List<String> matchedSkills;
 
   const JobMatch({
     required this.jobTitle,
     required this.matchScore,
     required this.skills,
     required this.certifications,
+    required this.matchedSkills,
   });
 
   factory JobMatch.fromJson(Map<String, dynamic> json) {
@@ -54,6 +60,7 @@ class JobMatch {
       matchScore: (json['match_score'] as num?)?.toDouble() ?? 0.0,
       skills: List<String>.from(json['skills'] ?? []),
       certifications: List<String>.from(json['certifications'] ?? []),
+      matchedSkills: List<String>.from(json['matched_skills'] ?? []),
     );
   }
 
@@ -62,6 +69,7 @@ class JobMatch {
     'match_score': matchScore,
     'skills': skills,
     'certifications': certifications,
+    'matched_skills': matchedSkills,
   };
 
   /// Score category for color coding

@@ -438,8 +438,30 @@ class NLPProcessor:
 
     @staticmethod
     def _clean_text(text: str) -> str:
+        # Remove noise
         text = re.sub(r"https?://\S+|www\.\S+", " ", text)
         text = re.sub(r"\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b", " ", text)
         text = re.sub(r"\+?\d[\d\s\-().]{7,}\d", " ", text)
-        text = re.sub(r"\s+", " ", text)
+
+        # FIX: collapse horizontal whitespace ONLY — preserve newlines.
+        # The old re.sub(r'\s+', ' ') collapsed newlines into spaces, turning
+        # 'SKILLS\nMERN Stack' into 'SKILLS MERN Stack', which broke every
+        # section-header regex that relied on \n or \s{2,} after the keyword.
+        text = re.sub(r"[ \t]+", " ", text)
+
+        # Collapse 3+ newlines to 2 to keep section breaks intact
+        text = re.sub(r"\n{3,}", "\n\n", text)
+
+        # Fix two-column PDF cert merging: insert \n before known providers
+        # when they appear mid-line (no preceding newline).
+        # e.g. "Udemy – Flutter CertifiedFreeCodeCamp – Web Design"
+        #   -> "Udemy – Flutter Certified\nFreeCodeCamp – Web Design"
+        _PROVIDERS = (
+            r"(?<=[^\n])(FreeCodeCamp|Udemy|Coursera|edX|LinkedIn\s+Learning"
+            r"|Cisco|Microsoft|Google|Amazon|Oracle|CompTIA|IBM|Meta|Apple)"
+        )
+        text = re.sub(_PROVIDERS, r"\n\1", text)
+
+        # Strip trailing spaces per line
+        text = "\n".join(line.rstrip() for line in text.splitlines())
         return text.strip()

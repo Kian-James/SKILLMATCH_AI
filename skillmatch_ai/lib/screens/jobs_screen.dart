@@ -181,8 +181,12 @@ class _JobDetailSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    // Determine which required skills the user already has
-    final userSkillsLower = userSkills.map((s) => s.toLowerCase()).toSet();
+    // Use backend-provided matchedSkills (exact + keyword + semantic matching)
+    // instead of client-side string comparison. The backend correctly identifies
+    // matches like "Version Control Systems" ↔ "Git Version Control" via
+    // semantic similarity — a simple toLowerCase().contains() check misses these
+    // and causes chips to show red even when the backend scored them as matched.
+    final matchedSkillsLower = job.matchedSkills.map((s) => s.toLowerCase()).toSet();
 
     final scoreColor = switch (job.scoreLevel) {
       ScoreLevel.high => Colors.green,
@@ -270,7 +274,7 @@ class _JobDetailSheet extends StatelessWidget {
                     runSpacing: 8,
                     children: job.skills.map((skill) {
                       final have =
-                      userSkillsLower.contains(skill.toLowerCase());
+                      matchedSkillsLower.contains(skill.toLowerCase());
                       return SkillChip(
                         skill: skill,
                         type: have
@@ -311,7 +315,7 @@ class _JobDetailSheet extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
-                      'You have ${job.skills.where((s) => userSkillsLower.contains(s.toLowerCase())).length} of ${job.skills.length} required skills for this role.',
+                      'You have ${job.skills.where((s) => matchedSkillsLower.contains(s.toLowerCase())).length} of ${job.skills.length} required skills for this role.',
                       style: TextStyle(
                           color: cs.onSurfaceVariant, fontSize: 13),
                       textAlign: TextAlign.center,
