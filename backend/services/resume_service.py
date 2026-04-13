@@ -43,15 +43,12 @@ from utils.skill_normalizer import SkillNormalizer
 
 try:
     from matching_config import (
-        SKILL_WEIGHT,
-        FAISS_WEIGHT,
         CERT_BONUS_MAX,
         KEYWORD_OVERLAP_THRESHOLD,
         SEMANTIC_SKILL_THRESHOLD,
         SEMANTIC_CERT_THRESHOLD,
         ZERO_SKILL_SCORE_CAP,
         FAISS_MIN_SCORE_THRESHOLD,
-        FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
         MIN_MATCHED_SKILLS_FOR_SCORE,
     )
@@ -59,15 +56,12 @@ except ModuleNotFoundError:
     import sys, os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from matching_config import (
-        SKILL_WEIGHT,
-        FAISS_WEIGHT,
         CERT_BONUS_MAX,
         KEYWORD_OVERLAP_THRESHOLD,
         SEMANTIC_SKILL_THRESHOLD,
         SEMANTIC_CERT_THRESHOLD,
         ZERO_SKILL_SCORE_CAP,
         FAISS_MIN_SCORE_THRESHOLD,
-        FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
         MIN_MATCHED_SKILLS_FOR_SCORE,
     )
@@ -136,10 +130,9 @@ class ResumeService:
             result = self._compute_unified_score(
                 user_skills=skills,
                 user_certs=certifications,
-                user_skill_embs=user_embs["skills"],    # pre-computed this request
-                user_cert_embs=user_embs["certs"],      # pre-computed this request
+                user_skill_embs=user_embs["skills"],
+                user_cert_embs=user_embs["certs"],
                 job=job,
-                faiss_score=raw_faiss,
             )
 
             scored_jobs.append({
@@ -219,19 +212,18 @@ class ResumeService:
             user_skill_embs: np.ndarray,   # (n_user_skills, dim) — pre-computed
             user_cert_embs:  np.ndarray,   # (n_user_certs, dim)  — pre-computed
             job:             dict,
-            faiss_score:     float,
     ) -> dict:
         """
         Compute the skill-overlap match score for one job.
 
-        Matching priority (per required skill):
-          1. Exact normalized match     — fastest, zero cost
-          2. Keyword overlap            — fast, no embedding needed
-          3. Semantic cosine similarity — uses pre-computed job skill embeddings
-                                         from metadata (zero inference cost)
+        Score = (matched_skills / required_skills) + cert_bonus
+        FAISS plays no role here — it is used only for candidate retrieval.
 
-        FAISS score is used only as a minor tiebreaker blend (FAISS_WEIGHT=0.15),
-        not as the primary score signal.
+        Matching priority (per required skill):
+          1. Exact normalized match     — zero cost
+          2. Keyword overlap            — zero cost
+          3. Semantic cosine similarity — uses pre-computed job skill embeddings,
+                                         zero inference cost (numpy dot products)
         """
         required_skills:      list[str] = job.get("skills", [])
         required_certs:       list[str] = job.get("certifications", [])
@@ -302,8 +294,6 @@ class ResumeService:
         cert_bonus = 0.0
         if required_certs and user_cert_embs.shape[0] > 0:
             cert_matched = 0
-            # Embed required certs — these are job-specific so not pre-computed,
-            # but cert matching is rare and the list is short (2-3 items)
             for req_cert in required_certs:
                 try:
                     req_emb = self.embedder.embed(req_cert)
@@ -314,15 +304,14 @@ class ResumeService:
                     pass
             cert_bonus = (cert_matched / len(required_certs)) * CERT_BONUS_MAX
 
-        # ── FAISS blend (minor tiebreaker, not primary signal) ────────────────
-        faiss_multiplier = (
-            min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
-            if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
-        )
-        blended = (
-                skill_score * SKILL_WEIGHT
-                + faiss_score * FAISS_WEIGHT * faiss_multiplier
-        )
+        # ── Pure skill-overlap score ──────────────────────────────────────────
+        # FAISS is retrieval only — it narrows the candidate pool but plays
+        # zero role in the displayed match percentage. The score the user sees
+        # is entirely determined by how many of the job's required skills they
+        # actually have (exact + keyword + semantic matching above).
+        # skill_score: 0.0–1.0 fraction of required skills matched
+        # cert_bonus:  0.0–CERT_BONUS_MAX additive boost for matching certs
+        blended = skill_score
 
         # ── Two-gate suppression ──────────────────────────────────────────────
         cap_applied = False
