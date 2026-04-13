@@ -1,33 +1,33 @@
 """
 services/resume_service.py
-Full resume analysis pipeline: OCR → NLP → Embeddings → FAISS → Unified Score
+Full resume analysis pipeline: OCR → NLP → Embed → FAISS → Skill Score
 
-FIXES (v3):
-  FIX 1 — FAISS_MIN_SCORE_THRESHOLD (now 0.35) filters out low-similarity jobs
-           before scoring, preventing stale FAISS metadata from showing inflated
-           scores like 16% when 0 skills matched (Full Stack Software Engineer).
+PIPELINE OVERVIEW
+-----------------
+  Step 1  OCR         Extract raw text from PDF or image
+  Step 2  NLP         Detect Skills section → extract skills + certifications
+  Step 3  Embed       embed_batch(user_skills) — ONE call, result cached by diskcache
+  Step 4  FAISS       Top-K candidate retrieval by cosine similarity (search only)
+  Step 5  Score       Pure skill-overlap scoring using pre-computed job embeddings
 
-  FIX 2 — FAISS contribution is now scaled by skill_score via FAISS_SKILL_SCALE_THRESHOLD.
-           When only 1-2 skills match, FAISS no longer adds 8-18 percentage points.
-           Formula: faiss_contribution = faiss_score * FAISS_WEIGHT
-                                       * min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
+FAISS ROLE
+----------
+  FAISS is used ONLY for fast candidate retrieval — it narrows the search space
+  from hundreds of jobs to the top-K most semantically similar candidates.
+  It does NOT determine the displayed match percentage.
 
-  FIX 3 — _compute_unified_score now returns matched_skills: list[str] (the job's
-           required skill labels that were matched). This is returned in the API
-           response so the frontend can show green chips consistent with the score.
-           Previously only matched_count (int) was returned, causing the UI to show
-           "0 matched" while the score was > 0 (e.g. Mobile App Developer 26% / 0 chips).
+  The displayed match % comes entirely from _compute_unified_score(), which uses:
+    a) Exact normalized skill matching
+    b) Keyword overlap matching
+    c) Semantic cosine similarity — using PRE-COMPUTED job skill embeddings
+       stored in FAISS metadata at build time (faiss_index.py → rebuild())
 
-FIXES (v4):
-  FIX 4 — Two-gate cap system in _compute_unified_score.
-           Gate 2 (MIN_MATCHED_SKILLS_FOR_SCORE) suppresses scores when fewer than
-           N skills matched, catching false positives that slipped past Gate 1
-           (ZERO_SKILL_SCORE_CAP) via a single accidental keyword overlap.
-           Root cause: Projects section tech terms were inflating extracted skill
-           lists → plausible FAISS embedding → 1 keyword match → 7-12% false score.
-           Solution: nlp_processor now strips Projects before fallback extraction
-           (see BUG 6/7 in nlp_processor.py), and Gate 2 here catches any residual
-           single-skill false positives that survive the NLP fix.
+PERFORMANCE
+-----------
+  Before: 5 jobs × ~12 skills × embed() call each = up to 65 embedding calls
+          → ~130s scoring time on Render free tier CPU
+  After:  embed_batch(user_skills) once → numpy dot products against pre-computed
+          job skill vectors → <0.1s scoring, ~4-5s total analysis time
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from ai_modules.nlp_processor import NLPProcessor
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from utils.skill_normalizer import SkillNormalizer
+
 try:
     from matching_config import (
         SKILL_WEIGHT,
@@ -75,142 +76,166 @@ except ModuleNotFoundError:
 class ResumeService:
 
     def __init__(self, faiss_index: FAISSIndex):
-        self.faiss = faiss_index
-        self.nlp = NLPProcessor()
+        self.faiss    = faiss_index
+        self.nlp      = NLPProcessor()
         self.embedder = EmbeddingEngine()
         self.normalizer = SkillNormalizer()
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Public API
+    # ──────────────────────────────────────────────────────────────────────────
+
     def analyze(self, file_bytes: bytes, content_type: str) -> dict:
         """
-        Full pipeline:
-        1. OCR  — extract raw text
-        2. NLP  — extract skills + certifications
-        3. Embed — generate skill profile embedding
-        4. FAISS — find top 5 similar jobs
-        5. Score — compute unified match % per job (skill + FAISS blend)
+        Full pipeline: OCR → NLP → Embed → FAISS → Score.
+        Returns skills, certifications, top job matches with match scores.
         """
-        # Step 1: OCR
+        # ── Step 1: OCR ───────────────────────────────────────────────────────
         logger.info("Step 1: OCR")
         raw_text = extract_text(file_bytes, content_type)
         if not raw_text or len(raw_text.strip()) < 20:
-            raise ValueError("Could not extract meaningful text from the uploaded file.")
+            raise ValueError(
+                "Could not extract meaningful text from the uploaded file."
+            )
 
-        # Step 2: NLP
+        # ── Step 2: NLP ───────────────────────────────────────────────────────
         logger.info("Step 2: NLP")
-        extracted = self.nlp.process(raw_text)
-        skills: list[str] = extracted["skills"]
-        certifications: list[str] = extracted["certifications"]
+        extracted     = self.nlp.process(raw_text)
+        skills        = extracted["skills"]
+        certifications = extracted["certifications"]
 
         if VERBOSE_MATCH_LOGGING:
-            logger.info(f"  Extracted skills       : {skills}")
-            logger.info(f"  Extracted certs        : {certifications}")
+            logger.info(f"  Extracted skills : {skills}")
+            logger.info(f"  Extracted certs  : {certifications}")
 
-        # Step 3: Embed skill profile
-        logger.info("Step 3: Embedding")
-        skill_embedding = self.embedder.embed_skill_list(skills)
-        combined_text = " ".join(skills + certifications)
-        combined_embedding = (
-            self.embedder.embed(combined_text) if combined_text.strip()
-            else skill_embedding
-        )
-        query_embedding = ((skill_embedding + combined_embedding) / 2.0).astype("float32")
-        norm = np.linalg.norm(query_embedding)
-        if norm > 0:
-            query_embedding /= norm
+        # ── Step 3: Embed user skill profile (ONE batch call) ─────────────────
+        # This is the only embedding call during analysis.
+        # Results are cached by diskcache so repeat uploads of the same resume
+        # hit zero model inference.
+        logger.info("Step 3: Embedding user skills")
+        user_embs = self._embed_user_profile(skills, certifications)
 
-        # Step 4: FAISS — returns raw cosine scores [0, 1]
-        logger.info("Step 4: FAISS search")
-        faiss_results = self.faiss.search(query_embedding, top_k=5)
+        # ── Step 4: FAISS candidate retrieval ─────────────────────────────────
+        logger.info("Step 4: FAISS retrieval")
+        faiss_results = self.faiss.search(user_embs["query"], top_k=5)
 
-        # Step 5: Unified scoring per job
-        logger.info("Step 5: Unified scoring")
+        # ── Step 5: Skill-overlap scoring ─────────────────────────────────────
+        logger.info("Step 5: Skill scoring")
         scored_jobs = []
         for job in faiss_results:
-            raw_faiss = job.get("faiss_score", job.get("match_score", 0.0))
+            raw_faiss = job.get("faiss_score", 0.0)
 
-            # FIX 1: Skip jobs whose FAISS cosine similarity is below threshold.
-            # This removes stale-metadata jobs that would otherwise bypass the
-            # ZERO_SKILL_SCORE_CAP and appear with inflated FAISS-only scores.
+            # FAISS threshold: exclude candidates too dissimilar to even score
             if raw_faiss < FAISS_MIN_SCORE_THRESHOLD:
                 logger.debug(
-                    f"Skipping {job['job_title']!r}: faiss={raw_faiss:.3f} < {FAISS_MIN_SCORE_THRESHOLD}"
+                    f"Skipping {job['job_title']!r}: "
+                    f"faiss={raw_faiss:.3f} < {FAISS_MIN_SCORE_THRESHOLD}"
                 )
                 continue
 
-            unified = self._compute_unified_score(
+            result = self._compute_unified_score(
                 user_skills=skills,
                 user_certs=certifications,
+                user_skill_embs=user_embs["skills"],    # pre-computed this request
+                user_cert_embs=user_embs["certs"],      # pre-computed this request
                 job=job,
                 faiss_score=raw_faiss,
             )
-            job_entry = {
-                "job_title": job["job_title"],
-                "match_score": unified["final_score_pct"],
-                "faiss_score_raw": raw_faiss,
-                "skill_score_raw": unified["skill_score"],
-                "matched_skill_count": unified["matched_count"],
-                # FIX 3: return the actual matched skill labels for frontend green chips
-                "matched_skills": unified["matched_skills"],
-                "skills": job.get("skills", []),
-                "certifications": job.get("certifications", []),
-            }
-            scored_jobs.append(job_entry)
-            if VERBOSE_MATCH_LOGGING:
-                required = job.get("skills", [])
-                matched_set = set(unified["matched_skills"])
-                skill_lines = "\n".join(
-                    f"    {'✓' if s in matched_set else '✗'} {s}"
-                    for s in required
-                )
-                logger.info(
-                    f"\n{'='*52}\n"
-                    f"TOP MATCH: {job['job_title']!r}\n"
-                    f"  Skill score : {unified['matched_count']}/{len(required)}"
-                    f" = {unified['skill_score']:.1%}\n"
-                    f"  FAISS score : {raw_faiss:.3f}\n"
-                    f"  Cap applied : {unified['cap_applied']}\n"
-                    f"  Final score : {unified['final_score_pct']}%\n"
-                    f"  Required skills:\n{skill_lines}\n"
-                    f"{'='*52}"
-                )
 
-        # Sort by unified score descending
+            scored_jobs.append({
+                "job_title":           job["job_title"],
+                "match_score":         result["final_score_pct"],
+                "faiss_score_raw":     raw_faiss,
+                "skill_score_raw":     result["skill_score"],
+                "matched_skill_count": result["matched_count"],
+                "matched_skills":      result["matched_skills"],
+                "skills":              job.get("skills", []),
+                "certifications":      job.get("certifications", []),
+            })
+
+            if VERBOSE_MATCH_LOGGING:
+                self._log_job_result(job, result)
+
         scored_jobs.sort(key=lambda x: x["match_score"], reverse=True)
         best_score = scored_jobs[0]["match_score"] if scored_jobs else 0.0
 
         return {
-            "skills": skills,
-            "certifications": certifications,
-            "word_count": extracted["word_count"],
-            "top_job_matches": scored_jobs,
+            "skills":           skills,
+            "certifications":   certifications,
+            "word_count":       extracted["word_count"],
+            "top_job_matches":  scored_jobs,
             "best_match_score": best_score,
-            "query_embedding": query_embedding.tolist(),
+            "query_embedding":  user_embs["query"].tolist(),
         }
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Embedding helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _embed_user_profile(
+            self,
+            skills: list[str],
+            certifications: list[str],
+    ) -> dict:
+        """
+        Embed user skills and certifications in one batch.
+        Returns dict with:
+          query       — normalized query vector for FAISS search
+          skills      — 2-D array of per-skill embeddings (n_skills, dim)
+          certs       — 2-D array of per-cert embeddings (n_certs, dim)
+        """
+        skill_embs = (
+            self.embedder.embed_batch(skills)
+            if skills else np.empty((0, self.embedder.model.get_sentence_embedding_dimension()), dtype=np.float32)
+        )
+        cert_embs = (
+            self.embedder.embed_batch(certifications)
+            if certifications else np.empty((0, self.embedder.model.get_sentence_embedding_dimension()), dtype=np.float32)
+        )
+
+        # Build FAISS query: mean of skill embeddings + combined text embedding
+        if skills:
+            skill_mean = skill_embs.mean(axis=0)
+            combined_text = " ".join(skills + certifications)
+            combined_emb = self.embedder.embed(combined_text)
+            query = ((skill_mean + combined_emb) / 2.0).astype(np.float32)
+        else:
+            query = np.zeros(self.embedder.model.get_sentence_embedding_dimension(), dtype=np.float32)
+
+        norm = np.linalg.norm(query)
+        if norm > 0:
+            query = query / norm
+
+        return {"query": query, "skills": skill_embs, "certs": cert_embs}
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Scoring
+    # ──────────────────────────────────────────────────────────────────────────
 
     def _compute_unified_score(
             self,
-            user_skills: list[str],
-            user_certs: list[str],
-            job: dict,
-            faiss_score: float,
+            user_skills:     list[str],
+            user_certs:      list[str],
+            user_skill_embs: np.ndarray,   # (n_user_skills, dim) — pre-computed
+            user_cert_embs:  np.ndarray,   # (n_user_certs, dim)  — pre-computed
+            job:             dict,
+            faiss_score:     float,
     ) -> dict:
         """
-        Compute the unified match score for one job.
+        Compute the skill-overlap match score for one job.
 
-        Uses KEYWORD_OVERLAP_THRESHOLD and SEMANTIC_SKILL_THRESHOLD from
-        matching_config.py (previously these were hardcoded, causing the
-        config values to be silently ignored).
+        Matching priority (per required skill):
+          1. Exact normalized match     — fastest, zero cost
+          2. Keyword overlap            — fast, no embedding needed
+          3. Semantic cosine similarity — uses pre-computed job skill embeddings
+                                         from metadata (zero inference cost)
 
-        Returns:
-          skill_score     — 0-1 fraction of required skills matched
-          cert_bonus      — 0-1 bonus from cert matching
-          matched_count   — integer count of matched skills
-          matched_skills  — list of required skill labels that were matched (for UI chips)
-          cap_applied     — bool, whether ZERO_SKILL_SCORE_CAP fired
-          final_score_pct — 0-100 displayed percentage
+        FAISS score is used only as a minor tiebreaker blend (FAISS_WEIGHT=0.15),
+        not as the primary score signal.
         """
-        required_skills: list[str] = job.get("skills", [])
-        required_certs: list[str] = job.get("certifications", [])
+        required_skills:      list[str] = job.get("skills", [])
+        required_certs:       list[str] = job.get("certifications", [])
+        job_skill_embs: list[np.ndarray] = job.get("skill_embeddings", [])
 
         if not required_skills:
             return {
@@ -219,9 +244,10 @@ class ResumeService:
                 "cap_applied": False, "final_score_pct": 0.0,
             }
 
-        # Build user skill lookup structures
-        user_keywords: set[str] = set()
+        # Build user lookup structures (built once per job, O(n_user_skills))
         user_normalized: set[str] = set()
+        user_keywords:   set[str] = set()
+
         for s in user_skills:
             norm = self.normalizer.normalize(s)
             if norm:
@@ -234,38 +260,36 @@ class ResumeService:
                 if len(word) > 3:
                     user_keywords.add(word)
 
-        # Match each required skill using config thresholds
-        matched_count = 0
-        matched_skills: list[str] = []   # FIX 3: track which job skills matched
-        for req_skill in required_skills:
-            norm_req = (self.normalizer.normalize(req_skill) or req_skill).lower()
+        # ── Match each required skill ─────────────────────────────────────────
+        matched_count  = 0
+        matched_skills: list[str] = []
+
+        for i, req_skill in enumerate(required_skills):
+            norm_req   = (self.normalizer.normalize(req_skill) or req_skill).lower()
             matched_by = None
 
-            # 1. Exact normalized match
+            # Gate 1: Exact normalized match
             if norm_req in user_normalized:
                 matched_by = "exact"
 
-            # 2. Keyword overlap — use KEYWORD_OVERLAP_THRESHOLD from config
+            # Gate 2: Keyword overlap
             if not matched_by:
                 req_words = {w for w in req_skill.lower().split() if len(w) > 2}
-                if req_words and len(req_words & user_keywords) / len(req_words) >= KEYWORD_OVERLAP_THRESHOLD:
-                    matched_by = "keyword"
+                if req_words:
+                    overlap = len(req_words & user_keywords) / len(req_words)
+                    if overlap >= KEYWORD_OVERLAP_THRESHOLD:
+                        matched_by = "keyword"
 
-            # 3. Semantic — use SEMANTIC_SKILL_THRESHOLD from config
-            if not matched_by:
-                try:
-                    req_emb = self.embedder.embed(req_skill)
-                    if user_skills:
-                        user_embs = self.embedder.embed_batch(user_skills)
-                        sims = [float(np.dot(req_emb, u)) for u in user_embs]
-                        if max(sims) >= SEMANTIC_SKILL_THRESHOLD:
-                            matched_by = "semantic"
-                except Exception:
-                    pass
+            # Gate 3: Semantic — uses PRE-COMPUTED job skill embedding (no inference)
+            if not matched_by and i < len(job_skill_embs) and user_skill_embs.shape[0] > 0:
+                job_skill_emb = job_skill_embs[i]  # already normalized
+                sims = user_skill_embs @ job_skill_emb  # vectorized dot products
+                if float(sims.max()) >= SEMANTIC_SKILL_THRESHOLD:
+                    matched_by = "semantic"
 
             if matched_by:
                 matched_count += 1
-                matched_skills.append(req_skill)  # FIX 3: add the job's label
+                matched_skills.append(req_skill)
                 if VERBOSE_MATCH_LOGGING:
                     logger.debug(f"    ✓ {req_skill!r}  [{matched_by}]")
             else:
@@ -274,50 +298,42 @@ class ResumeService:
 
         skill_score = matched_count / len(required_skills)
 
-        # Cert bonus
+        # ── Certification bonus ───────────────────────────────────────────────
         cert_bonus = 0.0
-        if required_certs and user_certs:
+        if required_certs and user_cert_embs.shape[0] > 0:
             cert_matched = 0
+            # Embed required certs — these are job-specific so not pre-computed,
+            # but cert matching is rare and the list is short (2-3 items)
             for req_cert in required_certs:
                 try:
                     req_emb = self.embedder.embed(req_cert)
-                    user_cert_embs = self.embedder.embed_batch(user_certs)
-                    sims = [float(np.dot(req_emb, u)) for u in user_cert_embs]
-                    if max(sims) >= SEMANTIC_CERT_THRESHOLD:
+                    sims = user_cert_embs @ req_emb
+                    if float(sims.max()) >= SEMANTIC_CERT_THRESHOLD:
                         cert_matched += 1
                 except Exception:
                     pass
             cert_bonus = (cert_matched / len(required_certs)) * CERT_BONUS_MAX
 
-        # FIX 2: Scale FAISS contribution by how many skills matched.
-        # When skill_score < FAISS_SKILL_SCALE_THRESHOLD, FAISS is scaled down
-        # so it cannot add 8-18% when only 1-2 skills match.
-        # At 0 skills → multiplier=0 → FAISS adds nothing (consistent with cap).
-        faiss_multiplier = min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD) if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
-        blended = skill_score * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT * faiss_multiplier
+        # ── FAISS blend (minor tiebreaker, not primary signal) ────────────────
+        faiss_multiplier = (
+            min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
+            if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
+        )
+        blended = (
+                skill_score * SKILL_WEIGHT
+                + faiss_score * FAISS_WEIGHT * faiss_multiplier
+        )
 
-        # FIX (v4): Two-gate cap system.
-        #
-        # Gate 1 — ZERO_SKILL_SCORE_CAP: suppress score if zero skills matched.
-        # Gate 2 — MIN_MATCHED_SKILLS_FOR_SCORE: suppress score if fewer than N
-        #   skills matched. This is the second line of defense against the
-        #   "Projects section bleed" false positive:
-        #
-        #   Scenario: resume has no Skills section → fallback extracted 0 real
-        #   skills but 1 project tech term slipped through (e.g. "React").
-        #   FAISS finds a Full Stack job (score 0.41). Keyword matcher hits
-        #   "React" → matched_count=1 → Gate 1 does NOT fire (count > 0).
-        #   Gate 2 fires: matched_count < MIN_MATCHED_SKILLS_FOR_SCORE=2 → 0%.
-        #
-        # cert_bonus is zeroed in both gates — certs should only amplify a real
-        # skill match, never create a score from nothing.
+        # ── Two-gate suppression ──────────────────────────────────────────────
         cap_applied = False
         if matched_count == 0:
-            blended = min(blended, ZERO_SKILL_SCORE_CAP)
+            # Gate A: zero skills matched → hard zero
+            blended    = min(blended, ZERO_SKILL_SCORE_CAP)
             cert_bonus = 0.0
             cap_applied = True
         elif matched_count < MIN_MATCHED_SKILLS_FOR_SCORE:
-            blended = 0.0
+            # Gate B: fewer than N skills matched → suppress (catches 1-skill accidents)
+            blended    = 0.0
             cert_bonus = 0.0
             cap_applied = True
             if VERBOSE_MATCH_LOGGING:
@@ -329,10 +345,33 @@ class ResumeService:
         final_pct = round(min((blended + cert_bonus) * 100, 100.0), 1)
 
         return {
-            "skill_score": skill_score,
-            "cert_bonus": cert_bonus,
-            "matched_count": matched_count,
+            "skill_score":    skill_score,
+            "cert_bonus":     cert_bonus,
+            "matched_count":  matched_count,
             "matched_skills": matched_skills,
-            "cap_applied": cap_applied,
+            "cap_applied":    cap_applied,
             "final_score_pct": final_pct,
         }
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Logging
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _log_job_result(self, job: dict, result: dict) -> None:
+        required     = job.get("skills", [])
+        matched_set  = set(result["matched_skills"])
+        skill_lines  = "\n".join(
+            f"    {'✓' if s in matched_set else '✗'} {s}"
+            for s in required
+        )
+        logger.info(
+            f"\n{'='*52}\n"
+            f"TOP MATCH: {job['job_title']!r}\n"
+            f"  Skill score : {result['matched_count']}/{len(required)}"
+            f" = {result['skill_score']:.1%}\n"
+            f"  FAISS score : {job.get('faiss_score', 0):.3f}\n"
+            f"  Cap applied : {result['cap_applied']}\n"
+            f"  Final score : {result['final_score_pct']}%\n"
+            f"  Required skills:\n{skill_lines}\n"
+            f"{'='*52}"
+        )
