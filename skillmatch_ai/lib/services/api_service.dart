@@ -16,7 +16,7 @@ class ApiService {
   // ── Base URL ────────────────────────────────────────────────────────────────
   // Production: your Render service URL
   static const String _baseUrl =
-      'https://skillmatch-ai-qopi.onrender.com/api/v1';
+      'https://skillmatch-ai-b5s7.onrender.com/api/v1';
 
   // Local development alternatives (comment/uncomment as needed):
   // static const String _baseUrl = 'http://10.0.2.2:8000/api/v1';       // Android emulator
