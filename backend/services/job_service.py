@@ -21,6 +21,7 @@ All thresholds live in matching_config.py.
 
 from __future__ import annotations
 
+import time
 import numpy as np
 from loguru import logger
 
@@ -59,14 +60,29 @@ except ModuleNotFoundError:
 
 class JobService:
 
+    # In-memory cache: avoids Firestore fetch on every skill-gap request.
+    # TTL of 10 minutes — refreshes if dataset is updated.
+    _jobs_cache: list[dict] = []
+    _cache_ts: float = 0.0
+    _CACHE_TTL: float = 600.0  # 10 minutes
+
     def __init__(self):
         self.embedder = EmbeddingEngine()
         self.normalizer = SkillNormalizer()
 
+    def _get_jobs(self) -> list[dict]:
+        """Return cached job list, refreshing if stale."""
+        now = time.time()
+        if not JobService._jobs_cache or (now - JobService._cache_ts) > JobService._CACHE_TTL:
+            JobService._jobs_cache = fetch_all_jobs()
+            JobService._cache_ts = now
+            logger.info(f"Job cache refreshed: {len(JobService._jobs_cache)} jobs loaded.")
+        return JobService._jobs_cache
+
     # ── Job lookup ──────────────────────────────────────────────────────────────
 
     def find_job_by_title(self, target_title: str) -> dict | None:
-        jobs = fetch_all_jobs()
+        jobs = self._get_jobs()
         if not jobs:
             return None
 
@@ -77,7 +93,13 @@ class JobService:
             if job["job_title"].lower() == target_lower:
                 return job
 
-        # 2. Embedding similarity
+        # 2. Substring match (e.g. "Software Engineer" matches "Senior Software Engineer")
+        for job in jobs:
+            if target_lower in job["job_title"].lower() or job["job_title"].lower() in target_lower:
+                logger.info(f"Substring title match: '{target_title}' → '{job['job_title']}'")
+                return job
+
+        # 3. Embedding similarity
         target_emb = self.embedder.embed(target_title)
         title_embeddings = self.embedder.embed_batch([j["job_title"] for j in jobs])
         sims = [float(np.dot(target_emb, t)) for t in title_embeddings]

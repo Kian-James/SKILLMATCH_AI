@@ -33,15 +33,18 @@ FIXES (v2):
 # Minimum keyword overlap fraction to count as a skill match
 # 0.6 = 60% of the required skill's words must appear in user skills
 # Lower → more lenient (catches more), Higher → stricter (fewer false matches)
-KEYWORD_OVERLAP_THRESHOLD: float = 0.75
+# Lowered from 0.75 → 0.60: catches more legitimate partial matches
+# e.g. "REST API Development" matching user skill "REST API"
+KEYWORD_OVERLAP_THRESHOLD: float = 0.60
 
 # Minimum cosine similarity for semantic skill matching
-# 0.75 = skills must be 75% semantically similar to count as matched
-# Lower → more lenient, Higher → stricter
-SEMANTIC_SKILL_THRESHOLD: float = 0.75
+# Lowered from 0.75 → 0.68: reduces false misses for semantically similar
+# but differently-worded skills e.g. "RESTful APIs" vs "REST API Development"
+SEMANTIC_SKILL_THRESHOLD: float = 0.68
 
 # Minimum cosine similarity for semantic CERTIFICATION matching
-SEMANTIC_CERT_THRESHOLD: float = 0.78
+# Lowered slightly from 0.78 → 0.75 for better cert matching
+SEMANTIC_CERT_THRESHOLD: float = 0.75
 
 # ── FAISS / job retrieval thresholds ─────────────────────────────────────────
 

@@ -145,48 +145,62 @@ CERT_PROVIDER_WORDS: set[str] = {
 KNOWN_SKILLS: list[str] = [
     "Python", "Java", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
     "Kotlin", "Swift", "R", "Scala", "PHP", "Ruby", "MATLAB", "Dart",
-    "Bash", "Shell", "PowerShell",
+    "Bash", "Shell", "PowerShell", "Groovy", "Perl", "Haskell", "Elixir",
     "React", "Angular", "Vue.js", "Node.js", "Django", "Flask", "FastAPI",
     "Spring Boot", "Express.js", "Next.js", "Nuxt.js", "Svelte", "jQuery",
-    "Laravel", "Ruby on Rails", "ASP.NET",
+    "Laravel", "Ruby on Rails", "ASP.NET", "Gatsby", "Remix", "Astro",
     "Flutter", "React Native", "Android", "iOS", "SwiftUI", "Jetpack Compose",
+    "Xamarin", "Ionic", "Capacitor",
     "TensorFlow", "PyTorch", "scikit-learn", "Keras", "Pandas", "NumPy",
     "FAISS", "HuggingFace", "spaCy", "NLTK", "OpenCV", "Spark", "Hadoop",
-    "Airflow", "dbt", "Kafka", "Flink", "Matplotlib", "Seaborn",
+    "Airflow", "dbt", "Kafka", "Flink", "Matplotlib", "Seaborn", "Plotly",
+    "LangChain", "LlamaIndex", "Transformers", "XGBoost", "LightGBM",
     "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "Ansible",
-    "Jenkins", "GitHub Actions", "GitLab CI", "CircleCI", "Helm",
-    "Linux", "Ubuntu", "Nginx", "Apache",
+    "Jenkins", "GitHub Actions", "GitLab CI", "CircleCI", "Helm", "ArgoCD",
+    "Linux", "Ubuntu", "Nginx", "Apache", "Pulumi", "CDK",
     "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra",
     "DynamoDB", "Firebase", "Firestore", "BigQuery", "Snowflake", "SQLite",
+    "MariaDB", "Oracle DB", "CockroachDB", "Supabase", "PlanetScale",
     "TCP/IP", "GraphQL", "gRPC", "OAuth", "JWT", "REST API", "RESTful APIs",
-    "Penetration Testing", "SIEM", "Firewalls",
+    "WebSockets", "MQTT", "RabbitMQ", "Celery", "Nginx", "Load Balancing",
+    "Penetration Testing", "SIEM", "Firewalls", "Zero Trust", "OWASP",
     "Git", "GitHub", "GitLab", "Jira", "Postman", "Swagger", "Figma",
+    "Bitbucket", "Confluence", "Notion", "Linear", "Trello",
     "Machine Learning", "Deep Learning", "NLP", "Computer Vision",
     "Data Structures", "Algorithms", "Microservices", "CI/CD",
-    "Agile", "Scrum", "System Design", "OOP", "Functional Programming",
-    "Data Engineering", "MLOps", "DevOps", "Cloud Architecture",
-    "CRUD", "MERN Stack", "MEAN Stack",
+    "Agile", "Scrum", "Kanban", "System Design", "OOP", "Functional Programming",
+    "Data Engineering", "MLOps", "DevOps", "Cloud Architecture", "SRE",
+    "CRUD", "MERN Stack", "MEAN Stack", "LAMP Stack",
     "Full Stack Development", "Backend Development", "Frontend Development",
     "Mobile Development", "Web Development", "API Development",
-    "Unit Testing", "TDD", "Responsive Design", "Version Control",
-    "Authentication", "Authorization", "Role-Based Access Control",
-    "Real-Time Data", "WebSockets",
+    "Unit Testing", "Integration Testing", "TDD", "BDD", "Responsive Design",
+    "Version Control", "Authentication", "Authorization",
+    "Role-Based Access Control", "Real-Time Data", "WebSockets",
     "Flutter & Firebase Development", "Flutter & Firebase",
-    "Git Version Control",
-    "REST APIs & Backend Development",
-    "CRUD Application Development",
-    "Blockchain", "Smart Contracts", "Solidity",
-    "Embedded Systems", "IoT", "Cybersecurity",
+    "Git Version Control", "REST APIs & Backend Development",
+    "CRUD Application Development", "Object-Oriented Programming",
+    "Blockchain", "Smart Contracts", "Solidity", "Web3",
+    "Embedded Systems", "IoT", "Cybersecurity", "Network Security",
     "Data Analysis", "Data Visualization", "Business Intelligence",
-    # Engineering / non-CS skills
+    "SQL", "NoSQL", "Data Modeling", "ETL", "Data Pipelines",
     "AutoCAD", "SolidWorks", "AutoCAD Plant 3D", "HVAC Design",
     "Preventive Maintenance", "Root Cause Analysis", "GD&T", "FEA Analysis",
     "Piping Design", "Engineering Calculations", "Cost Reduction",
     "Project Management", "CAD", "Process Flow Diagrams",
-    # Networking / distributed systems
     "Paxos", "Raft", "Microservices Architecture",
-    # Misc
-    "Microsoft Azure", "Version Control",
+    "Microsoft Azure", "Amazon Web Services", "Google Cloud Platform",
+    "Serverless", "Lambda Functions", "Cloud Functions",
+    "HTML", "CSS", "SASS", "SCSS", "Tailwind CSS", "Bootstrap",
+    "Material UI", "Chakra UI", "Styled Components",
+    "Webpack", "Vite", "Babel", "ESLint", "Prettier",
+    "Testing", "Jest", "Pytest", "Mocha", "Cypress", "Selenium",
+    "OpenAI API", "Prompt Engineering", "Vector Databases",
+    "Pinecone", "Weaviate", "ChromaDB", "Qdrant",
+    "Distributed Systems", "System Architecture", "Design Patterns",
+    "Clean Code", "SOLID Principles", "Domain-Driven Design",
+    "Event-Driven Architecture", "Message Queues",
+    "Monitoring", "Observability", "Prometheus", "Grafana", "Datadog",
+    "ELK Stack", "Splunk", "New Relic",
 ]
 
 
@@ -413,6 +427,24 @@ class NLPProcessor:
                 "extracting only from Skills section"
             )
             skills = self.extract_skills(skill_section, certifications)
+
+            # If Skills section exists but yields very few results (< 3),
+            # augment with Summary/Experience fallback to avoid under-extraction
+            # on sparse or unusually formatted skills sections.
+            if len(skills) < 3:
+                logger.warning(
+                    f"Skills section yielded only {len(skills)} skills — "
+                    "augmenting with Summary/Experience fallback"
+                )
+                safe_text = _extract_safe_fallback_text(cleaned)
+                fallback_skills = self.extract_skills(safe_text, certifications)
+                # Merge without duplicates, preserving order
+                existing_lower = {s.lower() for s in skills}
+                for s in fallback_skills:
+                    if s.lower() not in existing_lower:
+                        skills.append(s)
+                        existing_lower.add(s.lower())
+                skills = sorted(skills)
         else:
             # FIX BUG 6/7: DO NOT fall back to full-text extraction.
             # Full-text includes the Projects section, which contains tech terms
