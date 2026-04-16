@@ -15,7 +15,6 @@ backend/.env
 backend/firebase_service_account.json
 
 # Large ML artifacts - rebuilt from Firestore on deploy
-backend/faiss_index/
 backend/embedding_cache/
 
 # Dataset backup
