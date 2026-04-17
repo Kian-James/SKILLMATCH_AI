@@ -208,13 +208,46 @@ def extract_text(file_bytes: bytes, content_type: str) -> str:
     """
     Unified entry point. Routes to PDF or image extractor based on content type.
     """
+    text, _ = extract_text_flagged(file_bytes, content_type)
+    return text
+
+
+def extract_text_flagged(file_bytes: bytes, content_type: str) -> tuple[str, bool]:
+    """
+    Same as extract_text but also returns a bool indicating whether
+    Tesseract OCR was used (True) or clean text extraction was used (False).
+
+    The flag is used by ResumeService to skip OCR correction on clean PDFs —
+    pdfplumber output doesn't have OCR misreads so correction is unnecessary
+    and wastes 20+ seconds embedding the vocabulary.
+    """
     content_type = content_type.lower()
 
     if "pdf" in content_type:
-        return extract_text_from_pdf(file_bytes)
+        # Try pdfplumber / PyPDF2 first (clean text — no OCR correction needed)
+        if _PDFPLUMBER_AVAILABLE:
+            try:
+                text = _extract_pdf_text_pdfplumber(file_bytes)
+                if len(text) >= 100:
+                    return text, False   # clean extraction — skip OCR correction
+            except Exception:
+                pass
+        try:
+            import PyPDF2
+            reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+            combined = "\n".join(p.extract_text() or "" for p in reader.pages).strip()
+            if len(combined) >= 100:
+                return combined, False   # clean extraction
+        except Exception:
+            pass
+        # Fall through to Tesseract — flag as OCR
+        logger.info("Rasterizing PDF for Tesseract OCR...")
+        images   = convert_from_bytes(file_bytes, dpi=300)
+        all_text = [extract_text_from_image(img) for img in images]
+        return "\n\n".join(all_text).strip(), True
 
     if any(fmt in content_type for fmt in ["image", "png", "jpg", "jpeg", "tiff", "bmp", "webp"]):
         image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-        return extract_text_from_image(image)
+        return extract_text_from_image(image), True   # always Tesseract for images
 
     raise ValueError(f"Unsupported file type: {content_type}. Use PDF or image.")

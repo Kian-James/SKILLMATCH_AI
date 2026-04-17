@@ -239,6 +239,9 @@ def _expand_parentheticals(text: str) -> str:
         return original + "\n" + "\n".join(parts)
 
     return re.sub(r"\(([^)]{4,})\)", _expand, text)
+
+
+def _extract_section(text: str, header_patterns: list[str], label: str = "section") -> str | None:
     combined_header = "|".join(f"(?:{p})" for p in header_patterns)
     combined_next   = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
 

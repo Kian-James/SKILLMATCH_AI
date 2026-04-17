@@ -115,6 +115,14 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"Dynamic KNOWN_SKILLS injection failed (non-fatal): {e}")
 
+        # Pre-warm OCR correction vocab embeddings so first real request is fast
+        try:
+            from services.resume_service import _get_ocr_vocab_embs
+            _get_ocr_vocab_embs()
+            logger.info("OCR vocab embeddings pre-warmed.")
+        except Exception as e:
+            logger.warning(f"OCR vocab pre-warm failed (non-fatal): {e}")
+
         app.state.faiss_ready = True
         logger.info("All ML models ready.")
 

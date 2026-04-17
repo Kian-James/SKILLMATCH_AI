@@ -18,7 +18,7 @@ import math
 import numpy as np
 from loguru import logger
 
-from ai_modules.ocr_extractor import extract_text
+from ai_modules.ocr_extractor import extract_text, extract_text_flagged
 from ai_modules.nlp_processor import NLPProcessor
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
@@ -133,15 +133,20 @@ class ResumeService:
     # ──────────────────────────────────────────────────────────────────────────
 
     def analyze(self, file_bytes: bytes, content_type: str) -> dict:
-        # Step 1: OCR
+        # Step 1: OCR — returns (text, used_tesseract)
         logger.info("Step 1: OCR")
-        raw_text = extract_text(file_bytes, content_type)
+        raw_text, extracted_via_ocr = extract_text_flagged(file_bytes, content_type)
         if not raw_text or len(raw_text.strip()) < 20:
             raise ValueError("Could not extract meaningful text from the uploaded file.")
 
-        # Step 1b: OCR correction (token-level only — fast)
-        logger.info("Step 1b: OCR correction")
-        raw_text = self._ocr_correct(raw_text)
+        # Step 1b: OCR correction — only for image/scan paths, not clean PDF text.
+        # pdfplumber produces clean text; Tesseract produces noisy text.
+        # We flag which path was used so we can skip correction for clean extractions.
+        if extracted_via_ocr:
+            logger.info("Step 1b: OCR correction (scan/image detected)")
+            raw_text = self._ocr_correct(raw_text)
+        else:
+            logger.info("Step 1b: OCR correction skipped (clean PDF text)")
 
         # Step 2: NLP
         logger.info("Step 2: NLP")
