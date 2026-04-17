@@ -29,14 +29,13 @@ RUN pip install --no-cache-dir \
     scikit-learn==1.4.2
 
 # Layer 4: spaCy + model via direct wheel URL
-RUN pip install --no-cache-dir spacy==3.7.5 && \
+RUN pip install --no-cache-dir spacy==3.7.4 && \
     pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # Layer 5: App requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir pdfplumber==0.11.0
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Layer 6: Pre-download the embedding model into the image
 # all-MiniLM-L6-v2 is only 80MB — fits comfortably in free tier RAM
