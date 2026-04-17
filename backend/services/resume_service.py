@@ -1,31 +1,18 @@
 """
 services/resume_service.py
-Full resume analysis pipeline: OCR → NLP → Embed → FAISS → Skill Score
+Full resume analysis pipeline: OCR → NLP → Embed → FAISS → Score
 
-PIPELINE (unchanged steps 1-4, upgraded step 5):
-  Step 1  OCR         Extract raw text from PDF or image
-  Step 2  NLP         Section-aware extraction of skills + certifications
-                      + dynamic KNOWN_SKILLS from Firestore job corpus
-  Step 3  Embed       Cluster-aware query embedding (domain centroids, not flat mean)
-                      embed_batch(user_skills) — disk-cached
-  Step 4  FAISS       Top-K candidates via job index + MMR diversity re-ranking
-  Step 5  Score       Upgraded unified scoring:
-                        Gate 1: Exact normalized match
-                        Gate 2: Keyword overlap
-                        Gate 3: Skill-index fuzzy match (FAISS skill index, not dot loop)
-                        Gate 3b: Contextual embedding match (job_title: skill phrase)
-                      IDF-weighted skill score (rare skills count more)
-                      FAISS cosine used as continuous confidence multiplier (not binary gate)
-                      Cert bonus unchanged
-
-OCR correction pass (new):
-  After OCR, each extracted token that almost-matches a known skill
-  (cosine sim 0.88–0.99) is auto-corrected before NLP extraction.
-  Catches Tesseract misreads like "Pythan" → "Python".
+MEMORY NOTES:
+  - SkillClusterer is a module-level singleton (not per-request instance)
+  - OCR correction vocabulary embeddings are module-level (computed once)
+  - SkillNormalizer canonical embs are lazy, cached in the normalizer instance
+  - No skill embeddings stored in job metadata dicts — all via FAISS skill_index
+  - ctx embeddings fetched from compact float16 matrix in FAISSIndex
 """
 
 from __future__ import annotations
 
+import gc
 import math
 
 import numpy as np
@@ -63,17 +50,50 @@ except ModuleNotFoundError:
         MIN_MATCHED_SKILLS_FOR_SCORE,
     )
 
-# FAISS confidence sigmoid parameters
-# Maps FAISS cosine score → confidence multiplier in [0.7, 1.0]
-# At faiss_score=0.5: multiplier≈0.70 (30% discount)
-# At faiss_score=0.9: multiplier≈0.99 (nearly full credit)
 _SIGMOID_CENTER = 0.5
-_SIGMOID_SCALE = 8.0
-_CONF_MIN = 0.7
+_SIGMOID_SCALE  = 8.0
+_CONF_MIN       = 0.7
 
-# OCR correction: auto-correct tokens this similar to a known skill
-_OCR_CORRECTION_THRESHOLD_LOW  = 0.88
-_OCR_CORRECTION_THRESHOLD_HIGH = 0.995  # below 1.0 so exact matches aren't re-mapped
+_OCR_CORR_LOW  = 0.88
+_OCR_CORR_HIGH = 0.995
+
+# ── Module-level singletons (shared across requests, allocated once) ──────────
+_shared_embedder:   EmbeddingEngine | None = None
+_shared_clusterer:  SkillClusterer  | None = None
+_shared_normalizer: SkillNormalizer | None = None
+
+# OCR correction: vocabulary + embedding matrix (computed once on first use)
+_ocr_vocab:      list[str]       = list(SKILL_SYNONYMS.keys())
+_ocr_vocab_embs: np.ndarray | None = None   # (n_vocab, dim) float32
+
+
+def _get_embedder() -> EmbeddingEngine:
+    global _shared_embedder
+    if _shared_embedder is None:
+        _shared_embedder = EmbeddingEngine()
+    return _shared_embedder
+
+
+def _get_clusterer() -> SkillClusterer:
+    global _shared_clusterer
+    if _shared_clusterer is None:
+        _shared_clusterer = SkillClusterer()
+    return _shared_clusterer
+
+
+def _get_normalizer() -> SkillNormalizer:
+    global _shared_normalizer
+    if _shared_normalizer is None:
+        _shared_normalizer = SkillNormalizer()
+    return _shared_normalizer
+
+
+def _get_ocr_vocab_embs() -> np.ndarray:
+    global _ocr_vocab_embs
+    if _ocr_vocab_embs is None:
+        logger.debug("Computing OCR correction vocabulary embeddings (once)...")
+        _ocr_vocab_embs = _get_embedder().embed_batch(_ocr_vocab)
+    return _ocr_vocab_embs
 
 
 class ResumeService:
@@ -81,64 +101,48 @@ class ResumeService:
     def __init__(self, faiss_index: FAISSIndex):
         self.faiss      = faiss_index
         self.nlp        = NLPProcessor()
-        self.embedder   = EmbeddingEngine()
-        self.normalizer = SkillNormalizer()
-        self.clusterer  = SkillClusterer()
+        self.embedder   = _get_embedder()    # shared singleton
+        self.normalizer = _get_normalizer()  # shared singleton
+        self.clusterer  = _get_clusterer()   # shared singleton
 
-        # Canonical skill vocabulary for OCR correction
-        self._skill_vocab: list[str] = list(SKILL_SYNONYMS.keys())
-        self._skill_vocab_embs: np.ndarray | None = None
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Public API
     # ──────────────────────────────────────────────────────────────────────────
 
     def analyze(self, file_bytes: bytes, content_type: str) -> dict:
-        """
-        Full pipeline: OCR → OCR-correct → NLP → Embed (cluster-aware) →
-                       FAISS (MMR) → Score (IDF + confidence-weighted).
-        """
-        # ── Step 1: OCR ───────────────────────────────────────────────────────
+        # Step 1: OCR
         logger.info("Step 1: OCR")
         raw_text = extract_text(file_bytes, content_type)
         if not raw_text or len(raw_text.strip()) < 20:
-            raise ValueError(
-                "Could not extract meaningful text from the uploaded file."
-            )
+            raise ValueError("Could not extract meaningful text from the uploaded file.")
 
-        # ── Step 1b: OCR correction ────────────────────────────────────────────
+        # Step 1b: OCR correction (token-level only — fast)
         logger.info("Step 1b: OCR correction")
         raw_text = self._ocr_correct(raw_text)
 
-        # ── Step 2: NLP ───────────────────────────────────────────────────────
+        # Step 2: NLP
         logger.info("Step 2: NLP")
         extracted      = self.nlp.process(raw_text)
         skills         = extracted["skills"]
         certifications = extracted["certifications"]
 
         if VERBOSE_MATCH_LOGGING:
-            logger.info(f"  Extracted skills: {skills}")
-            logger.info(f"  Extracted certs : {certifications}")
+            logger.info(f"  Skills : {skills}")
+            logger.info(f"  Certs  : {certifications}")
 
-        # ── Step 3: Cluster-aware query embedding ──────────────────────────────
+        # Step 3: Cluster-aware embedding
         logger.info("Step 3: Cluster-aware embedding")
         user_embs = self._embed_user_profile_clustered(skills, certifications)
 
-        # ── Step 4: FAISS candidate retrieval (MMR diversity) ─────────────────
-        logger.info("Step 4: FAISS retrieval + MMR re-ranking")
+        # Step 4: FAISS retrieval + MMR
+        logger.info("Step 4: FAISS retrieval + MMR")
         faiss_results = self.faiss.search(user_embs["query"], top_k=5)
 
-        # ── Step 5: Upgraded scoring ───────────────────────────────────────────
-        logger.info("Step 5: IDF + confidence-weighted scoring")
+        # Step 5: Scoring
+        logger.info("Step 5: Scoring")
         scored_jobs = []
         for job in faiss_results:
             raw_faiss = job.get("faiss_score", 0.0)
-
             if raw_faiss < FAISS_MIN_SCORE_THRESHOLD:
-                logger.debug(
-                    f"Skipping '{job['job_title']}': "
-                    f"faiss={raw_faiss:.3f} < {FAISS_MIN_SCORE_THRESHOLD}"
-                )
+                logger.debug(f"Skip '{job['job_title']}': faiss={raw_faiss:.3f}")
                 continue
 
             result = self._compute_unified_score(
@@ -176,87 +180,47 @@ class ResumeService:
             "query_embedding":  user_embs["query"].tolist(),
         }
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # OCR correction
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _get_skill_vocab_embs(self) -> np.ndarray:
-        if self._skill_vocab_embs is None:
-            self._skill_vocab_embs = self.embedder.embed_batch(self._skill_vocab)
-        return self._skill_vocab_embs
+    # ── OCR correction ────────────────────────────────────────────────────────
 
     def _ocr_correct(self, text: str) -> str:
-        """
-        Correct likely OCR misreads of skill names using embedding similarity.
-        Tokens that are close-but-not-exact to a known canonical skill are replaced.
-        Only corrects individual word tokens (not phrases) to avoid false rewrites.
-        """
         try:
-            vocab_embs = self._get_skill_vocab_embs()
-            words = text.split()
-            corrected_words = []
+            vocab_embs = _get_ocr_vocab_embs()
+            words      = text.split()
+            out        = []
             corrections = 0
 
             for word in words:
-                # Only attempt correction on plausibly skill-like tokens
                 clean = word.strip(".,;:()[]\"'")
                 if len(clean) < 3 or not any(c.isalpha() for c in clean):
-                    corrected_words.append(word)
+                    out.append(word)
                     continue
-
                 try:
-                    emb = self.embedder.embed(clean)
-                    sims = vocab_embs @ emb
+                    emb      = self.embedder.embed(clean)
+                    sims     = vocab_embs @ emb
                     best_idx = int(np.argmax(sims))
                     best_sim = float(sims[best_idx])
-
-                    if _OCR_CORRECTION_THRESHOLD_LOW <= best_sim < _OCR_CORRECTION_THRESHOLD_HIGH:
-                        corrected = self._skill_vocab[best_idx]
-                        logger.debug(
-                            f"OCR correction: '{clean}' → '{corrected}' (sim={best_sim:.3f})"
-                        )
-                        # Preserve surrounding punctuation
-                        corrected_words.append(
-                            word.replace(clean, corrected)
-                        )
+                    if _OCR_CORR_LOW <= best_sim < _OCR_CORR_HIGH:
+                        corrected = _ocr_vocab[best_idx]
+                        logger.debug(f"OCR: '{clean}' → '{corrected}' ({best_sim:.3f})")
+                        out.append(word.replace(clean, corrected))
                         corrections += 1
                         continue
                 except Exception:
                     pass
-
-                corrected_words.append(word)
+                out.append(word)
 
             if corrections:
-                logger.info(f"OCR correction: {corrections} token(s) auto-corrected.")
-
-            return " ".join(corrected_words)
-
+                logger.info(f"OCR correction: {corrections} token(s) corrected.")
+            return " ".join(out)
         except Exception as e:
-            logger.warning(f"OCR correction pass failed (non-fatal): {e}")
+            logger.warning(f"OCR correction failed (non-fatal): {e}")
             return text
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Cluster-aware embedding
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── Cluster-aware embedding ───────────────────────────────────────────────
 
     def _embed_user_profile_clustered(
-        self,
-        skills: list[str],
-        certifications: list[str],
+        self, skills: list[str], certifications: list[str]
     ) -> dict:
-        """
-        Build a cluster-aware FAISS query vector.
-
-        Instead of a flat mean of all skill embeddings (which collapses
-        multi-domain profiles into a generic blob), cluster skills into
-        domains first, then average the per-domain centroids. This preserves
-        the shape of a candidate's multi-domain profile.
-
-        Returns:
-          query   — (dim,) normalized query vector for FAISS
-          skills  — (n_skills, dim) per-skill embeddings
-          certs   — (n_certs,  dim) per-cert embeddings
-        """
         dim = self.embedder.model.get_sentence_embedding_dimension()
 
         skill_embs = (
@@ -270,28 +234,24 @@ class ResumeService:
 
         if not skills:
             return {
-                "query": np.zeros(dim, dtype=np.float32),
+                "query":  np.zeros(dim, dtype=np.float32),
                 "skills": skill_embs,
-                "certs": cert_embs,
+                "certs":  cert_embs,
             }
 
-        # Cluster skills → domain centroids
         try:
-            clusters = self.clusterer.cluster_skills(skills)
-            domain_vecs = []
-            for domain_skills in clusters.values():
-                if domain_skills:
-                    domain_vecs.append(
-                        self.embedder.embed_skill_list(domain_skills)
-                    )
-
-            if domain_vecs:
-                query = np.mean(domain_vecs, axis=0).astype(np.float32)
-            else:
-                query = skill_embs.mean(axis=0).astype(np.float32)
-
+            clusters    = self.clusterer.cluster_skills(skills)
+            domain_vecs = [
+                self.embedder.embed_skill_list(cs)
+                for cs in clusters.values() if cs
+            ]
+            query = (
+                np.mean(domain_vecs, axis=0).astype(np.float32)
+                if domain_vecs
+                else skill_embs.mean(axis=0).astype(np.float32)
+            )
         except Exception as e:
-            logger.warning(f"Clustering failed, falling back to mean embedding: {e}")
+            logger.warning(f"Clustering failed, using mean: {e}")
             query = skill_embs.mean(axis=0).astype(np.float32)
 
         norm = np.linalg.norm(query)
@@ -300,9 +260,7 @@ class ResumeService:
 
         return {"query": query, "skills": skill_embs, "certs": cert_embs}
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Scoring
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── Scoring ───────────────────────────────────────────────────────────────
 
     def _compute_unified_score(
         self,
@@ -313,23 +271,8 @@ class ResumeService:
         job:             dict,
         faiss_score:     float = 0.0,
     ) -> dict:
-        """
-        IDF-weighted, confidence-adjusted skill-overlap score.
-
-        Matching gates per required skill (in priority order):
-          1. Exact normalized match
-          2. Keyword overlap  (>= KEYWORD_OVERLAP_THRESHOLD)
-          3a. Skill-index fuzzy match via FAISS skill_index (new)
-          3b. Contextual embedding match (job_title: skill phrase)
-          3c. Bare embedding dot-product fallback
-
-        IDF weighting: rare skills count more than common ones.
-        FAISS confidence: multiplies the skill score (0.7–1.0 range).
-        """
-        required_skills:       list[str]       = job.get("skills", [])
-        required_certs:        list[str]       = job.get("certifications", [])
-        job_skill_embs:        list[np.ndarray] = job.get("skill_embeddings", [])
-        job_skill_ctx_embs:    list[np.ndarray] = job.get("skill_ctx_embeddings", [])
+        required_skills: list[str] = job.get("skills", [])
+        required_certs:  list[str] = job.get("certifications", [])
 
         if not required_skills:
             return {
@@ -338,35 +281,39 @@ class ResumeService:
                 "cap_applied": False, "final_score_pct": 0.0,
             }
 
-        # Build user lookup structures
+        # Build user lookup
         user_normalized: set[str] = set()
         user_keywords:   set[str] = set()
-
         for s in user_skills:
             norm = self.normalizer.normalize(s)
             if norm:
                 user_normalized.add(norm.lower())
-            for word in s.lower().split():
-                if len(word) > 2:
-                    user_keywords.add(word)
+            for w in s.lower().split():
+                if len(w) > 2:
+                    user_keywords.add(w)
         for cert in user_certs:
-            for word in cert.lower().split():
-                if len(word) > 3:
-                    user_keywords.add(word)
+            for w in cert.lower().split():
+                if len(w) > 3:
+                    user_keywords.add(w)
 
-        # ── Match each required skill ─────────────────────────────────────────
+        # Find the global skill offset for this job so we can look up ctx embeddings
+        job_idx = next(
+            (i for i, m in enumerate(self.faiss.metadata) if m is job),
+            None
+        )
+        ctx_start = self.faiss.get_skill_global_offset(job_idx) if job_idx is not None else -1
+
         matched_count   = 0
         matched_skills: list[str] = []
         matched_weights: list[float] = []
         total_weight    = 0.0
-
-        idf = self.faiss.idf_weights
+        idf             = self.faiss.idf_weights
 
         for i, req_skill in enumerate(required_skills):
             norm_req   = (self.normalizer.normalize(req_skill) or req_skill).lower()
             matched_by = None
 
-            # Gate 1: Exact normalized match
+            # Gate 1: Exact
             if norm_req in user_normalized:
                 matched_by = "exact"
 
@@ -378,32 +325,24 @@ class ResumeService:
                     if overlap >= KEYWORD_OVERLAP_THRESHOLD:
                         matched_by = "keyword"
 
-            # Gate 3a: FAISS skill-index fuzzy match (per-skill search)
+            # Gate 3a: FAISS skill index (one search per user skill)
             if not matched_by and user_skill_embs.shape[0] > 0:
-                # Try each user skill embedding against the skill FAISS index
                 for user_emb in user_skill_embs:
-                    closest_skill, sim = self.faiss.find_closest_skill(
+                    closest, sim = self.faiss.find_closest_skill(
                         user_emb, threshold=SEMANTIC_SKILL_THRESHOLD
                     )
-                    if closest_skill and closest_skill.lower() == norm_req:
-                        matched_by = f"skill_index({sim:.2f})"
+                    if closest and closest.lower() == norm_req:
+                        matched_by = f"skill_idx({sim:.2f})"
                         break
 
-            # Gate 3b: Contextual embedding match
-            if not matched_by and i < len(job_skill_ctx_embs) and user_skill_embs.shape[0] > 0:
-                ctx_emb = job_skill_ctx_embs[i]
-                sims_ctx = user_skill_embs @ ctx_emb
-                if float(sims_ctx.max()) >= SEMANTIC_SKILL_THRESHOLD:
-                    matched_by = "ctx_embed"
+            # Gate 3b: Contextual embedding (float16 → float32 upcast)
+            if not matched_by and ctx_start >= 0 and user_skill_embs.shape[0] > 0:
+                ctx_emb = self.faiss.get_ctx_embedding(ctx_start + i)
+                if ctx_emb is not None:
+                    sims_ctx = user_skill_embs @ ctx_emb
+                    if float(sims_ctx.max()) >= SEMANTIC_SKILL_THRESHOLD:
+                        matched_by = "ctx_embed"
 
-            # Gate 3c: Bare embedding dot-product fallback
-            if not matched_by and i < len(job_skill_embs) and user_skill_embs.shape[0] > 0:
-                job_skill_emb = job_skill_embs[i]
-                sims = user_skill_embs @ job_skill_emb
-                if float(sims.max()) >= SEMANTIC_SKILL_THRESHOLD:
-                    matched_by = "bare_embed"
-
-            # IDF weight for this skill
             skill_weight = idf.get(req_skill.lower(), 1.0)
             total_weight += skill_weight
 
@@ -412,40 +351,28 @@ class ResumeService:
                 matched_skills.append(req_skill)
                 matched_weights.append(skill_weight)
                 if VERBOSE_MATCH_LOGGING:
-                    logger.debug(f"  ✓ '{req_skill}' [{matched_by}] (idf={skill_weight:.2f})")
+                    logger.debug(f"  ✓ '{req_skill}' [{matched_by}] idf={skill_weight:.2f}")
             else:
                 if VERBOSE_MATCH_LOGGING:
-                    logger.debug(f"  ✗ '{req_skill}' [no match] (idf={skill_weight:.2f})")
+                    logger.debug(f"  ✗ '{req_skill}' [no match] idf={skill_weight:.2f}")
 
-        # IDF-weighted skill score
-        skill_score = (
-            sum(matched_weights) / total_weight
-            if total_weight > 0 else 0.0
-        )
+        skill_score = sum(matched_weights) / total_weight if total_weight > 0 else 0.0
 
-        # ── Certification bonus ───────────────────────────────────────────────
+        # Cert bonus
         cert_bonus = 0.0
         if required_certs and user_cert_embs.shape[0] > 0:
-            cert_matched = 0
-            for req_cert in required_certs:
-                try:
-                    req_emb = self.embedder.embed(req_cert)
-                    sims = user_cert_embs @ req_emb
-                    if float(sims.max()) >= SEMANTIC_CERT_THRESHOLD:
-                        cert_matched += 1
-                except Exception:
-                    pass
+            cert_matched = sum(
+                1 for rc in required_certs
+                if self._cert_matches(rc, user_cert_embs)
+            )
             cert_bonus = (cert_matched / len(required_certs)) * CERT_BONUS_MAX
 
-        # ── FAISS confidence multiplier (continuous, not binary) ──────────────
-        # sigmoid maps faiss_score → multiplier in [_CONF_MIN, 1.0]
-        sigmoid = 1.0 / (1.0 + math.exp(
-            -_SIGMOID_SCALE * (faiss_score - _SIGMOID_CENTER)
-        ))
+        # FAISS confidence sigmoid multiplier
+        sigmoid    = 1.0 / (1.0 + math.exp(-_SIGMOID_SCALE * (faiss_score - _SIGMOID_CENTER)))
         confidence = _CONF_MIN + (1.0 - _CONF_MIN) * sigmoid
-        blended = skill_score * confidence
+        blended    = skill_score * confidence
 
-        # ── Two-gate suppression (unchanged) ─────────────────────────────────
+        # Suppression gates
         cap_applied = False
         if matched_count == 0:
             blended    = min(blended, ZERO_SKILL_SCORE_CAP)
@@ -455,44 +382,40 @@ class ResumeService:
             blended    = 0.0
             cert_bonus = 0.0
             cap_applied = True
-            if VERBOSE_MATCH_LOGGING:
-                logger.debug(
-                    f"  Score suppressed: matched_count={matched_count} "
-                    f"< MIN_MATCHED_SKILLS_FOR_SCORE={MIN_MATCHED_SKILLS_FOR_SCORE}"
-                )
 
         final_pct = round(min((blended + cert_bonus) * 100, 100.0), 1)
 
         return {
-            "skill_score":    skill_score,
-            "cert_bonus":     cert_bonus,
-            "matched_count":  matched_count,
-            "matched_skills": matched_skills,
-            "cap_applied":    cap_applied,
+            "skill_score":     skill_score,
+            "cert_bonus":      cert_bonus,
+            "matched_count":   matched_count,
+            "matched_skills":  matched_skills,
+            "cap_applied":     cap_applied,
             "final_score_pct": final_pct,
-            "confidence":     round(confidence, 3),
+            "confidence":      round(confidence, 3),
         }
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Logging
-    # ──────────────────────────────────────────────────────────────────────────
+    def _cert_matches(self, req_cert: str, user_cert_embs: np.ndarray) -> bool:
+        try:
+            req_emb = self.embedder.embed(req_cert)
+            sims    = user_cert_embs @ req_emb
+            return float(sims.max()) >= SEMANTIC_CERT_THRESHOLD
+        except Exception:
+            return False
 
     def _log_job_result(self, job: dict, result: dict) -> None:
         required    = job.get("skills", [])
         matched_set = set(result["matched_skills"])
         skill_lines = "\n".join(
-            f"    {'✓' if s in matched_set else '✗'} {s}"
-            for s in required
+            f"    {'✓' if s in matched_set else '✗'} {s}" for s in required
         )
         logger.info(
             f"\n{'='*52}\n"
             f"TOP MATCH: {job['job_title']!r}\n"
-            f"  Skill score  : {result['matched_count']}/{len(required)}"
+            f"  Score  : {result['matched_count']}/{len(required)}"
             f" = {result['skill_score']:.1%} (IDF-weighted)\n"
-            f"  FAISS score  : {job.get('faiss_score', 0):.3f}"
-            f"  → confidence={result.get('confidence', 1.0):.3f}\n"
-            f"  Cap applied  : {result['cap_applied']}\n"
-            f"  Final score  : {result['final_score_pct']}%\n"
-            f"  Required skills:\n{skill_lines}\n"
+            f"  FAISS  : confidence={result.get('confidence',1.0):.3f}\n"
+            f"  Final  : {result['final_score_pct']}%\n"
+            f"  Skills :\n{skill_lines}\n"
             f"{'='*52}"
         )

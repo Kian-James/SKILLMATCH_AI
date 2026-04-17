@@ -35,7 +35,8 @@ RUN pip install --no-cache-dir spacy==3.7.4 && \
 
 # Layer 5: App requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir pdfplumber==0.11.0
 
 # Layer 6: Pre-download the embedding model into the image
 # all-MiniLM-L6-v2 is only 80MB — fits comfortably in free tier RAM
