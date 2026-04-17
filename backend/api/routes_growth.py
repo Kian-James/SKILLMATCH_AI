@@ -39,6 +39,8 @@ class GrowthResponse(BaseModel):
     new_skills_count: int
     improvement_streak: int
     time_series: list[TimeSeriesPoint]
+    trajectory_score: float | None = None   # cosine sim oldest→newest profile
+    career_direction: str | None = None     # nearest job title to latest profile
 
 
 @router.get("/growth-tracking", response_model=GrowthResponse)
@@ -83,4 +85,6 @@ async def growth_tracking(
         new_skills_count=data["new_skills_count"],
         improvement_streak=data["improvement_streak"],
         time_series=[TimeSeriesPoint(**p) for p in data["time_series"]],
+        trajectory_score=data.get("trajectory_score"),
+        career_direction=data.get("career_direction"),
     )

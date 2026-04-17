@@ -352,11 +352,25 @@ def _deduplicate_certs(raw_certs: list[str]) -> list[str]:
 
 class NLPProcessor:
 
+    # Class-level dynamic matcher injected by main.py after Firestore job corpus
+    # is loaded. Falls back to static KNOWN_SKILLS matcher if not yet injected.
+    _dynamic_matcher = None
+
     def __init__(self, extra_skills: list[str] | None = None):
         self.nlp = _load_nlp_model()
         self.normalizer = SkillNormalizer()
         all_skills = KNOWN_SKILLS + (extra_skills or [])
-        self.matcher = _build_phrase_matcher(self.nlp, all_skills)
+        self._static_matcher = _build_phrase_matcher(self.nlp, all_skills)
+
+    @property
+    def matcher(self):
+        # Prefer the dynamic matcher (expanded with Firestore job skills)
+        # if main.py has injected it; otherwise use the static one.
+        return NLPProcessor._dynamic_matcher or self._static_matcher
+
+    @matcher.setter
+    def matcher(self, value):
+        self._static_matcher = value
 
     def extract_certifications(self, text: str) -> list[str]:
         raw: list[str] = []

@@ -1,44 +1,36 @@
 """
 services/job_service.py
-Skill gap detection with unified, calibrated scoring.
+Skill gap detection with IDF-weighted, confidence-adjusted scoring.
 
-ROOT CAUSE FIX:
-  Before: FAISS score and skill match score were computed independently.
-  The displayed % came from FAISS (resume embedding similarity) while the
-  skill chips showed 0 matched — making the score look wrong (60% / 0 skills).
-
-  Now: Score = skill_match * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT
-  If 0 skills matched, score is capped at ZERO_SKILL_SCORE_CAP (default 0%).
-  This makes the displayed % always consistent with the skill chips shown.
-
-Matching pipeline per required skill:
+Matching pipeline per required skill (same gates as resume_service):
   1. Exact normalized match
   2. Keyword overlap (configurable threshold)
   3. Semantic embedding (configurable threshold)
 
-All thresholds live in matching_config.py.
+IDF weighting and FAISS confidence multiplier applied consistently
+with resume_service so skill-gap scores are comparable to match scores.
 """
 
 from __future__ import annotations
 
+import math
 import time
+
 import numpy as np
 from loguru import logger
 
 from services.firebase_service import fetch_all_jobs
 from ai_modules.embedding_engine import EmbeddingEngine
 from utils.skill_normalizer import SkillNormalizer
+
 try:
     from matching_config import (
         KEYWORD_OVERLAP_THRESHOLD,
         SEMANTIC_SKILL_THRESHOLD,
         SEMANTIC_CERT_THRESHOLD,
         JOB_TITLE_MATCH_THRESHOLD,
-        SKILL_WEIGHT,
-        FAISS_WEIGHT,
         CERT_BONUS_MAX,
         ZERO_SKILL_SCORE_CAP,
-        FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
     )
 except ModuleNotFoundError:
@@ -49,37 +41,50 @@ except ModuleNotFoundError:
         SEMANTIC_SKILL_THRESHOLD,
         SEMANTIC_CERT_THRESHOLD,
         JOB_TITLE_MATCH_THRESHOLD,
-        SKILL_WEIGHT,
-        FAISS_WEIGHT,
         CERT_BONUS_MAX,
         ZERO_SKILL_SCORE_CAP,
-        FAISS_SKILL_SCALE_THRESHOLD,
         VERBOSE_MATCH_LOGGING,
     )
+
+_SIGMOID_CENTER = 0.5
+_SIGMOID_SCALE  = 8.0
+_CONF_MIN       = 0.7
 
 
 class JobService:
 
-    # In-memory cache: avoids Firestore fetch on every skill-gap request.
-    # TTL of 10 minutes — refreshes if dataset is updated.
     _jobs_cache: list[dict] = []
-    _cache_ts: float = 0.0
-    _CACHE_TTL: float = 600.0  # 10 minutes
+    _idf_cache:  dict[str, float] = {}
+    _cache_ts:   float = 0.0
+    _CACHE_TTL:  float = 600.0
 
     def __init__(self):
-        self.embedder = EmbeddingEngine()
+        self.embedder   = EmbeddingEngine()
         self.normalizer = SkillNormalizer()
 
     def _get_jobs(self) -> list[dict]:
-        """Return cached job list, refreshing if stale."""
         now = time.time()
         if not JobService._jobs_cache or (now - JobService._cache_ts) > JobService._CACHE_TTL:
             JobService._jobs_cache = fetch_all_jobs()
-            JobService._cache_ts = now
-            logger.info(f"Job cache refreshed: {len(JobService._jobs_cache)} jobs loaded.")
+            JobService._cache_ts   = now
+
+            # Recompute IDF weights from fresh job list
+            N = len(JobService._jobs_cache)
+            if N > 0:
+                from collections import Counter
+                freq: Counter = Counter()
+                for job in JobService._jobs_cache:
+                    freq.update(set(s.lower() for s in job.get("skills", [])))
+                JobService._idf_cache = {
+                    skill: math.log(N / f) for skill, f in freq.items() if f > 0
+                }
+            logger.info(
+                f"Job cache refreshed: {len(JobService._jobs_cache)} jobs, "
+                f"{len(JobService._idf_cache)} IDF weights."
+            )
         return JobService._jobs_cache
 
-    # ── Job lookup ──────────────────────────────────────────────────────────────
+    # ── Job lookup ────────────────────────────────────────────────────────────
 
     def find_job_by_title(self, target_title: str) -> dict | None:
         jobs = self._get_jobs()
@@ -88,65 +93,63 @@ class JobService:
 
         target_lower = target_title.lower().strip()
 
-        # 1. Exact match
+        # 1. Exact
         for job in jobs:
             if job["job_title"].lower() == target_lower:
                 return job
 
-        # 2. Substring match (e.g. "Software Engineer" matches "Senior Software Engineer")
+        # 2. Substring
         for job in jobs:
-            if target_lower in job["job_title"].lower() or job["job_title"].lower() in target_lower:
-                logger.info(f"Substring title match: '{target_title}' → '{job['job_title']}'")
+            if (target_lower in job["job_title"].lower()
+                    or job["job_title"].lower() in target_lower):
+                logger.info(f"Substring match: '{target_title}' → '{job['job_title']}'")
                 return job
 
         # 3. Embedding similarity
-        target_emb = self.embedder.embed(target_title)
-        title_embeddings = self.embedder.embed_batch([j["job_title"] for j in jobs])
-        sims = [float(np.dot(target_emb, t)) for t in title_embeddings]
-        best_idx = int(np.argmax(sims))
-        best_sim = sims[best_idx]
+        target_emb    = self.embedder.embed(target_title)
+        title_embs    = self.embedder.embed_batch([j["job_title"] for j in jobs])
+        sims          = [float(np.dot(target_emb, t)) for t in title_embs]
+        best_idx      = int(np.argmax(sims))
+        best_sim      = sims[best_idx]
 
         if best_sim >= JOB_TITLE_MATCH_THRESHOLD:
             matched = jobs[best_idx]
             logger.info(
                 f"Fuzzy title match: '{target_title}' → '{matched['job_title']}' "
-                f"(sim={best_sim:.3f}, threshold={JOB_TITLE_MATCH_THRESHOLD})"
+                f"(sim={best_sim:.3f})"
             )
             return matched
 
         logger.warning(
-            f"No job match found for '{target_title}' "
-            f"(best sim={best_sim:.3f} < {JOB_TITLE_MATCH_THRESHOLD})"
+            f"No job match for '{target_title}' (best sim={best_sim:.3f} "
+            f"< {JOB_TITLE_MATCH_THRESHOLD})"
         )
         return None
 
-    # ── Skill gap ───────────────────────────────────────────────────────────────
+    # ── Skill gap ─────────────────────────────────────────────────────────────
 
     def compute_skill_gap(
-            self,
-            user_skills: list[str],
-            target_job_title: str,
-            user_certifications: list[str] | None = None,
-            faiss_score: float | None = None,  # pass in if available (from FAISS search)
+        self,
+        user_skills:         list[str],
+        target_job_title:    str,
+        user_certifications: list[str] | None = None,
+        faiss_score:         float | None = None,
     ) -> dict:
         """
-        Compute skill gap and unified match score.
-
-        faiss_score: cosine similarity from FAISS (0-1). If provided, it is
-                     blended into the final score. If None, score is purely
-                     based on skill matching.
+        IDF-weighted skill gap with optional FAISS confidence multiplier.
         """
+        self._get_jobs()   # ensure IDF cache is warm
         job = self.find_job_by_title(target_job_title)
         if job is None:
             return {"error": f"Job '{target_job_title}' not found.", "found": False}
 
         required_skills: list[str] = job.get("skills", [])
-        required_certs: list[str] = job.get("certifications", [])
+        required_certs:  list[str] = job.get("certifications", [])
         user_certs = user_certifications or []
 
-        # Build user skill lookup structures
+        # Build user lookup structures
         user_normalized: set[str] = set()
-        user_keywords: set[str] = set()
+        user_keywords:   set[str] = set()
 
         for s in user_skills:
             norm = self.normalizer.normalize(s)
@@ -155,8 +158,6 @@ class JobService:
             for word in s.lower().split():
                 if len(word) > 2:
                     user_keywords.add(word)
-
-        # Add cert keywords too (Cisco ITF+ cert helps with networking roles etc.)
         for cert in user_certs:
             for word in cert.lower().split():
                 if len(word) > 3:
@@ -166,130 +167,116 @@ class JobService:
         matched: list[str] = []
         missing: list[str] = []
         match_log: list[str] = []
+        matched_weights: list[float] = []
+        total_weight = 0.0
+
+        idf = JobService._idf_cache
 
         for req_skill in required_skills:
-            norm_req = (self.normalizer.normalize(req_skill) or req_skill).lower()
+            norm_req   = (self.normalizer.normalize(req_skill) or req_skill).lower()
             matched_by: str | None = None
 
-            # 1. Exact normalized match
+            # Gate 1: Exact
             if norm_req in user_normalized:
                 matched_by = "exact"
 
-            # 2. Keyword overlap
+            # Gate 2: Keyword overlap
             if not matched_by:
                 req_words = {w for w in req_skill.lower().split() if len(w) > 2}
                 if req_words:
-                    overlap_ratio = len(req_words & user_keywords) / len(req_words)
-                    if overlap_ratio >= KEYWORD_OVERLAP_THRESHOLD:
-                        matched_by = f"keyword_overlap({overlap_ratio:.0%})"
+                    ratio = len(req_words & user_keywords) / len(req_words)
+                    if ratio >= KEYWORD_OVERLAP_THRESHOLD:
+                        matched_by = f"keyword_overlap({ratio:.0%})"
 
-            # 3. Semantic embedding
+            # Gate 3: Semantic embedding
             if not matched_by:
-                if self._semantic_match(req_skill, list(user_skills), SEMANTIC_SKILL_THRESHOLD):
-                    matched_by = f"semantic(≥{SEMANTIC_SKILL_THRESHOLD})"
+                if self._semantic_match(req_skill, list(user_skills),
+                                        SEMANTIC_SKILL_THRESHOLD):
+                    matched_by = f"semantic(>={SEMANTIC_SKILL_THRESHOLD})"
+
+            skill_weight = idf.get(req_skill.lower(), 1.0)
+            total_weight += skill_weight
 
             if matched_by:
                 matched.append(req_skill)
-                match_log.append(f"  ✓ {req_skill!r} [{matched_by}]")
+                matched_weights.append(skill_weight)
+                match_log.append(f"  ✓ {req_skill!r} [{matched_by}] (idf={skill_weight:.2f})")
             else:
                 missing.append(req_skill)
-                match_log.append(f"  ✗ {req_skill!r} [no match]")
+                match_log.append(f"  ✗ {req_skill!r} [no match] (idf={skill_weight:.2f})")
 
-        # ── Certification bonus ───────────────────────────────────────────────
+        # IDF-weighted skill score
+        total_required = len(required_skills)
+        skill_score = (
+            sum(matched_weights) / total_weight if total_weight > 0 else 0.0
+        )
+
+        # Cert bonus
         cert_matched = 0
         if required_certs and user_certs:
             for req_cert in required_certs:
                 if self._semantic_match(req_cert, user_certs, SEMANTIC_CERT_THRESHOLD):
                     cert_matched += 1
-
-        # ── Unified score calculation ─────────────────────────────────────────
-        total_required = len(required_skills)
-        skill_score = len(matched) / total_required if total_required > 0 else 0.0
-
-        # Cert bonus (proportional, capped at CERT_BONUS_MAX)
         cert_bonus = 0.0
         if required_certs:
             cert_bonus = (cert_matched / len(required_certs)) * CERT_BONUS_MAX
 
-        # Blend skill + FAISS scores.
-        # FAISS contribution is scaled by how many skills matched so it cannot
-        # inflate the score when only 1-2 skills are present (mirrors resume_service fix).
+        # FAISS confidence multiplier (if provided)
         if faiss_score is not None:
-            faiss_multiplier = (
-                min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
-                if FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
-            )
-            blended = skill_score * SKILL_WEIGHT + faiss_score * FAISS_WEIGHT * faiss_multiplier
+            sigmoid = 1.0 / (1.0 + math.exp(
+                -_SIGMOID_SCALE * (faiss_score - _SIGMOID_CENTER)
+            ))
+            confidence = _CONF_MIN + (1.0 - _CONF_MIN) * sigmoid
+            blended = skill_score * confidence
         else:
-            blended = skill_score  # skill-only when no FAISS score is available
+            blended = skill_score
 
-        # Cap at ZERO_SKILL_SCORE_CAP when no skills matched.
-        # cert_bonus is also zeroed — certifications must not create a score
-        # from nothing when zero skills match. Previously cert_bonus was added
-        # after this block, bypassing the cap entirely.
+        # Cap when no skills matched
         if len(matched) == 0:
-            blended = min(blended, ZERO_SKILL_SCORE_CAP)
-            cert_bonus = 0.0   # ← THE FIX: zero cert bonus when no skills match
+            blended    = min(blended, ZERO_SKILL_SCORE_CAP)
+            cert_bonus = 0.0
 
         final_score = round(min((blended + cert_bonus) * 100, 100.0), 1)
 
-        # ── Logging ───────────────────────────────────────────────────────────
         if VERBOSE_MATCH_LOGGING:
-            faiss_mult_val = (
-                min(1.0, skill_score / FAISS_SKILL_SCALE_THRESHOLD)
-                if faiss_score is not None and FAISS_SKILL_SCALE_THRESHOLD > 0 else 1.0
-            )
-            skill_lines = "\n".join(match_log)
             logger.info(
                 f"\n{'='*52}\n"
-                f"SKILL GAP : {job['job_title']!r}\n"
+                f"SKILL GAP: {job['job_title']!r}\n"
                 f"  User skills ({len(user_skills)}): {user_skills}\n"
-                f"  Required skills ({total_required}):\n{skill_lines}\n"
+                f"  Required ({total_required}):\n" + "\n".join(match_log) + "\n"
                 f"  ─────────────────────────────────────\n"
-                f"  Matched     : {len(matched)}/{total_required} = {skill_score:.1%}\n"
-                f"  FAISS score : {faiss_score:.3f if faiss_score is not None else 'N/A'}"
-                f"  (mult={faiss_mult_val:.2f})\n"
-                f"  Cert bonus  : +{cert_bonus:.1%} ({cert_matched}/{len(required_certs)} certs)\n"
-                f"  Cap applied : {'YES' if len(matched)==0 else 'no'}\n"
-                f"  FINAL SCORE : {final_score}%\n"
+                f"  IDF-weighted score : {skill_score:.1%}\n"
+                f"  FAISS confidence   : "
+                f"{faiss_score:.3f if faiss_score is not None else 'N/A'}\n"
+                f"  Cert bonus         : +{cert_bonus:.1%}\n"
+                f"  FINAL SCORE        : {final_score}%\n"
                 f"{'='*52}"
-            )
-        else:
-            logger.info(
-                f"Skill gap '{job['job_title']}': "
-                f"{len(matched)}/{total_required} skills, "
-                f"certs={cert_matched}/{len(required_certs)}, "
-                f"score={final_score}%"
             )
 
         return {
-            "found": True,
-            "target_job": job["job_title"],
-            "required_skills": required_skills,
+            "found":                True,
+            "target_job":           job["job_title"],
+            "required_skills":      required_skills,
             "required_certifications": required_certs,
-            "matched_skills": matched,
-            "missing_skills": missing,
-            "completion_score": final_score,
-            "match_count": len(matched),
-            "total_required": total_required,
+            "matched_skills":       matched,
+            "missing_skills":       missing,
+            "completion_score":     final_score,
+            "match_count":          len(matched),
+            "total_required":       total_required,
         }
 
-    # ── Helpers ─────────────────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _semantic_match(
-            self,
-            target: str,
-            candidates: list[str],
-            threshold: float,
+        self, target: str, candidates: list[str], threshold: float
     ) -> bool:
         if not candidates or not target:
             return False
         try:
-            target_emb = self.embedder.embed(target)
-            cand_embeddings = self.embedder.embed_batch(list(candidates))
-            sims = [float(np.dot(target_emb, c)) for c in cand_embeddings]
-            best = max(sims)
-            return best >= threshold
+            target_emb  = self.embedder.embed(target)
+            cand_embs   = self.embedder.embed_batch(list(candidates))
+            sims        = [float(np.dot(target_emb, c)) for c in cand_embs]
+            return max(sims) >= threshold
         except Exception as e:
             logger.warning(f"Semantic match error: {e}")
             return False
