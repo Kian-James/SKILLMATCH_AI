@@ -92,55 +92,82 @@ class FAISSIndex:
     def _load_from_disk(self) -> None:
         # Job index
         self.index = faiss.read_index(str(FAISS_INDEX_PATH))
+
         with open(FAISS_METADATA_PATH, "r") as f:
             self.metadata = json.load(f)
+
         self._embedding_dim = self.index.d
 
+        # Restore numpy arrays
         for job in self.metadata:
+            # skill_embeddings
             raw = job.get("skill_embeddings", [])
             job["skill_embeddings"] = [
                 np.array(e, dtype=np.float32) for e in raw
             ] if raw else []
 
+            # Restore contextual embeddings
+            ctx_raw = job.get("skill_ctx_embeddings", [])
+            job["skill_ctx_embeddings"] = [
+                np.array(e, dtype=np.float32) for e in ctx_raw
+            ] if ctx_raw else []
+
+        # Load IDF weights
         self.idf_weights = self.metadata[0].get("_idf_weights", {}) if self.metadata else {}
+
         for job in self.metadata:
             job.pop("_idf_weights", None)
 
         # Skill index
         self.skill_index = faiss.read_index(str(FAISS_SKILL_INDEX_PATH))
+
         with open(FAISS_SKILL_META_PATH, "r") as f:
             self.skill_meta = json.load(f)
 
-        total_skill_vecs = self.skill_index.ntotal
         logger.info(
             f"FAISS loaded: {self.index.ntotal} jobs, "
-            f"{total_skill_vecs} skill vectors, "
+            f"{self.skill_index.ntotal} skill vectors, "
             f"{len(self.idf_weights)} IDF weights."
         )
 
     def _save_to_disk(self) -> None:
-        # Serialize job metadata (numpy arrays → lists)
         serializable = []
+
         for job in self.metadata:
-            entry = {k: v for k, v in job.items() if k != "skill_embeddings"}
+            # Copy everything except embeddings first
+            entry = {
+                k: v for k, v in job.items()
+                if k not in ["skill_embeddings", "skill_ctx_embeddings"]
+            }
+
+            # Convert numpy arrays → list
             entry["skill_embeddings"] = [
                 e.tolist() for e in job.get("skill_embeddings", [])
             ]
+
+            # Convert contextual embeddings
+            entry["skill_ctx_embeddings"] = [
+                e.tolist() for e in job.get("skill_ctx_embeddings", [])
+            ]
+
             serializable.append(entry)
 
-        # Attach IDF weights to first entry as a side-channel (avoids separate file)
+        # Store IDF weights once
         if serializable:
             serializable[0]["_idf_weights"] = self.idf_weights
 
+        # Save FAISS indexes
         faiss.write_index(self.index, str(FAISS_INDEX_PATH))
+        faiss.write_index(self.skill_index, str(FAISS_SKILL_INDEX_PATH))
+
+        # Save metadata
         with open(FAISS_METADATA_PATH, "w") as f:
             json.dump(serializable, f)
 
-        faiss.write_index(self.skill_index, str(FAISS_SKILL_INDEX_PATH))
         with open(FAISS_SKILL_META_PATH, "w") as f:
             json.dump(self.skill_meta, f)
 
-        logger.info("FAISS indexes + skill index + IDF weights saved to disk.")
+        logger.info("FAISS indexes + metadata saved successfully.")
 
     # ── Rebuild ───────────────────────────────────────────────────────────────
 
@@ -243,7 +270,7 @@ class FAISSIndex:
         if len(all_skill_embs) > 0:
             self.skill_index.add(all_skill_embs)
             for job_idx, (job, (start, end)) in enumerate(
-                zip(kept_jobs, job_skill_slices)
+                    zip(kept_jobs, job_skill_slices)
             ):
                 for k, skill_name in enumerate(job.get("skills", [])):
                     self.skill_meta.append({
@@ -254,7 +281,7 @@ class FAISSIndex:
         # ── Step 7: Build job metadata ─────────────────────────────────────────
         self.metadata = []
         for job_idx, (job, (start, end)) in enumerate(
-            zip(kept_jobs, job_skill_slices)
+                zip(kept_jobs, job_skill_slices)
         ):
             skill_embs = list(all_skill_embs[start:end]) if end > start else []
 
@@ -344,7 +371,7 @@ class FAISSIndex:
     # ── Skill-level fuzzy search ───────────────────────────────────────────────
 
     def find_closest_skill(
-        self, user_skill_emb: np.ndarray, threshold: float = 0.68
+            self, user_skill_emb: np.ndarray, threshold: float = 0.68
     ) -> tuple[str | None, float]:
         """
         Find the single closest skill in the skill index to a user skill embedding.
