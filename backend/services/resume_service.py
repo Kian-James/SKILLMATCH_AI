@@ -355,6 +355,24 @@ class ResumeService:
         )
         ctx_start = self.faiss.get_skill_global_offset(job_idx) if job_idx is not None else -1
 
+        # Pre-compute Gate 3a in one shot: batch-search all user skill embeddings
+        # against the skill FAISS index simultaneously.
+        # Result: dict mapping job_skill_name.lower() → best_user_sim score.
+        # Cost: ONE FAISS batch search instead of N_user × N_req_skills searches.
+        skill_index_matches: dict[str, float] = {}
+        if user_skill_embs.shape[0] > 0 and self.faiss.skill_index is not None:
+            # Search all user embeddings at once: returns (n_user, 1) top-1 results
+            queries  = user_skill_embs.astype(np.float32)
+            scores_m, idxs_m = self.faiss.skill_index.search(queries, 1)
+            for score_row, idx_row in zip(scores_m, idxs_m):
+                best_score = float(score_row[0])
+                best_idx   = int(idx_row[0])
+                if best_idx >= 0 and best_score >= SEMANTIC_SKILL_THRESHOLD:
+                    skill_name = self.faiss.skill_meta[best_idx]["skill_name"].lower()
+                    # Keep the highest sim across all user skills for each job skill
+                    if best_score > skill_index_matches.get(skill_name, 0.0):
+                        skill_index_matches[skill_name] = best_score
+
         matched_count   = 0
         matched_skills: list[str] = []
         matched_weights: list[float] = []
@@ -377,15 +395,9 @@ class ResumeService:
                     if overlap >= KEYWORD_OVERLAP_THRESHOLD:
                         matched_by = "keyword"
 
-            # Gate 3a: FAISS skill index (one search per user skill)
-            if not matched_by and user_skill_embs.shape[0] > 0:
-                for user_emb in user_skill_embs:
-                    closest, sim = self.faiss.find_closest_skill(
-                        user_emb, threshold=SEMANTIC_SKILL_THRESHOLD
-                    )
-                    if closest and closest.lower() == norm_req:
-                        matched_by = f"skill_idx({sim:.2f})"
-                        break
+            # Gate 3a: skill index lookup (pre-computed above — O(1) dict lookup)
+            if not matched_by and norm_req in skill_index_matches:
+                matched_by = f"skill_idx({skill_index_matches[norm_req]:.2f})"
 
             # Gate 3b: Contextual embedding (float16 → float32 upcast)
             if not matched_by and ctx_start >= 0 and user_skill_embs.shape[0] > 0:

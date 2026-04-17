@@ -129,11 +129,16 @@ SOFT_SKILLS_EXCLUDE: set[str] = {
     "presentation skills", "negotiation", "detail oriented", "detail-oriented",
     "fast learner", "self-motivated", "verbal communication", "written communication",
     "strong work ethic", "hard skills", "soft skills",
-    # FIX BUG 5: generic non-technical phrases from experience/support roles
+    # Generic non-technical phrases from experience/support roles
     "customer service", "customer communication", "cross-team collaboration",
     "documentation", "knowledge sharing", "analytical problem solving",
     "it troubleshooting", "system support", "it support",
     "project coordination", "technical documentation",
+    # Security/auth terms that are too generic when appearing in project bullets
+    # (a candidate who "designed authentication" in a project does not necessarily
+    #  have Authentication as a standalone skill — it's a feature they implemented)
+    "authentication", "authorization", "role-based access control",
+    "role based access control",
 }
 
 CERT_PROVIDER_WORDS: set[str] = {
@@ -206,7 +211,34 @@ KNOWN_SKILLS: list[str] = [
 
 # ─── Section extraction ───────────────────────────────────────────────────────
 
-def _extract_section(text: str, header_patterns: list[str], label: str = "section") -> str | None:
+def _expand_parentheticals(text: str) -> str:
+    """
+    Expand parenthetical skill lists so individual components are extracted.
+
+    Example:
+      'MERN Stack (MongoDB, Express.js, React, Node.js)'
+      → 'MERN Stack (MongoDB, Express.js, React, Node.js)\nMongoDB\nExpress.js\nReact\nNode.js'
+
+    This ensures that PhraseMatcher sees each parenthetical component as a
+    standalone token sequence, so MongoDB is matched even though it only
+    appears inside a parenthetical on the resume.
+
+    Only expands parentheticals that contain commas (i.e. lists), not
+    single-word clarifications like "Python (3.x)" or dates like "(2024)".
+    """
+    def _expand(match: re.Match) -> str:
+        original = match.group(0)
+        inner    = match.group(1).strip()
+        if "," not in inner:
+            return original  # not a list — leave as-is
+        # Split on commas, strip each component
+        parts = [p.strip().strip("()") for p in inner.split(",")]
+        parts = [p for p in parts if len(p) > 1]
+        if not parts:
+            return original
+        return original + "\n" + "\n".join(parts)
+
+    return re.sub(r"\(([^)]{4,})\)", _expand, text)
     combined_header = "|".join(f"(?:{p})" for p in header_patterns)
     combined_next   = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
 
@@ -382,6 +414,10 @@ class NLPProcessor:
         return _deduplicate_certs(raw)
 
     def extract_skills(self, text: str, cert_strings: list[str]) -> list[str]:
+        # Expand parenthetical skill lists so individual components are visible
+        # e.g. "MERN Stack (MongoDB, Express.js, React, Node.js)"
+        #   → also presents "MongoDB", "Express.js", "React", "Node.js" as tokens
+        text = _expand_parentheticals(text)
         cert_context_words: set[str] = set()
         for cert in cert_strings:
             for word in cert.lower().split():
