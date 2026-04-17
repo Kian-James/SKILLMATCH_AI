@@ -57,6 +57,31 @@ _CONF_MIN       = 0.7
 _OCR_CORR_LOW  = 0.88
 _OCR_CORR_HIGH = 0.995
 
+# Common English words to skip during OCR correction candidate selection.
+# These will never be misread skill names — filtering them avoids unnecessary
+# embed calls and keeps the candidate batch small.
+_COMMON_WORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "are", "but", "not", "you", "all", "can", "her",
+    "was", "one", "our", "out", "day", "get", "has", "him", "his", "how",
+    "its", "may", "new", "now", "old", "see", "two", "way", "who", "boy",
+    "did", "she", "too", "use", "with", "this", "that", "have", "from",
+    "they", "will", "been", "more", "when", "made", "like", "time", "just",
+    "know", "take", "into", "year", "your", "good", "some", "could", "them",
+    "than", "then", "look", "only", "come", "over", "also", "back", "after",
+    "work", "first", "well", "even", "want", "because", "these", "give",
+    "most", "such", "make", "any", "said", "each", "which", "their", "about",
+    "would", "there", "other", "many", "very", "should", "through", "before",
+    "where", "right", "while", "large", "often", "must", "high", "every",
+    "near", "both", "those", "always", "between", "experience", "strong",
+    "years", "skills", "ability", "team", "project", "projects", "using",
+    "based", "tools", "system", "systems", "design", "business", "user",
+    "users", "software", "technology", "technical", "knowledge", "understanding",
+    "responsible", "developing", "working", "including", "support", "build",
+    "built", "role", "environment", "across", "within", "multiple", "various",
+    "excellent", "required", "development", "management", "services", "solutions",
+    "proficient", "familiar", "exposure", "hands", "demonstrated", "proven",
+})
+
 # ── Module-level singletons (shared across requests, allocated once) ──────────
 _shared_embedder:   EmbeddingEngine | None = None
 _shared_clusterer:  SkillClusterer  | None = None
@@ -183,35 +208,62 @@ class ResumeService:
     # ── OCR correction ────────────────────────────────────────────────────────
 
     def _ocr_correct(self, text: str) -> str:
-        try:
-            vocab_embs = _get_ocr_vocab_embs()
-            words      = text.split()
-            out        = []
-            corrections = 0
+        """
+        Correct likely OCR misreads of skill names.
 
-            for word in words:
+        Strategy: batch-embed only tokens that look like potential skill names
+        (CamelCase, mixed-case, known tech length, not plain English words).
+        One embed_batch call for all candidates — not one call per word.
+        Typical resume: 300-500 words → ~20-40 candidates → 1 batch, <1s.
+        """
+        try:
+            words = text.split()
+
+            # Identify candidate indices — tokens that could be misread skills
+            candidate_positions: list[int] = []
+            candidate_tokens:    list[str] = []
+
+            for i, word in enumerate(words):
                 clean = word.strip(".,;:()[]\"'")
+                # Skip: too short, no letters, or plain lowercase common words
                 if len(clean) < 3 or not any(c.isalpha() for c in clean):
-                    out.append(word)
                     continue
-                try:
-                    emb      = self.embedder.embed(clean)
-                    sims     = vocab_embs @ emb
-                    best_idx = int(np.argmax(sims))
-                    best_sim = float(sims[best_idx])
-                    if _OCR_CORR_LOW <= best_sim < _OCR_CORR_HIGH:
-                        corrected = _ocr_vocab[best_idx]
-                        logger.debug(f"OCR: '{clean}' → '{corrected}' ({best_sim:.3f})")
-                        out.append(word.replace(clean, corrected))
-                        corrections += 1
-                        continue
-                except Exception:
-                    pass
-                out.append(word)
+                # Skip purely lowercase tokens longer than 12 chars
+                # (likely prose, not a skill name)
+                if clean.islower() and len(clean) > 12:
+                    continue
+                # Skip tokens that are already in the diskcache
+                # (embed() will hit cache anyway, but we avoid even that overhead
+                #  for words that clearly aren't skills)
+                if clean.lower() in _COMMON_WORDS:
+                    continue
+                candidate_positions.append(i)
+                candidate_tokens.append(clean)
+
+            if not candidate_tokens:
+                return text
+
+            # One batch embed call for all candidates
+            vocab_embs    = _get_ocr_vocab_embs()         # (n_vocab, dim)
+            candidate_embs = self.embedder.embed_batch(candidate_tokens)  # (n_cand, dim)
+
+            # Vectorised similarity: (n_cand, n_vocab)
+            sim_matrix = candidate_embs @ vocab_embs.T
+
+            corrections = 0
+            for pos, token, sims in zip(candidate_positions, candidate_tokens, sim_matrix):
+                best_idx = int(np.argmax(sims))
+                best_sim = float(sims[best_idx])
+                if _OCR_CORR_LOW <= best_sim < _OCR_CORR_HIGH:
+                    corrected = _ocr_vocab[best_idx]
+                    logger.debug(f"OCR: '{token}' → '{corrected}' ({best_sim:.3f})")
+                    words[pos] = words[pos].replace(token, corrected)
+                    corrections += 1
 
             if corrections:
                 logger.info(f"OCR correction: {corrections} token(s) corrected.")
-            return " ".join(out)
+            return " ".join(words)
+
         except Exception as e:
             logger.warning(f"OCR correction failed (non-fatal): {e}")
             return text
