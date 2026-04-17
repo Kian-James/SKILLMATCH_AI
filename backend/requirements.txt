@@ -19,7 +19,7 @@ email-validator==2.3.0
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl#sha256=86cc141f63942d4b2c5fcee06630fd6f904788d2f0ab005cce45aadb8fb73889
 faiss-cpu==1.8.0
 fastapi==0.111.0
-fastapi-cli==0.0.24
+fastapi-cli>=0.0.24
 filelock==3.28.0
 firebase-admin==6.5.0
 fsspec==2026.3.0
@@ -98,7 +98,7 @@ tokenizers==0.19.1
 torch==2.3.0
 tqdm==4.67.3
 transformers==4.41.1
-typer==0.9.4
+typer==0.16.0
 typing_extensions==4.15.0
 ujson==5.12.0
 uritemplate==4.2.0
