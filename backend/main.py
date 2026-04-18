@@ -90,30 +90,13 @@ async def ensure_faiss_ready():
         gc.collect()
         logger.info("FAISS indexes loaded.")
 
-        # Inject dynamic KNOWN_SKILLS from Firestore job corpus into NLPProcessor
+        # Build PhraseMatcher from Firestore job skills (replaces all static KNOWN_SKILLS)
         try:
-            from services.firebase_service import fetch_all_jobs
-            from ai_modules.nlp_processor import (
-                NLPProcessor, KNOWN_SKILLS,
-                _build_phrase_matcher, _load_nlp_model,
-            )
-            jobs = fetch_all_jobs()
-            job_skills = {s for job in jobs for s in job.get("skills", [])}
-            extra      = job_skills - set(KNOWN_SKILLS)
-            if extra:
-                nlp = _load_nlp_model()
-                NLPProcessor._dynamic_matcher = _build_phrase_matcher(
-                    nlp, list(set(KNOWN_SKILLS) | job_skills)
-                )
-                logger.info(
-                    f"NLP dynamic matcher: {len(KNOWN_SKILLS)} static + "
-                    f"{len(extra)} from Firestore = "
-                    f"{len(KNOWN_SKILLS) + len(extra)} total skills."
-                )
-            del jobs, job_skills
-            gc.collect()
+            from ai_modules.nlp_processor import NLPProcessor
+            n_patterns = NLPProcessor.build_matcher_from_firestore()
+            logger.info(f"PhraseMatcher ready: {n_patterns} skill patterns from Firestore.")
         except Exception as e:
-            logger.warning(f"Dynamic KNOWN_SKILLS injection failed (non-fatal): {e}")
+            logger.warning(f"PhraseMatcher build failed (non-fatal): {e}")
 
         # Pre-warm OCR correction vocab embeddings so first real request is fast
         try:

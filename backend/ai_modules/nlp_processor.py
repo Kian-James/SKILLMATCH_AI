@@ -1,557 +1,495 @@
 """
-ai_modules/nlp_processor.py
+services/resume_service.py
+Full resume analysis pipeline: OCR → NLP → Embed → FAISS → Score
 
-Section-aware resume parser.
-
-FIXES (v2):
-  BUG 1 - CERTIFICATIONS added to NEXT_SECTION_HEADERS (skills ran past cert block)
-  BUG 2 - CAREER OBJECTIVE / OBJECTIVE added to NEXT_SECTION_HEADERS
-  BUG 3 - TECHNOLOGIES/TECH STACK/TOOLS headers now require line-start anchor
-           to avoid false positives inside project bullet points like "Technologies: React"
-  BUG 5 - Expanded SOFT_SKILLS_EXCLUDE with generic phrases from experience text
-           + minimum skill length enforced in extract_skills
-
-FIXES (v3):
-  BUG 6 - Projects section skills were bleeding into extraction when no Skills section
-           was found. Fallback now extracts from EXPERIENCE + SUMMARY only, explicitly
-           stripping the Projects block. This was the root cause of false 7-12% match
-           scores — project tech terms created a plausible embedding that FAISS matched
-           to loosely related jobs, and keyword overlap then gave matched_count=1,
-           bypassing ZERO_SKILL_SCORE_CAP.
-  BUG 7 - Added PROJECT_SECTION_HEADERS and _strip_projects_from_text() to surgically
-           remove the Projects section before any fallback full-text extraction.
+MEMORY NOTES:
+  - SkillClusterer is a module-level singleton (not per-request instance)
+  - OCR correction vocabulary embeddings are module-level (computed once)
+  - SkillNormalizer canonical embs are lazy, cached in the normalizer instance
+  - No skill embeddings stored in job metadata dicts — all via FAISS skill_index
+  - ctx embeddings fetched from compact float16 matrix in FAISSIndex
 """
 
 from __future__ import annotations
 
-import re
-from functools import lru_cache
+import gc
+import math
 
-import spacy
-from spacy.matcher import PhraseMatcher
+import numpy as np
 from loguru import logger
 
-from utils.skill_normalizer import SkillNormalizer
-from config import SPACY_MODEL
+from ai_modules.ocr_extractor import extract_text, extract_text_flagged
+from ai_modules.nlp_processor import NLPProcessor
+from ai_modules.embedding_engine import EmbeddingEngine
+from ai_modules.faiss_index import FAISSIndex
+from ai_modules.skill_clusterer import SkillClusterer
+from utils.skill_normalizer import SkillNormalizer, _CANONICAL_LIST
+from ai_modules.nlp_processor import _FIRESTORE_SKILLS
+
+try:
+    from matching_config import (
+        CERT_BONUS_MAX,
+        KEYWORD_OVERLAP_THRESHOLD,
+        SEMANTIC_SKILL_THRESHOLD,
+        SEMANTIC_CERT_THRESHOLD,
+        ZERO_SKILL_SCORE_CAP,
+        FAISS_MIN_SCORE_THRESHOLD,
+        VERBOSE_MATCH_LOGGING,
+        MIN_MATCHED_SKILLS_FOR_SCORE,
+    )
+except ModuleNotFoundError:
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from matching_config import (
+        CERT_BONUS_MAX,
+        KEYWORD_OVERLAP_THRESHOLD,
+        SEMANTIC_SKILL_THRESHOLD,
+        SEMANTIC_CERT_THRESHOLD,
+        ZERO_SKILL_SCORE_CAP,
+        FAISS_MIN_SCORE_THRESHOLD,
+        VERBOSE_MATCH_LOGGING,
+        MIN_MATCHED_SKILLS_FOR_SCORE,
+    )
+
+_SIGMOID_CENTER = 0.5
+_SIGMOID_SCALE  = 8.0
+_CONF_MIN       = 0.7
+
+_OCR_CORR_LOW  = 0.88
+_OCR_CORR_HIGH = 0.995
+
+# Common English words to skip during OCR correction candidate selection.
+# These will never be misread skill names — filtering them avoids unnecessary
+# embed calls and keeps the candidate batch small.
+_COMMON_WORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "are", "but", "not", "you", "all", "can", "her",
+    "was", "one", "our", "out", "day", "get", "has", "him", "his", "how",
+    "its", "may", "new", "now", "old", "see", "two", "way", "who", "boy",
+    "did", "she", "too", "use", "with", "this", "that", "have", "from",
+    "they", "will", "been", "more", "when", "made", "like", "time", "just",
+    "know", "take", "into", "year", "your", "good", "some", "could", "them",
+    "than", "then", "look", "only", "come", "over", "also", "back", "after",
+    "work", "first", "well", "even", "want", "because", "these", "give",
+    "most", "such", "make", "any", "said", "each", "which", "their", "about",
+    "would", "there", "other", "many", "very", "should", "through", "before",
+    "where", "right", "while", "large", "often", "must", "high", "every",
+    "near", "both", "those", "always", "between", "experience", "strong",
+    "years", "skills", "ability", "team", "project", "projects", "using",
+    "based", "tools", "system", "systems", "design", "business", "user",
+    "users", "software", "technology", "technical", "knowledge", "understanding",
+    "responsible", "developing", "working", "including", "support", "build",
+    "built", "role", "environment", "across", "within", "multiple", "various",
+    "excellent", "required", "development", "management", "services", "solutions",
+    "proficient", "familiar", "exposure", "hands", "demonstrated", "proven",
+})
+
+# ── Module-level singletons (shared across requests, allocated once) ──────────
+_shared_embedder:   EmbeddingEngine | None = None
+_shared_clusterer:  SkillClusterer  | None = None
+_shared_normalizer: SkillNormalizer | None = None
+
+# OCR correction: vocabulary comes from Firestore job skills (_FIRESTORE_SKILLS),
+# populated when NLPProcessor.build_matcher_from_firestore() runs at warmup.
+_ocr_vocab_embs: np.ndarray | None = None   # (n_vocab, dim) float32
 
 
-# ─── Section header patterns ──────────────────────────────────────────────────
-
-SKILLS_SECTION_HEADERS = [
-    # General skill headers — keep loose match (rarely appear inline)
-    r"(?:^|\n)(?:SKILLS?|TECHNICAL\s+SKILLS?|CORE\s+SKILLS?|KEY\s+SKILLS?"
-    r"|COMPETENCIES|HARD\s+SKILLS?)\s*(?:\n|:|\s{2,})",
-
-    # FIX BUG 3: Use end-of-line anchor ($) so "Technologies: React, Docker"
-    # (inline content after colon) is NOT matched, but "Technologies" or
-    # "Technologies:" on their own line ARE matched as section headers.
-    r"^(?:TECHNOLOGIES|TECH\s+STACK|TOOLS?\s+(?:&|AND)\s+TECHNOLOGIES?|EXPERTISE)\s*:?\s*$",
-]
-
-CERT_SECTION_HEADERS = [
-    r"(?:^|\n|\s{2,})(?:CERTIFICATIONS?|CERTIFICATES?|LICENSES?\s+&\s+CERTIFICATIONS?"
-    r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?)\s*(?:\n|:|\s{2,})",
-]
-
-# FIX BUG 6/7: Projects section patterns — used to strip project blocks before
-# fallback extraction so project-mentioned tech terms don't pollute skill lists.
-PROJECT_SECTION_HEADERS = [
-    r"(?:^|\n|\s{2,})(?:PROJECTS?|PERSONAL\s+PROJECTS?|ACADEMIC\s+PROJECTS?"
-    r"|SIDE\s+PROJECTS?|KEY\s+PROJECTS?|NOTABLE\s+PROJECTS?"
-    r"|PROJECT\s+EXPERIENCE|PORTFOLIO)\s*(?:\n|:|\s{2,})",
-]
-
-# When no Skills section is found, we extract only from Summary + Experience,
-# never from Projects (too narrative) or Education (too broad).
-SAFE_FALLBACK_SECTION_HEADERS = [
-    r"(?:^|\n|\s{2,})(?:SUMMARY|PROFESSIONAL\s+SUMMARY|CAREER\s+SUMMARY"
-    r"|PROFILE|ABOUT\s+ME?|OVERVIEW)\s*(?:\n|:|\s{2,})",
-    r"(?:^|\n|\s{2,})(?:EXPERIENCE|WORK\s+EXPERIENCE|EMPLOYMENT\s+HISTORY"
-    r"|PROFESSIONAL\s+EXPERIENCE|WORK\s+HISTORY)\s*(?:\n|:|\s{2,})",
-]
-
-# FIX BUG 1 + BUG 2: Added CERTIFICATIONS? and CAREER OBJECTIVE / OBJECTIVE
-NEXT_SECTION_HEADERS = [
-    r"(?:^|\n|\s{2,})(?:EXPERIENCE|WORK\s+EXPERIENCE|EMPLOYMENT|PROJECTS?"
-    r"|EDUCATION|ACHIEVEMENTS?|AWARDS?|INTERESTS?|LANGUAGES?|REFERENCES?"
-    r"|PUBLICATIONS?|VOLUNTEER|EXTRACURRICULAR|ACTIVITIES|HOBBIES|SUMMARY"
-    r"|CAREER\s+OBJECTIVE|OBJECTIVE|PROFILE|ABOUT|CONTACT|SOFT\s+SKILLS?"
-    r"|CERTIFICATIONS?|CERTIFICATES?|LICENSES?\s+&\s+CERTIFICATIONS?"
-    r"|PROFESSIONAL\s+CERTIFICATIONS?|CREDENTIALS?|ACCREDITATIONS?"
-    r")\s*(?:\n|:|\s{2,})",
-]
-
-# ─── Certification patterns ───────────────────────────────────────────────────
-CERT_PATTERNS = [
-    r"\bUdemy\s*[–\-—]\s*[^\n]+",
-    r"\bCoursera\s*[–\-—]\s*[^\n]+",
-    r"\bedX\s*[–\-—]\s*[^\n]+",
-    r"\bLinkedIn\s+Learning\s*[–\-—]\s*[^\n]+",
-    r"\bFreeCodeCamp\s*[–\-—]\s*[^\n]+",
-    r"\bCisco\s*[–\-—]\s*[^\n]+",
-    r"\bCisco\s+Certified[\w\s&()]+",
-    r"\bCisco\s+(?:CCNA|CCNP|CCIE|CyberOps)[\w\s]*",
-    r"\bAWS\s+Certified\s+[\w\s]+",
-    r"\bGoogle\s+Cloud\s+[\w\s]+(?:Associate|Professional|Engineer|Developer)",
-    r"\bProfessional\s+(?:Data\s+Engineer|Machine\s+Learning\s+Engineer|Cloud\s+Architect)",
-    r"\bMicrosoft\s+Certified[\w\s:]+",
-    r"\bAZ-\d{3}\b",
-    r"\bCompTIA\s+[\w+]+",
-    r"\bA\+\b", r"\bNetwork\+\b", r"\bSecurity\+\b",
-    r"\bCertified\s+Kubernetes\s+(?:Administrator|Developer|Security\s+Specialist)",
-    r"\bCKA\b", r"\bCKAD\b", r"\bCKS\b",
-    r"\bCertified\s+Ethical\s+Hacker",
-    r"\bCEH\b", r"\bCISSP\b", r"\bCISM\b", r"\bOSCP\b",
-    r"\bPMP\b", r"\bPRINCE2[\w\s]*", r"\bScrumMaster\b", r"\bCSM\b", r"\bPSM\b",
-    r"\bOracle\s+Certified[\w\s]+",
-    r"\bRed\s+Hat\s+Certified[\w\s]+",
-    r"\bRHCE\b", r"\bRHCSA\b",
-    r"\bTensorFlow\s+Developer\s+Certificate",
-    r"\bCertified\s+Information\s+Technology[\w\s()]+",
-    r"\bCertified\s+Software\s+Development\s+Professional",
-    r"\bCSDP\b",
-    r"(?:Responsive\s+Web\s+Design|Relational\s+Database|JavaScript\s+Algorithms"
-    r"|Front\s+End\s+Development|Back\s+End\s+Development|Data\s+Visualization"
-    r"|Scientific\s+Computing|Machine\s+Learning|Quality\s+Assurance"
-    r"|College\s+Algebra)\s+(?:FreeCodeCamp|Certificate)?",
-    r"\bFlutter\s+Program\s+Certif\w+",
-    r"\bITF\+",
-    r"\bISO\s+\d+[\w\s]*(?:Lead\s+Auditor|Lead\s+Implementer)?",
-]
-
-SOFT_SKILLS_EXCLUDE: set[str] = {
-    "adaptability", "time management", "problem solving", "problem-solving",
-    "analytical thinking", "attention to detail", "communication",
-    "written & verbal", "written and verbal", "teamwork", "leadership",
-    "critical thinking", "creativity", "interpersonal skills", "work ethic",
-    "multitasking", "organization", "collaboration", "flexibility",
-    "decision making", "emotional intelligence", "conflict resolution",
-    "presentation skills", "negotiation", "detail oriented", "detail-oriented",
-    "fast learner", "self-motivated", "verbal communication", "written communication",
-    "strong work ethic", "hard skills", "soft skills",
-    # Generic non-technical phrases from experience/support roles
-    "customer service", "customer communication", "cross-team collaboration",
-    "documentation", "knowledge sharing", "analytical problem solving",
-    "it troubleshooting", "system support", "it support",
-    "project coordination", "technical documentation",
-    # Security/auth terms that are too generic when appearing in project bullets
-    # (a candidate who "designed authentication" in a project does not necessarily
-    #  have Authentication as a standalone skill — it's a feature they implemented)
-    "authentication", "authorization", "role-based access control",
-    "role based access control",
-}
-
-CERT_PROVIDER_WORDS: set[str] = {
-    "freecodecamp", "udemy", "coursera", "edx", "cisco", "microsoft",
-    "google", "amazon", "oracle", "linkedin", "certified", "certification",
-    "certificate",
-}
-
-KNOWN_SKILLS: list[str] = [
-    "Python", "Java", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
-    "Kotlin", "Swift", "R", "Scala", "PHP", "Ruby", "MATLAB", "Dart",
-    "Bash", "Shell", "PowerShell", "Groovy", "Perl", "Haskell", "Elixir",
-    "React", "Angular", "Vue.js", "Node.js", "Django", "Flask", "FastAPI",
-    "Spring Boot", "Express.js", "Next.js", "Nuxt.js", "Svelte", "jQuery",
-    "Laravel", "Ruby on Rails", "ASP.NET", "Gatsby", "Remix", "Astro",
-    "Flutter", "React Native", "Android", "iOS", "SwiftUI", "Jetpack Compose",
-    "Xamarin", "Ionic", "Capacitor",
-    "TensorFlow", "PyTorch", "scikit-learn", "Keras", "Pandas", "NumPy",
-    "FAISS", "HuggingFace", "spaCy", "NLTK", "OpenCV", "Spark", "Hadoop",
-    "Airflow", "dbt", "Kafka", "Flink", "Matplotlib", "Seaborn", "Plotly",
-    "LangChain", "LlamaIndex", "Transformers", "XGBoost", "LightGBM",
-    "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "Ansible",
-    "Jenkins", "GitHub Actions", "GitLab CI", "CircleCI", "Helm", "ArgoCD",
-    "Linux", "Ubuntu", "Nginx", "Apache", "Pulumi", "CDK",
-    "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra",
-    "DynamoDB", "Firebase", "Firestore", "BigQuery", "Snowflake", "SQLite",
-    "MariaDB", "Oracle DB", "CockroachDB", "Supabase", "PlanetScale",
-    "TCP/IP", "GraphQL", "gRPC", "OAuth", "JWT", "REST API", "RESTful APIs",
-    "WebSockets", "MQTT", "RabbitMQ", "Celery", "Nginx", "Load Balancing",
-    "Penetration Testing", "SIEM", "Firewalls", "Zero Trust", "OWASP",
-    "Git", "GitHub", "GitLab", "Jira", "Postman", "Swagger", "Figma",
-    "Bitbucket", "Confluence", "Notion", "Linear", "Trello",
-    "Machine Learning", "Deep Learning", "NLP", "Computer Vision",
-    "Data Structures", "Algorithms", "Microservices", "CI/CD",
-    "Agile", "Scrum", "Kanban", "System Design", "OOP", "Functional Programming",
-    "Data Engineering", "MLOps", "DevOps", "Cloud Architecture", "SRE",
-    "CRUD", "MERN Stack", "MEAN Stack", "LAMP Stack",
-    "Full Stack Development", "Backend Development", "Frontend Development",
-    "Mobile Development", "Web Development", "API Development",
-    "Unit Testing", "Integration Testing", "TDD", "BDD", "Responsive Design",
-    "Version Control", "Authentication", "Authorization",
-    "Role-Based Access Control", "Real-Time Data", "WebSockets",
-    "Flutter & Firebase Development", "Flutter & Firebase",
-    "Git Version Control", "REST APIs & Backend Development",
-    "CRUD Application Development", "Object-Oriented Programming",
-    "Blockchain", "Smart Contracts", "Solidity", "Web3",
-    "Embedded Systems", "IoT", "Cybersecurity", "Network Security",
-    "Data Analysis", "Data Visualization", "Business Intelligence",
-    "SQL", "NoSQL", "Data Modeling", "ETL", "Data Pipelines",
-    "AutoCAD", "SolidWorks", "AutoCAD Plant 3D", "HVAC Design",
-    "Preventive Maintenance", "Root Cause Analysis", "GD&T", "FEA Analysis",
-    "Piping Design", "Engineering Calculations", "Cost Reduction",
-    "Project Management", "CAD", "Process Flow Diagrams",
-    "Paxos", "Raft", "Microservices Architecture",
-    "Microsoft Azure", "Amazon Web Services", "Google Cloud Platform",
-    "Serverless", "Lambda Functions", "Cloud Functions",
-    "HTML", "CSS", "SASS", "SCSS", "Tailwind CSS", "Bootstrap",
-    "Material UI", "Chakra UI", "Styled Components",
-    "Webpack", "Vite", "Babel", "ESLint", "Prettier",
-    "Testing", "Jest", "Pytest", "Mocha", "Cypress", "Selenium",
-    "OpenAI API", "Prompt Engineering", "Vector Databases",
-    "Pinecone", "Weaviate", "ChromaDB", "Qdrant",
-    "Distributed Systems", "System Architecture", "Design Patterns",
-    "Clean Code", "SOLID Principles", "Domain-Driven Design",
-    "Event-Driven Architecture", "Message Queues",
-    "Monitoring", "Observability", "Prometheus", "Grafana", "Datadog",
-    "ELK Stack", "Splunk", "New Relic",
-]
-
-
-# ─── Section extraction ───────────────────────────────────────────────────────
-
-def _expand_parentheticals(text: str) -> str:
+def _get_ocr_vocab_embs() -> np.ndarray | None:
     """
-    Expand parenthetical skill lists so individual components are extracted.
-
-    Example:
-      'MERN Stack (MongoDB, Express.js, React, Node.js)'
-      → 'MERN Stack (MongoDB, Express.js, React, Node.js)\nMongoDB\nExpress.js\nReact\nNode.js'
-
-    This ensures that PhraseMatcher sees each parenthetical component as a
-    standalone token sequence, so MongoDB is matched even though it only
-    appears inside a parenthetical on the resume.
-
-    Only expands parentheticals that contain commas (i.e. lists), not
-    single-word clarifications like "Python (3.x)" or dates like "(2024)".
+    Embedding matrix for OCR correction vocabulary.
+    Source: _FIRESTORE_SKILLS (all skills from Firestore job corpus).
+    Returns None if vocabulary not yet loaded (warmup hasn't run yet).
     """
-    def _expand(match: re.Match) -> str:
-        original = match.group(0)
-        inner    = match.group(1).strip()
-        if "," not in inner:
-            return original  # not a list — leave as-is
-        # Split on commas, strip each component
-        parts = [p.strip().strip("()") for p in inner.split(",")]
-        parts = [p for p in parts if len(p) > 1]
-        if not parts:
-            return original
-        return original + "\n" + "\n".join(parts)
-
-    return re.sub(r"\(([^)]{4,})\)", _expand, text)
-
-
-def _extract_section(text: str, header_patterns: list[str], label: str = "section") -> str | None:
-    combined_header = "|".join(f"(?:{p})" for p in header_patterns)
-    combined_next   = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
-
-    header_match = re.search(combined_header, text, re.IGNORECASE | re.MULTILINE)
-    if not header_match:
+    global _ocr_vocab_embs
+    vocab = _FIRESTORE_SKILLS or _CANONICAL_LIST
+    if not vocab:
         return None
+    # Rebuild if vocab grew (e.g. after a FAISS index rebuild adds new jobs)
+    if _ocr_vocab_embs is None or _ocr_vocab_embs.shape[0] != len(vocab):
+        logger.debug(f"Computing OCR vocab embeddings ({len(vocab)} Firestore skills)...")
+        _ocr_vocab_embs = _get_embedder().embed_batch(vocab)
+    return _ocr_vocab_embs
 
-    section_start = header_match.end()
-    section_text  = text[section_start:]
-
-    next_match = re.search(combined_next, section_text, re.IGNORECASE | re.MULTILINE)
-    if next_match:
-        stopped_header = section_text[next_match.start():next_match.start()+30].strip()
-        logger.debug(f"{label} section ended at: '{stopped_header}'")
-        section_text = section_text[:next_match.start()]
-
-    return section_text.strip() or None
-
-
-def _extract_skills_section(text: str) -> str | None:
-    return _extract_section(text, SKILLS_SECTION_HEADERS, "skills")
+def _get_embedder() -> EmbeddingEngine:
+    global _shared_embedder
+    if _shared_embedder is None:
+        _shared_embedder = EmbeddingEngine()
+    return _shared_embedder
 
 
-def _extract_certs_section(text: str) -> str | None:
-    return _extract_section(text, CERT_SECTION_HEADERS, "certs")
+def _get_clusterer() -> SkillClusterer:
+    global _shared_clusterer
+    if _shared_clusterer is None:
+        _shared_clusterer = SkillClusterer()
+    return _shared_clusterer
 
 
-def _strip_projects_from_text(text: str) -> str:
-    """
-    FIX BUG 6/7: Remove the Projects section from resume text entirely.
-    Projects describe what the candidate *built*, not what they *know* —
-    tech terms mentioned there are unreliable signals of proficiency.
-    Stripping prevents project tech terms from inflating the skill list
-    and creating false FAISS embedding similarity scores.
-    """
-    combined_project = "|".join(f"(?:{p})" for p in PROJECT_SECTION_HEADERS)
-    combined_next    = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
+def _get_normalizer() -> SkillNormalizer:
+    global _shared_normalizer
+    if _shared_normalizer is None:
+        _shared_normalizer = SkillNormalizer()
+    return _shared_normalizer
 
-    result = text
-    for match in re.finditer(combined_project, text, re.IGNORECASE | re.MULTILINE):
-        section_text = text[match.end():]
-        end_match = re.search(combined_next, section_text, re.IGNORECASE | re.MULTILINE)
-        if end_match:
-            section_end = match.end() + end_match.start()
+
+def _get_ocr_vocab_embs() -> np.ndarray:
+    global _ocr_vocab_embs
+    if _ocr_vocab_embs is None:
+        logger.debug("Computing OCR correction vocabulary embeddings (once)...")
+        _ocr_vocab_embs = _get_embedder().embed_batch(_ocr_vocab)
+    return _ocr_vocab_embs
+
+
+class ResumeService:
+
+    def __init__(self, faiss_index: FAISSIndex):
+        self.faiss      = faiss_index
+        self.nlp        = NLPProcessor()
+        self.embedder   = _get_embedder()    # shared singleton
+        self.normalizer = _get_normalizer()  # shared singleton
+        self.clusterer  = _get_clusterer()   # shared singleton
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def analyze(self, file_bytes: bytes, content_type: str) -> dict:
+        # Step 1: OCR — returns (text, used_tesseract)
+        logger.info("Step 1: OCR")
+        raw_text, extracted_via_ocr = extract_text_flagged(file_bytes, content_type)
+        if not raw_text or len(raw_text.strip()) < 20:
+            raise ValueError("Could not extract meaningful text from the uploaded file.")
+
+        # Step 1b: OCR correction — only for image/scan paths, not clean PDF text.
+        # pdfplumber produces clean text; Tesseract produces noisy text.
+        # We flag which path was used so we can skip correction for clean extractions.
+        if extracted_via_ocr:
+            logger.info("Step 1b: OCR correction (scan/image detected)")
+            raw_text = self._ocr_correct(raw_text)
         else:
-            section_end = len(text)
-        # Replace the projects block with whitespace to preserve positions
-        result = result[:match.start()] + " " * (section_end - match.start()) + result[section_end:]
-        logger.debug(f"Stripped Projects section ({section_end - match.start()} chars)")
-        break  # only strip the first Projects block
+            logger.info("Step 1b: OCR correction skipped (clean PDF text)")
 
-    return result
+        # Step 2: NLP
+        logger.info("Step 2: NLP")
+        extracted      = self.nlp.process(raw_text)
+        skills         = extracted["skills"]
+        certifications = extracted["certifications"]
 
+        if VERBOSE_MATCH_LOGGING:
+            logger.info(f"  Skills : {skills}")
+            logger.info(f"  Certs  : {certifications}")
 
-def _extract_safe_fallback_text(text: str) -> str:
-    """
-    FIX BUG 6/7: When no Skills section is found, extract ONLY from
-    Summary and Experience sections — not from Projects or Education.
-    Falls back to full-text-minus-projects if those sections aren't found.
-    """
-    text_no_projects = _strip_projects_from_text(text)
+        # Step 3: Cluster-aware embedding
+        logger.info("Step 3: Cluster-aware embedding")
+        user_embs = self._embed_user_profile_clustered(skills, certifications)
 
-    combined_safe = "|".join(f"(?:{p})" for p in SAFE_FALLBACK_SECTION_HEADERS)
-    combined_next = "|".join(f"(?:{p})" for p in NEXT_SECTION_HEADERS)
+        # Step 4: FAISS retrieval + MMR
+        logger.info("Step 4: FAISS retrieval + MMR")
+        faiss_results = self.faiss.search(user_embs["query"], top_k=5)
 
-    # Collect all safe section matches
-    safe_chunks: list[str] = []
-    for match in re.finditer(combined_safe, text_no_projects, re.IGNORECASE | re.MULTILINE):
-        section_body = text_no_projects[match.end():]
-        end_match = re.search(combined_next, section_body, re.IGNORECASE | re.MULTILINE)
-        chunk = section_body[:end_match.start()] if end_match else section_body
-        if chunk.strip():
-            safe_chunks.append(chunk.strip())
-
-    if safe_chunks:
-        logger.info(f"Fallback: extracting skills from {len(safe_chunks)} safe section(s) (Summary/Experience only)")
-        return "\n\n".join(safe_chunks)
-
-    # Last resort: full text minus projects
-    logger.warning("No Summary/Experience sections found — using full text minus Projects for fallback")
-    return text_no_projects
-
-
-
-@lru_cache(maxsize=1)
-def _load_nlp_model():
-    try:
-        nlp = spacy.load(SPACY_MODEL)
-        logger.info(f"Loaded spaCy model: {SPACY_MODEL}")
-    except OSError:
-        fallback = "en_core_web_sm"
-        logger.warning(f"{SPACY_MODEL} not found. Falling back to {fallback}.")
-        nlp = spacy.load(fallback)
-    return nlp
-
-
-def _build_phrase_matcher(nlp, skills: list[str]) -> PhraseMatcher:
-    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
-    patterns = [nlp.make_doc(skill.lower()) for skill in skills]
-    matcher.add("SKILL", patterns)
-    return matcher
-
-
-def _deduplicate_certs(raw_certs: list[str]) -> list[str]:
-    """
-    Deduplicates cert strings.
-    1. Substring containment: keeps the longer version.
-    2. Word-overlap: deduplicates same cert in different word order
-       e.g. "Responsive Web Design FreeCodeCamp" vs
-            "FreeCodeCamp – Responsive Web Design"
-    """
-    cleaned: list[str] = []
-    for c in raw_certs:
-        c = " ".join(c.split()).strip(" \u2013-\u2014.,;:")
-        if len(c) > 2:
-            cleaned.append(c)
-
-    cleaned.sort(key=len, reverse=True)
-    kept: list[str] = []
-    for cert in cleaned:
-        cert_lower = cert.lower()
-        cert_words = set(w for w in re.split(r"\W+", cert_lower) if len(w) > 2)
-
-        if any(cert_lower in kept_cert.lower() for kept_cert in kept):
-            continue
-
-        is_dup = False
-        for kept_cert in kept:
-            kept_words = set(w for w in re.split(r"\W+", kept_cert.lower()) if len(w) > 2)
-            if cert_words and kept_words:
-                overlap = len(cert_words & kept_words) / min(len(cert_words), len(kept_words))
-                if overlap >= 0.80:
-                    is_dup = True
-                    break
-
-        if not is_dup:
-            kept.append(cert)
-
-    return sorted(kept)
-
-
-# ─── Main processor ───────────────────────────────────────────────────────────
-
-class NLPProcessor:
-
-    # Class-level dynamic matcher injected by main.py after Firestore job corpus
-    # is loaded. Falls back to static KNOWN_SKILLS matcher if not yet injected.
-    _dynamic_matcher = None
-
-    def __init__(self, extra_skills: list[str] | None = None):
-        self.nlp = _load_nlp_model()
-        self.normalizer = SkillNormalizer()
-        all_skills = KNOWN_SKILLS + (extra_skills or [])
-        self._static_matcher = _build_phrase_matcher(self.nlp, all_skills)
-
-    @property
-    def matcher(self):
-        # Prefer the dynamic matcher (expanded with Firestore job skills)
-        # if main.py has injected it; otherwise use the static one.
-        return NLPProcessor._dynamic_matcher or self._static_matcher
-
-    @matcher.setter
-    def matcher(self, value):
-        self._static_matcher = value
-
-    def extract_certifications(self, text: str) -> list[str]:
-        raw: list[str] = []
-        for pattern in CERT_PATTERNS:
-            for m in re.finditer(pattern, text, re.IGNORECASE):
-                match_text = m.group().strip()
-                if len(match_text) > 3:
-                    raw.append(match_text)
-        return _deduplicate_certs(raw)
-
-    def extract_skills(self, text: str, cert_strings: list[str]) -> list[str]:
-        # Expand parenthetical skill lists so individual components are visible
-        # e.g. "MERN Stack (MongoDB, Express.js, React, Node.js)"
-        #   → also presents "MongoDB", "Express.js", "React", "Node.js" as tokens
-        text = _expand_parentheticals(text)
-        cert_context_words: set[str] = set()
-        for cert in cert_strings:
-            for word in cert.lower().split():
-                if len(word) > 3:
-                    cert_context_words.add(word)
-        cert_context_words.update(CERT_PROVIDER_WORDS)
-
-        doc = self.nlp(text)
-        matches = self.matcher(doc)
-
-        raw_skills: set[str] = set()
-        for match_id, start, end in matches:
-            span_text = doc[start:end].text.strip()
-
-            # FIX BUG 5: enforce minimum meaningful length
-            if len(span_text) < 2:
+        # Step 5: Scoring
+        logger.info("Step 5: Scoring")
+        scored_jobs = []
+        for job in faiss_results:
+            raw_faiss = job.get("faiss_score", 0.0)
+            if raw_faiss < FAISS_MIN_SCORE_THRESHOLD:
+                logger.debug(f"Skip '{job['job_title']}': faiss={raw_faiss:.3f}")
                 continue
 
-            if span_text.lower() in SOFT_SKILLS_EXCLUDE:
-                continue
-
-            span_words = span_text.lower().split()
-            if all(w in cert_context_words for w in span_words):
-                continue
-
-            span_lower = span_text.lower()
-            if any(span_lower in cert.lower() and
-                   any(w in cert.lower() for w in CERT_PROVIDER_WORDS)
-                   for cert in cert_strings):
-                continue
-
-            raw_skills.add(span_text)
-
-        normalized = [self.normalizer.normalize(s) for s in raw_skills]
-        return sorted(set(filter(None, normalized)))
-
-    def process(self, raw_text: str) -> dict:
-        cleaned = self._clean_text(raw_text)
-
-        # ── Certifications ────────────────────────────────────────────────────
-        # Certifications are extracted from the full text (including Projects)
-        # since certs are typically listed by name, not buried in narrative.
-        cert_section = _extract_certs_section(cleaned)
-        cert_text    = cert_section if cert_section else cleaned
-        certifications = self.extract_certifications(cert_text)
-        logger.info(
-            f"Cert source: {'section' if cert_section else 'full text'} "
-            f"→ {len(certifications)} certifications"
-        )
-
-        # ── Skills ────────────────────────────────────────────────────────────
-        # Priority 1: Dedicated Skills / Technical Skills section (most reliable)
-        skill_section = _extract_skills_section(cleaned)
-        if skill_section:
-            logger.info(
-                f"Skills section found ({len(skill_section)} chars) — "
-                "extracting only from Skills section"
+            result = self._compute_unified_score(
+                user_skills=skills,
+                user_certs=certifications,
+                user_skill_embs=user_embs["skills"],
+                user_cert_embs=user_embs["certs"],
+                job=job,
+                faiss_score=raw_faiss,
             )
-            skills = self.extract_skills(skill_section, certifications)
 
-            # If Skills section exists but yields very few results (< 3),
-            # augment with Summary/Experience fallback to avoid under-extraction
-            # on sparse or unusually formatted skills sections.
-            if len(skills) < 3:
-                logger.warning(
-                    f"Skills section yielded only {len(skills)} skills — "
-                    "augmenting with Summary/Experience fallback"
-                )
-                safe_text = _extract_safe_fallback_text(cleaned)
-                fallback_skills = self.extract_skills(safe_text, certifications)
-                # Merge without duplicates, preserving order
-                existing_lower = {s.lower() for s in skills}
-                for s in fallback_skills:
-                    if s.lower() not in existing_lower:
-                        skills.append(s)
-                        existing_lower.add(s.lower())
-                skills = sorted(skills)
-        else:
-            # FIX BUG 6/7: DO NOT fall back to full-text extraction.
-            # Full-text includes the Projects section, which contains tech terms
-            # used in a narrative context ("built X using React") — these create
-            # false skill signals that produce inaccurate FAISS embeddings and
-            # bypass the ZERO_SKILL_SCORE_CAP via matched_count=1 keyword hits.
-            #
-            # Instead: extract from Summary + Experience sections only.
-            # These are where candidates intentionally list what they know.
-            logger.warning(
-                "No Skills section detected — "
-                "falling back to Summary/Experience extraction (Projects excluded)"
-            )
-            safe_text = _extract_safe_fallback_text(cleaned)
-            skills = self.extract_skills(safe_text, certifications)
+            scored_jobs.append({
+                "job_title":           job["job_title"],
+                "match_score":         result["final_score_pct"],
+                "faiss_score_raw":     raw_faiss,
+                "skill_score_raw":     result["skill_score"],
+                "matched_skill_count": result["matched_count"],
+                "matched_skills":      result["matched_skills"],
+                "skills":              job.get("skills", []),
+                "certifications":      job.get("certifications", []),
+            })
 
-        # Deduplicate: remove substrings, synonyms, and case duplicates
-        # e.g. CRUD + CRUD Application Development → CRUD Application Development
-        #      Git + Git Version Control + Version Control → Git
-        skills = self.normalizer.deduplicate_skills(skills)
+            if VERBOSE_MATCH_LOGGING:
+                self._log_job_result(job, result)
 
-        logger.info(f"NLP extracted {len(skills)} skills, {len(certifications)} certifications.")
+        scored_jobs.sort(key=lambda x: x["match_score"], reverse=True)
+        best_score = scored_jobs[0]["match_score"] if scored_jobs else 0.0
+
         return {
-            "skills": skills,
-            "certifications": certifications,
-            "word_count": len(cleaned.split()),
+            "skills":           skills,
+            "certifications":   certifications,
+            "word_count":       extracted["word_count"],
+            "top_job_matches":  scored_jobs,
+            "best_match_score": best_score,
+            "query_embedding":  user_embs["query"].tolist(),
         }
 
-    @staticmethod
-    def _clean_text(text: str) -> str:
-        # Remove noise
-        text = re.sub(r"https?://\S+|www\.\S+", " ", text)
-        text = re.sub(r"\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b", " ", text)
-        text = re.sub(r"\+?\d[\d\s\-().]{7,}\d", " ", text)
+    # ── OCR correction ────────────────────────────────────────────────────────
 
-        # FIX: collapse horizontal whitespace ONLY — preserve newlines.
-        # The old re.sub(r'\s+', ' ') collapsed newlines into spaces, turning
-        # 'SKILLS\nMERN Stack' into 'SKILLS MERN Stack', which broke every
-        # section-header regex that relied on \n or \s{2,} after the keyword.
-        text = re.sub(r"[ \t]+", " ", text)
+    def _ocr_correct(self, text: str) -> str:
+        """
+        Correct likely OCR misreads of skill names.
+        Vocab source: _FIRESTORE_SKILLS (skills from Firestore job corpus).
+        One embed_batch call for all candidates — fast, not one call per word.
+        """
+        try:
+            vocab_embs = _get_ocr_vocab_embs()
+            if vocab_embs is None:
+                return text   # vocab not loaded yet — skip silently
 
-        # Collapse 3+ newlines to 2 to keep section breaks intact
-        text = re.sub(r"\n{3,}", "\n\n", text)
+            vocab  = _FIRESTORE_SKILLS or _CANONICAL_LIST
+            words  = text.split()
 
-        # Fix two-column PDF cert merging: insert \n before known providers
-        # when they appear mid-line (no preceding newline).
-        # e.g. "Udemy – Flutter CertifiedFreeCodeCamp – Web Design"
-        #   -> "Udemy – Flutter Certified\nFreeCodeCamp – Web Design"
-        _PROVIDERS = (
-            r"(?<=[^\n])(FreeCodeCamp|Udemy|Coursera|edX|LinkedIn\s+Learning"
-            r"|Cisco|Microsoft|Google|Amazon|Oracle|CompTIA|IBM|Meta|Apple)"
+            candidate_positions: list[int] = []
+            candidate_tokens:    list[str] = []
+
+            for i, word in enumerate(words):
+                clean = word.strip(".,;:()[]\"'")
+                if len(clean) < 3 or not any(c.isalpha() for c in clean):
+                    continue
+                if clean.islower() and len(clean) > 12:
+                    continue
+                if clean.lower() in _COMMON_WORDS:
+                    continue
+                candidate_positions.append(i)
+                candidate_tokens.append(clean)
+
+            if not candidate_tokens:
+                return text
+
+            candidate_embs = self.embedder.embed_batch(candidate_tokens)
+            sim_matrix     = candidate_embs @ vocab_embs.T
+
+            corrections = 0
+            for pos, token, sims in zip(candidate_positions, candidate_tokens, sim_matrix):
+                best_idx = int(np.argmax(sims))
+                best_sim = float(sims[best_idx])
+                if _OCR_CORR_LOW <= best_sim < _OCR_CORR_HIGH:
+                    corrected = vocab[best_idx]
+                    logger.debug(f"OCR: '{token}' → '{corrected}' ({best_sim:.3f})")
+                    words[pos] = words[pos].replace(token, corrected)
+                    corrections += 1
+
+            if corrections:
+                logger.info(f"OCR correction: {corrections} token(s) corrected.")
+            return " ".join(words)
+
+        except Exception as e:
+            logger.warning(f"OCR correction failed (non-fatal): {e}")
+            return text
+
+    # ── Cluster-aware embedding ───────────────────────────────────────────────
+
+    def _embed_user_profile_clustered(
+            self, skills: list[str], certifications: list[str]
+    ) -> dict:
+        dim = self.embedder.model.get_sentence_embedding_dimension()
+
+        skill_embs = (
+            self.embedder.embed_batch(skills)
+            if skills else np.empty((0, dim), dtype=np.float32)
         )
-        text = re.sub(_PROVIDERS, r"\n\1", text)
+        cert_embs = (
+            self.embedder.embed_batch(certifications)
+            if certifications else np.empty((0, dim), dtype=np.float32)
+        )
 
-        # Strip trailing spaces per line
-        text = "\n".join(line.rstrip() for line in text.splitlines())
-        return text.strip()
+        if not skills:
+            return {
+                "query":  np.zeros(dim, dtype=np.float32),
+                "skills": skill_embs,
+                "certs":  cert_embs,
+            }
+
+        try:
+            clusters    = self.clusterer.cluster_skills(skills)
+            domain_vecs = [
+                self.embedder.embed_skill_list(cs)
+                for cs in clusters.values() if cs
+            ]
+            query = (
+                np.mean(domain_vecs, axis=0).astype(np.float32)
+                if domain_vecs
+                else skill_embs.mean(axis=0).astype(np.float32)
+            )
+        except Exception as e:
+            logger.warning(f"Clustering failed, using mean: {e}")
+            query = skill_embs.mean(axis=0).astype(np.float32)
+
+        norm = np.linalg.norm(query)
+        if norm > 0:
+            query = query / norm
+
+        return {"query": query, "skills": skill_embs, "certs": cert_embs}
+
+    # ── Scoring ───────────────────────────────────────────────────────────────
+
+    def _compute_unified_score(
+            self,
+            user_skills:     list[str],
+            user_certs:      list[str],
+            user_skill_embs: np.ndarray,
+            user_cert_embs:  np.ndarray,
+            job:             dict,
+            faiss_score:     float = 0.0,
+    ) -> dict:
+        required_skills: list[str] = job.get("skills", [])
+        required_certs:  list[str] = job.get("certifications", [])
+
+        if not required_skills:
+            return {
+                "skill_score": 0.0, "cert_bonus": 0.0,
+                "matched_count": 0, "matched_skills": [],
+                "cap_applied": False, "final_score_pct": 0.0,
+            }
+
+        # Build user lookup
+        user_normalized: set[str] = set()
+        user_keywords:   set[str] = set()
+        for s in user_skills:
+            norm = self.normalizer.normalize(s)
+            if norm:
+                user_normalized.add(norm.lower())
+            for w in s.lower().split():
+                if len(w) > 2:
+                    user_keywords.add(w)
+        for cert in user_certs:
+            for w in cert.lower().split():
+                if len(w) > 3:
+                    user_keywords.add(w)
+
+        # Find the global skill offset for this job so we can look up ctx embeddings
+        job_idx = next(
+            (i for i, m in enumerate(self.faiss.metadata) if m is job),
+            None
+        )
+        ctx_start = self.faiss.get_skill_global_offset(job_idx) if job_idx is not None else -1
+
+        # Pre-compute semantic similarities for ALL required skills at once.
+        # Strategy: fetch this job's skill embedding vectors from the ctx_embs matrix
+        # and do ONE matrix multiply: user_embs (n_user, dim) @ job_embs (dim, n_req)
+        # → sim_matrix (n_user, n_req). Column j gives all user-skill sims against
+        # required skill j. max over rows = best user-skill match for each required skill.
+        # Cost: one numpy matmul instead of N_user × N_req FAISS calls.
+        per_req_skill_sims: np.ndarray | None = None  # shape (n_req,)
+        if user_skill_embs.shape[0] > 0 and ctx_start >= 0 and self.faiss._ctx_embs is not None:
+            n_req = len(required_skills)
+            ctx_end = ctx_start + n_req
+            if ctx_end <= len(self.faiss._ctx_embs):
+                # (n_req, dim) float16 → float32
+                job_ctx_embs = self.faiss._ctx_embs[ctx_start:ctx_end].astype(np.float32)
+                # (n_user, dim) @ (dim, n_req) = (n_user, n_req)
+                sim_matrix = user_skill_embs @ job_ctx_embs.T
+                # Best user-skill similarity for each required skill
+                per_req_skill_sims = sim_matrix.max(axis=0)  # (n_req,)
+
+        matched_count   = 0
+        matched_skills: list[str] = []
+        matched_weights: list[float] = []
+        total_weight    = 0.0
+        idf             = self.faiss.idf_weights
+
+        for i, req_skill in enumerate(required_skills):
+            norm_req   = (self.normalizer.normalize(req_skill) or req_skill).lower()
+            matched_by = None
+
+            # Gate 1: Exact
+            if norm_req in user_normalized:
+                matched_by = "exact"
+
+            # Gate 2: Keyword overlap
+            if not matched_by:
+                req_words = {w for w in req_skill.lower().split() if len(w) > 2}
+                if req_words:
+                    overlap = len(req_words & user_keywords) / len(req_words)
+                    if overlap >= KEYWORD_OVERLAP_THRESHOLD:
+                        matched_by = "keyword"
+
+            # Gate 3: Semantic — contextual embedding matrix (correct direction)
+            # per_req_skill_sims[i] = max cosine sim between any user skill and
+            # the contextual embedding of required skill i ("job_title: req_skill")
+            # This correctly answers "does any user skill semantically cover req_skill i?"
+            if not matched_by and per_req_skill_sims is not None:
+                sim = float(per_req_skill_sims[i])
+                if sim >= SEMANTIC_SKILL_THRESHOLD:
+                    matched_by = f"semantic({sim:.2f})"
+
+            skill_weight = idf.get(req_skill.lower(), 1.0)
+            total_weight += skill_weight
+
+            if matched_by:
+                matched_count += 1
+                matched_skills.append(req_skill)
+                matched_weights.append(skill_weight)
+                if VERBOSE_MATCH_LOGGING:
+                    logger.debug(f"  ✓ '{req_skill}' [{matched_by}] idf={skill_weight:.2f}")
+            else:
+                if VERBOSE_MATCH_LOGGING:
+                    logger.debug(f"  ✗ '{req_skill}' [no match] idf={skill_weight:.2f}")
+
+        skill_score = sum(matched_weights) / total_weight if total_weight > 0 else 0.0
+
+        # Cert bonus
+        cert_bonus = 0.0
+        if required_certs and user_cert_embs.shape[0] > 0:
+            cert_matched = sum(
+                1 for rc in required_certs
+                if self._cert_matches(rc, user_cert_embs)
+            )
+            cert_bonus = (cert_matched / len(required_certs)) * CERT_BONUS_MAX
+
+        # FAISS confidence sigmoid multiplier
+        sigmoid    = 1.0 / (1.0 + math.exp(-_SIGMOID_SCALE * (faiss_score - _SIGMOID_CENTER)))
+        confidence = _CONF_MIN + (1.0 - _CONF_MIN) * sigmoid
+        blended    = skill_score * confidence
+
+        # Suppression gates
+        cap_applied = False
+        if matched_count == 0:
+            blended    = min(blended, ZERO_SKILL_SCORE_CAP)
+            cert_bonus = 0.0
+            cap_applied = True
+        elif matched_count < MIN_MATCHED_SKILLS_FOR_SCORE:
+            blended    = 0.0
+            cert_bonus = 0.0
+            cap_applied = True
+
+        final_pct = round(min((blended + cert_bonus) * 100, 100.0), 1)
+
+        return {
+            "skill_score":     skill_score,
+            "cert_bonus":      cert_bonus,
+            "matched_count":   matched_count,
+            "matched_skills":  matched_skills,
+            "cap_applied":     cap_applied,
+            "final_score_pct": final_pct,
+            "confidence":      round(confidence, 3),
+        }
+
+    def _cert_matches(self, req_cert: str, user_cert_embs: np.ndarray) -> bool:
+        try:
+            req_emb = self.embedder.embed(req_cert)
+            sims    = user_cert_embs @ req_emb
+            return float(sims.max()) >= SEMANTIC_CERT_THRESHOLD
+        except Exception:
+            return False
+
+    def _log_job_result(self, job: dict, result: dict) -> None:
+        required    = job.get("skills", [])
+        matched_set = set(result["matched_skills"])
+        skill_lines = "\n".join(
+            f"    {'✓' if s in matched_set else '✗'} {s}" for s in required
+        )
+        logger.info(
+            f"\n{'='*52}\n"
+            f"TOP MATCH: {job['job_title']!r}\n"
+            f"  Score  : {result['matched_count']}/{len(required)}"
+            f" = {result['skill_score']:.1%} (IDF-weighted)\n"
+            f"  FAISS  : confidence={result.get('confidence',1.0):.3f}\n"
+            f"  Final  : {result['final_score_pct']}%\n"
+            f"  Skills :\n{skill_lines}\n"
+            f"{'='*52}"
+        )

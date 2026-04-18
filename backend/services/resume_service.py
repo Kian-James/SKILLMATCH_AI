@@ -23,7 +23,8 @@ from ai_modules.nlp_processor import NLPProcessor
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from ai_modules.skill_clusterer import SkillClusterer
-from utils.skill_normalizer import SkillNormalizer, _CANONICAL_LIST as _ocr_vocab
+from utils.skill_normalizer import SkillNormalizer, _CANONICAL_LIST
+from ai_modules.nlp_processor import _FIRESTORE_SKILLS
 
 try:
     from matching_config import (
@@ -87,11 +88,26 @@ _shared_embedder:   EmbeddingEngine | None = None
 _shared_clusterer:  SkillClusterer  | None = None
 _shared_normalizer: SkillNormalizer | None = None
 
-# OCR correction: vocabulary + embedding matrix (computed once on first use)
-# OCR correction vocabulary — populated dynamically from Firestore at startup
-# via _CANONICAL_LIST (imported above). Empty until load_dynamic_synonyms() runs.
+# OCR correction: vocabulary comes from Firestore job skills (_FIRESTORE_SKILLS),
+# populated when NLPProcessor.build_matcher_from_firestore() runs at warmup.
 _ocr_vocab_embs: np.ndarray | None = None   # (n_vocab, dim) float32
 
+
+def _get_ocr_vocab_embs() -> np.ndarray | None:
+    """
+    Embedding matrix for OCR correction vocabulary.
+    Source: _FIRESTORE_SKILLS (all skills from Firestore job corpus).
+    Returns None if vocabulary not yet loaded (warmup hasn't run yet).
+    """
+    global _ocr_vocab_embs
+    vocab = _FIRESTORE_SKILLS or _CANONICAL_LIST
+    if not vocab:
+        return None
+    # Rebuild if vocab grew (e.g. after a FAISS index rebuild adds new jobs)
+    if _ocr_vocab_embs is None or _ocr_vocab_embs.shape[0] != len(vocab):
+        logger.debug(f"Computing OCR vocab embeddings ({len(vocab)} Firestore skills)...")
+        _ocr_vocab_embs = _get_embedder().embed_batch(vocab)
+    return _ocr_vocab_embs
 
 def _get_embedder() -> EmbeddingEngine:
     global _shared_embedder
@@ -216,31 +232,26 @@ class ResumeService:
     def _ocr_correct(self, text: str) -> str:
         """
         Correct likely OCR misreads of skill names.
-
-        Strategy: batch-embed only tokens that look like potential skill names
-        (CamelCase, mixed-case, known tech length, not plain English words).
-        One embed_batch call for all candidates — not one call per word.
-        Typical resume: 300-500 words → ~20-40 candidates → 1 batch, <1s.
+        Vocab source: _FIRESTORE_SKILLS (skills from Firestore job corpus).
+        One embed_batch call for all candidates — fast, not one call per word.
         """
         try:
-            words = text.split()
+            vocab_embs = _get_ocr_vocab_embs()
+            if vocab_embs is None:
+                return text   # vocab not loaded yet — skip silently
 
-            # Identify candidate indices — tokens that could be misread skills
+            vocab  = _FIRESTORE_SKILLS or _CANONICAL_LIST
+            words  = text.split()
+
             candidate_positions: list[int] = []
             candidate_tokens:    list[str] = []
 
             for i, word in enumerate(words):
                 clean = word.strip(".,;:()[]\"'")
-                # Skip: too short, no letters, or plain lowercase common words
                 if len(clean) < 3 or not any(c.isalpha() for c in clean):
                     continue
-                # Skip purely lowercase tokens longer than 12 chars
-                # (likely prose, not a skill name)
                 if clean.islower() and len(clean) > 12:
                     continue
-                # Skip tokens that are already in the diskcache
-                # (embed() will hit cache anyway, but we avoid even that overhead
-                #  for words that clearly aren't skills)
                 if clean.lower() in _COMMON_WORDS:
                     continue
                 candidate_positions.append(i)
@@ -249,19 +260,15 @@ class ResumeService:
             if not candidate_tokens:
                 return text
 
-            # One batch embed call for all candidates
-            vocab_embs    = _get_ocr_vocab_embs()         # (n_vocab, dim)
-            candidate_embs = self.embedder.embed_batch(candidate_tokens)  # (n_cand, dim)
-
-            # Vectorised similarity: (n_cand, n_vocab)
-            sim_matrix = candidate_embs @ vocab_embs.T
+            candidate_embs = self.embedder.embed_batch(candidate_tokens)
+            sim_matrix     = candidate_embs @ vocab_embs.T
 
             corrections = 0
             for pos, token, sims in zip(candidate_positions, candidate_tokens, sim_matrix):
                 best_idx = int(np.argmax(sims))
                 best_sim = float(sims[best_idx])
                 if _OCR_CORR_LOW <= best_sim < _OCR_CORR_HIGH:
-                    corrected = _ocr_vocab[best_idx]
+                    corrected = vocab[best_idx]
                     logger.debug(f"OCR: '{token}' → '{corrected}' ({best_sim:.3f})")
                     words[pos] = words[pos].replace(token, corrected)
                     corrections += 1
