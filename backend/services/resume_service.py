@@ -23,7 +23,7 @@ from ai_modules.nlp_processor import NLPProcessor
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from ai_modules.skill_clusterer import SkillClusterer
-from utils.skill_normalizer import SkillNormalizer, SKILL_SYNONYMS
+from utils.skill_normalizer import SkillNormalizer, _CANONICAL_LIST as _ocr_vocab
 
 try:
     from matching_config import (
@@ -88,7 +88,8 @@ _shared_clusterer:  SkillClusterer  | None = None
 _shared_normalizer: SkillNormalizer | None = None
 
 # OCR correction: vocabulary + embedding matrix (computed once on first use)
-_ocr_vocab:      list[str]       = list(SKILL_SYNONYMS.keys())
+# OCR correction vocabulary — populated dynamically from Firestore at startup
+# via _CANONICAL_LIST (imported above). Empty until load_dynamic_synonyms() runs.
 _ocr_vocab_embs: np.ndarray | None = None   # (n_vocab, dim) float32
 
 
@@ -276,7 +277,7 @@ class ResumeService:
     # ── Cluster-aware embedding ───────────────────────────────────────────────
 
     def _embed_user_profile_clustered(
-        self, skills: list[str], certifications: list[str]
+            self, skills: list[str], certifications: list[str]
     ) -> dict:
         dim = self.embedder.model.get_sentence_embedding_dimension()
 
@@ -320,13 +321,13 @@ class ResumeService:
     # ── Scoring ───────────────────────────────────────────────────────────────
 
     def _compute_unified_score(
-        self,
-        user_skills:     list[str],
-        user_certs:      list[str],
-        user_skill_embs: np.ndarray,
-        user_cert_embs:  np.ndarray,
-        job:             dict,
-        faiss_score:     float = 0.0,
+            self,
+            user_skills:     list[str],
+            user_certs:      list[str],
+            user_skill_embs: np.ndarray,
+            user_cert_embs:  np.ndarray,
+            job:             dict,
+            faiss_score:     float = 0.0,
     ) -> dict:
         required_skills: list[str] = job.get("skills", [])
         required_certs:  list[str] = job.get("certifications", [])
