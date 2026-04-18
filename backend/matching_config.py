@@ -40,7 +40,11 @@ KEYWORD_OVERLAP_THRESHOLD: float = 0.60
 # Minimum cosine similarity for semantic skill matching
 # Lowered from 0.75 → 0.68: reduces false misses for semantically similar
 # but differently-worded skills e.g. "RESTful APIs" vs "REST API Development"
-SEMANTIC_SKILL_THRESHOLD: float = 0.68
+# Minimum cosine similarity for semantic skill matching.
+# 0.65: catches framework→language implications (React→JavaScript ~0.72,
+# Flutter→Dart ~0.74, Node.js→JavaScript ~0.78) while still rejecting
+# genuinely different skills (Python→Java ~0.58, React→Vue ~0.61).
+SEMANTIC_SKILL_THRESHOLD: float = 0.65
 
 # Minimum cosine similarity for semantic CERTIFICATION matching
 # Lowered slightly from 0.78 → 0.75 for better cert matching

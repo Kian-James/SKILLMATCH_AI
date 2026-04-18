@@ -514,6 +514,11 @@ class NLPProcessor:
             safe_text = _extract_safe_fallback_text(cleaned)
             skills = self.extract_skills(safe_text, certifications)
 
+        # Deduplicate: remove substrings, synonyms, and case duplicates
+        # e.g. CRUD + CRUD Application Development → CRUD Application Development
+        #      Git + Git Version Control + Version Control → Git
+        skills = self.normalizer.deduplicate_skills(skills)
+
         logger.info(f"NLP extracted {len(skills)} skills, {len(certifications)} certifications.")
         return {
             "skills": skills,

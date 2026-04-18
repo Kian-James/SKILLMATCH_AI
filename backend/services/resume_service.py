@@ -361,23 +361,23 @@ class ResumeService:
         )
         ctx_start = self.faiss.get_skill_global_offset(job_idx) if job_idx is not None else -1
 
-        # Pre-compute Gate 3a in one shot: batch-search all user skill embeddings
-        # against the skill FAISS index simultaneously.
-        # Result: dict mapping job_skill_name.lower() → best_user_sim score.
-        # Cost: ONE FAISS batch search instead of N_user × N_req_skills searches.
-        skill_index_matches: dict[str, float] = {}
-        if user_skill_embs.shape[0] > 0 and self.faiss.skill_index is not None:
-            # Search all user embeddings at once: returns (n_user, 1) top-1 results
-            queries  = user_skill_embs.astype(np.float32)
-            scores_m, idxs_m = self.faiss.skill_index.search(queries, 1)
-            for score_row, idx_row in zip(scores_m, idxs_m):
-                best_score = float(score_row[0])
-                best_idx   = int(idx_row[0])
-                if best_idx >= 0 and best_score >= SEMANTIC_SKILL_THRESHOLD:
-                    skill_name = self.faiss.skill_meta[best_idx]["skill_name"].lower()
-                    # Keep the highest sim across all user skills for each job skill
-                    if best_score > skill_index_matches.get(skill_name, 0.0):
-                        skill_index_matches[skill_name] = best_score
+        # Pre-compute semantic similarities for ALL required skills at once.
+        # Strategy: fetch this job's skill embedding vectors from the ctx_embs matrix
+        # and do ONE matrix multiply: user_embs (n_user, dim) @ job_embs (dim, n_req)
+        # → sim_matrix (n_user, n_req). Column j gives all user-skill sims against
+        # required skill j. max over rows = best user-skill match for each required skill.
+        # Cost: one numpy matmul instead of N_user × N_req FAISS calls.
+        per_req_skill_sims: np.ndarray | None = None  # shape (n_req,)
+        if user_skill_embs.shape[0] > 0 and ctx_start >= 0 and self.faiss._ctx_embs is not None:
+            n_req = len(required_skills)
+            ctx_end = ctx_start + n_req
+            if ctx_end <= len(self.faiss._ctx_embs):
+                # (n_req, dim) float16 → float32
+                job_ctx_embs = self.faiss._ctx_embs[ctx_start:ctx_end].astype(np.float32)
+                # (n_user, dim) @ (dim, n_req) = (n_user, n_req)
+                sim_matrix = user_skill_embs @ job_ctx_embs.T
+                # Best user-skill similarity for each required skill
+                per_req_skill_sims = sim_matrix.max(axis=0)  # (n_req,)
 
         matched_count   = 0
         matched_skills: list[str] = []
@@ -401,17 +401,14 @@ class ResumeService:
                     if overlap >= KEYWORD_OVERLAP_THRESHOLD:
                         matched_by = "keyword"
 
-            # Gate 3a: skill index lookup (pre-computed above — O(1) dict lookup)
-            if not matched_by and norm_req in skill_index_matches:
-                matched_by = f"skill_idx({skill_index_matches[norm_req]:.2f})"
-
-            # Gate 3b: Contextual embedding (float16 → float32 upcast)
-            if not matched_by and ctx_start >= 0 and user_skill_embs.shape[0] > 0:
-                ctx_emb = self.faiss.get_ctx_embedding(ctx_start + i)
-                if ctx_emb is not None:
-                    sims_ctx = user_skill_embs @ ctx_emb
-                    if float(sims_ctx.max()) >= SEMANTIC_SKILL_THRESHOLD:
-                        matched_by = "ctx_embed"
+            # Gate 3: Semantic — contextual embedding matrix (correct direction)
+            # per_req_skill_sims[i] = max cosine sim between any user skill and
+            # the contextual embedding of required skill i ("job_title: req_skill")
+            # This correctly answers "does any user skill semantically cover req_skill i?"
+            if not matched_by and per_req_skill_sims is not None:
+                sim = float(per_req_skill_sims[i])
+                if sim >= SEMANTIC_SKILL_THRESHOLD:
+                    matched_by = f"semantic({sim:.2f})"
 
             skill_weight = idf.get(req_skill.lower(), 1.0)
             total_weight += skill_weight
