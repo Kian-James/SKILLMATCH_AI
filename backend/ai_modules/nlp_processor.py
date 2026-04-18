@@ -139,6 +139,9 @@ SOFT_SKILLS_EXCLUDE: set[str] = {
     #  have Authentication as a standalone skill — it's a feature they implemented)
     "authentication", "authorization", "role-based access control",
     "role based access control",
+    # Resume section headers that sometimes get caught by the matcher
+    "certifications", "certificates", "skills", "education", "experience",
+    "work experience", "projects", "summary", "profile", "contact",
 }
 
 CERT_PROVIDER_WORDS: set[str] = {
@@ -368,27 +371,80 @@ class NLPProcessor:
         Fetch all skills from Firestore job documents and build the PhraseMatcher.
         Call once at warmup after Firebase and FAISS are ready.
         Returns number of unique skill patterns loaded.
+
+        Quality filtering:
+          - Single-word skills must be >= 3 chars and not a common English word
+          - Multi-word skills kept as-is (specific enough to be safe)
+          - Individual words NOT split from multi-word skills — caused 'web',
+            'code', 'the', 'boot', 'stack' to match plain prose words
+          - Skills in SOFT_SKILLS_EXCLUDE dropped
+
+        Resume vocab bridge: common resume skill phrases that candidates write
+        but jobs may not list verbatim in Firestore (e.g. "MERN Stack").
         """
         from services.firebase_service import fetch_all_jobs
         jobs = fetch_all_jobs()
 
-        # Collect every unique skill string from every job's 'skills' array
-        all_skills: set[str] = set()
+        _SKIP_SINGLE_WORDS: frozenset = frozenset({
+            "the", "and", "for", "with", "web", "app", "code", "build", "tool",
+            "core", "site", "mobile", "user", "system", "time", "load", "non",
+            "data", "test", "software", "access", "device", "cross", "functional",
+            "performance", "management", "navigation", "reduction", "prevention",
+            "compliance", "audit", "coding", "applications", "frequency",
+            "integrated", "boot", "spring", "stack", "testing", "service",
+            "platform", "framework", "language", "development", "engineering",
+            "database", "certifications", "certificates", "skills", "experience",
+        })
+
+        all_skills: set = set()
         for job in jobs:
             for skill in job.get("skills", []):
                 s = skill.strip()
-                if s:
+                if not s or s.lower() in SOFT_SKILLS_EXCLUDE:
+                    continue
+                words = s.split()
+                if len(words) == 1:
+                    if len(s) >= 3 and s.lower() not in _SKIP_SINGLE_WORDS:
+                        all_skills.add(s)
+                else:
                     all_skills.add(s)
-                    # Also add individual words from multi-word skills so
-                    # parenthetical expansion components are matchable
-                    # e.g. "MERN Stack" → also register "MERN"
-                    if " " in s:
-                        for part in s.split():
-                            if len(part) > 2:
-                                all_skills.add(part)
+
+        RESUME_SKILL_VOCAB = [
+            "MERN Stack", "MEAN Stack", "LAMP Stack", "MERN", "MEAN",
+            "CRUD Application Development", "CRUD",
+            "Flutter & Firebase Development", "Flutter & Firebase",
+            "REST APIs & Backend Development", "Git Version Control",
+            "Object-Oriented Programming", "OOP",
+            "Full Stack Development", "Backend Development", "Frontend Development",
+            "Mobile Development", "Web Development", "API Development",
+            "Data Structures and Algorithms", "Data Structures",
+            "CI/CD", "DevOps", "MLOps", "SRE",
+            "Spring Boot", "React Native", "Next.js", "Node.js",
+            "Express.js", "Vue.js", "Angular", "FastAPI", "Django", "Flask",
+            "TypeScript", "JavaScript", "Python", "Java", "Kotlin", "Swift",
+            "Dart", "Go", "Rust", "PHP", "Ruby", "Scala", "C#", "C++",
+            "MySQL", "PostgreSQL", "MongoDB", "Redis", "Firebase", "Firestore",
+            "Docker", "Kubernetes", "Terraform", "AWS", "GCP", "Azure",
+            "Git", "GitHub", "GitLab", "Jira", "Linux", "HTML/CSS", "HTML", "CSS",
+            "Machine Learning", "Deep Learning", "NLP", "Computer Vision",
+            "TensorFlow", "PyTorch", "scikit-learn", "Pandas", "NumPy",
+            "GraphQL", "REST API", "RESTful APIs", "gRPC", "WebSockets",
+            "Agile", "Scrum", "Kanban", "System Design", "Microservices",
+            "Unit Testing", "Integration Testing", "TDD",
+            "JUnit", "Jest", "Pytest", "Selenium", "Cypress",
+            "Blockchain", "Smart Contracts", "Solidity",
+            "React", "jQuery", "Bootstrap", "Tailwind CSS",
+            "Webpack", "Vite", "SASS", "SCSS",
+            "Eclipse", "IntelliJ", "Postman", "Swagger", "Figma",
+            "Memcyco", "Spring", "Hibernate", "Spring Boot",
+        ]
+        for skill in RESUME_SKILL_VOCAB:
+            s = skill.strip()
+            if s and s.lower() not in SOFT_SKILLS_EXCLUDE:
+                all_skills.add(s)
 
         if not all_skills:
-            logger.warning("No skills found in Firestore job corpus — matcher is empty.")
+            logger.warning("No skills found — matcher is empty.")
             return 0
 
         nlp = _load_nlp_model()
@@ -396,16 +452,15 @@ class NLPProcessor:
         cls._shared_matcher = matcher
         cls._shared_nlp = nlp
 
-        # Update module-level list so other modules (e.g. resume_service OCR vocab)
-        # can reference the skill vocabulary without re-querying Firestore
         global _FIRESTORE_SKILLS
         _FIRESTORE_SKILLS = sorted(all_skills)
 
         logger.info(
-            f"PhraseMatcher built from Firestore: {len(all_skills)} unique skill patterns "
-            f"across {len(jobs)} jobs."
+            f"PhraseMatcher built: {len(all_skills)} patterns "
+            f"({len(jobs)} Firestore jobs + resume vocab bridge)."
         )
         return len(all_skills)
+
 
     def extract_certifications(self, text: str) -> list[str]:
         raw: list[str] = []
