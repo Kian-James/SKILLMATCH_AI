@@ -175,8 +175,9 @@ class SkillNormalizer:
         from ai_modules.llm_resources import _call_llm
 
         if canonical_skills is None:
-            from ai_modules.nlp_processor import KNOWN_SKILLS
-            canonical_skills = list(KNOWN_SKILLS)
+            # Fall back to skills already loaded from Firestore job corpus
+            from ai_modules.nlp_processor import _FIRESTORE_SKILLS
+            canonical_skills = list(_FIRESTORE_SKILLS)
 
         db   = get_db()
         coll = db.collection("skill_synonyms")

@@ -19,12 +19,11 @@ import numpy as np
 from loguru import logger
 
 from ai_modules.ocr_extractor import extract_text, extract_text_flagged
-from ai_modules.nlp_processor import NLPProcessor
+from ai_modules.nlp_processor import NLPProcessor, _FIRESTORE_SKILLS
 from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from ai_modules.skill_clusterer import SkillClusterer
 from utils.skill_normalizer import SkillNormalizer, _CANONICAL_LIST
-from ai_modules.nlp_processor import _FIRESTORE_SKILLS
 
 try:
     from matching_config import (
