@@ -130,14 +130,6 @@ def _get_normalizer() -> SkillNormalizer:
     return _shared_normalizer
 
 
-def _get_ocr_vocab_embs() -> np.ndarray:
-    global _ocr_vocab_embs
-    if _ocr_vocab_embs is None:
-        logger.debug("Computing OCR correction vocabulary embeddings (once)...")
-        _ocr_vocab_embs = _get_embedder().embed_batch(_ocr_vocab)
-    return _ocr_vocab_embs
-
-
 class ResumeService:
 
     def __init__(self, faiss_index: FAISSIndex):
