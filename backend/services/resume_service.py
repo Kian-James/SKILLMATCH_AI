@@ -24,6 +24,7 @@ from ai_modules.embedding_engine import EmbeddingEngine
 from ai_modules.faiss_index import FAISSIndex
 from ai_modules.skill_clusterer import SkillClusterer
 from utils.skill_normalizer import SkillNormalizer, _CANONICAL_LIST
+from ai_modules.skill_implications import check_implied, load_implications_from_firestore
 
 try:
     from matching_config import (
@@ -348,6 +349,8 @@ class ResumeService:
         # Build user lookup
         user_normalized: set[str] = set()
         user_keywords:   set[str] = set()
+        user_skills_lower_set: set[str] = {s.lower().strip() for s in user_skills}
+
         for s in user_skills:
             norm = self.normalizer.normalize(s)
             if norm:
@@ -415,6 +418,13 @@ class ResumeService:
                 sim = float(per_req_skill_sims[i])
                 if sim >= SEMANTIC_SKILL_THRESHOLD:
                     matched_by = f"semantic({sim:.2f})"
+
+            # Gate 4: LLM implication map (O(1) dict lookup — no inference cost)
+            # Catches relationships RoBERTa misses: React→HTML/CSS, Java→OOP,
+            # Flutter→Dart, MongoDB→NoSQL, Spring Boot→Java etc.
+            if not matched_by:
+                if check_implied(req_skill, user_skills_lower_set):
+                    matched_by = "llm_implied"
 
             skill_weight = idf.get(req_skill.lower(), 1.0)
             total_weight += skill_weight

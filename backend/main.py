@@ -106,6 +106,14 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"OCR vocab pre-warm failed (non-fatal): {e}")
 
+        # Load LLM skill implication map (seed + Firestore entries)
+        try:
+            from ai_modules.skill_implications import load_implications_from_firestore
+            n_implied = load_implications_from_firestore()
+            logger.info(f"Skill implication map ready: {n_implied} skills covered.")
+        except Exception as e:
+            logger.warning(f"Implication map load failed (non-fatal): {e}")
+
         app.state.faiss_ready = True
         logger.info("All ML models ready.")
 
@@ -144,10 +152,54 @@ async def generate_synonyms():
     One-time admin job: call Zephyr 7B to generate skill aliases for all
     canonical skills and persist to Firestore (skill_synonyms collection).
     Safe to re-run — skips skills that already have Firestore entries.
-    Call once after first deploy; subsequent startups load from Firestore.
     """
     from utils.skill_normalizer import SkillNormalizer
     processed = SkillNormalizer.generate_and_persist_synonyms()
+    return {"status": "done", "skills_processed": processed}
+
+
+@app.post("/admin/rebuild-index")
+async def rebuild_index():
+    """
+    Rebuild the FAISS job and skill indexes from the current Firestore job corpus.
+    Call this after uploading a new dataset to Firestore.
+    Takes 2-5 minutes depending on dataset size.
+    """
+    await ensure_faiss_ready()
+    logger.info("Rebuilding FAISS indexes from Firestore...")
+    await app.state.faiss.rebuild()
+
+    # Rebuild PhraseMatcher with updated job skills
+    try:
+        from ai_modules.nlp_processor import NLPProcessor
+        n = NLPProcessor.build_matcher_from_firestore()
+        logger.info(f"PhraseMatcher rebuilt: {n} patterns.")
+    except Exception as e:
+        logger.warning(f"PhraseMatcher rebuild failed: {e}")
+
+    return {
+        "status": "done",
+        "jobs_indexed": app.state.faiss.index.ntotal if app.state.faiss.index else 0,
+    }
+
+
+@app.post("/admin/build-implications")
+async def build_implications():
+    """
+    One-time admin job: call Zephyr 7B to generate skill implication lists for
+    every unique skill in the Firestore job corpus.
+
+    For each skill, asks: "What skills demonstrate competency in {skill}?"
+    e.g. React, Node.js, TypeScript → imply JavaScript.
+
+    Results stored in Firestore (skill_implications collection) and loaded
+    into memory at warmup. Zero LLM calls at request time after this runs.
+
+    Runtime: ~25-40 minutes for 500+ unique skills on HuggingFace free tier.
+    Safe to re-run — skips skills already in Firestore.
+    """
+    from ai_modules.skill_implications import build_implications_with_llm
+    processed = build_implications_with_llm()
     return {"status": "done", "skills_processed": processed}
 
 

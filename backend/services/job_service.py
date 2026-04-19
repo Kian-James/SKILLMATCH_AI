@@ -129,11 +129,11 @@ class JobService:
     # ── Skill gap ─────────────────────────────────────────────────────────────
 
     def compute_skill_gap(
-        self,
-        user_skills:         list[str],
-        target_job_title:    str,
-        user_certifications: list[str] | None = None,
-        faiss_score:         float | None = None,
+            self,
+            user_skills:         list[str],
+            target_job_title:    str,
+            user_certifications: list[str] | None = None,
+            faiss_score:         float | None = None,
     ) -> dict:
         """
         IDF-weighted skill gap with optional FAISS confidence multiplier.
@@ -194,6 +194,12 @@ class JobService:
                                         SEMANTIC_SKILL_THRESHOLD):
                     matched_by = f"semantic(>={SEMANTIC_SKILL_THRESHOLD})"
 
+            # Gate 4: LLM implication map
+            if not matched_by:
+                from ai_modules.skill_implications import check_implied
+                if check_implied(req_skill, {s.lower() for s in user_skills}):
+                    matched_by = "llm_implied"
+
             skill_weight = idf.get(req_skill.lower(), 1.0)
             total_weight += skill_weight
 
@@ -244,13 +250,13 @@ class JobService:
                 f"SKILL GAP: {job['job_title']!r}\n"
                 f"  User skills ({len(user_skills)}): {user_skills}\n"
                 f"  Required ({total_required}):\n" + "\n".join(match_log) + "\n"
-                f"  ─────────────────────────────────────\n"
-                f"  IDF-weighted score : {skill_score:.1%}\n"
-                f"  FAISS confidence   : "
-                f"{faiss_score:.3f if faiss_score is not None else 'N/A'}\n"
-                f"  Cert bonus         : +{cert_bonus:.1%}\n"
-                f"  FINAL SCORE        : {final_score}%\n"
-                f"{'='*52}"
+                                                                             f"  ─────────────────────────────────────\n"
+                                                                             f"  IDF-weighted score : {skill_score:.1%}\n"
+                                                                             f"  FAISS confidence   : "
+                                                                             f"{faiss_score:.3f if faiss_score is not None else 'N/A'}\n"
+                                                                             f"  Cert bonus         : +{cert_bonus:.1%}\n"
+                                                                             f"  FINAL SCORE        : {final_score}%\n"
+                                                                             f"{'='*52}"
             )
 
         return {
@@ -268,7 +274,7 @@ class JobService:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _semantic_match(
-        self, target: str, candidates: list[str], threshold: float
+            self, target: str, candidates: list[str], threshold: float
     ) -> bool:
         if not candidates or not target:
             return False
