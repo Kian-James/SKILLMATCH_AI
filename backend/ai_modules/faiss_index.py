@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections import Counter
 from pathlib import Path
 
@@ -58,81 +57,8 @@ FAISS_SKILL_META_PATH  = Path("faiss_index/skill_metadata.json")
 FAISS_CTX_EMBS_PATH    = Path("faiss_index/ctx_embeddings.npy")   # float16
 FAISS_IDF_PATH         = Path("faiss_index/idf_weights.json")
 
-MMR_LAMBDA = 0.5
-
-# ── Duplicate detection thresholds ────────────────────────────────────────────
-# Raised from 0.92 to 0.97 so that semantically-similar-but-distinct roles
-# like "Unity VR Developer" and "Oculus Quest VR Developer" are NOT merged.
-# Only near-identical titles (e.g. "MongoDB NoSQL Developer" vs "MongoDB Developer")
-# should ever be collapsed.
-DUPLICATE_SIM_THRESHOLD = 0.97
-
-# Even at 0.97 some pairs slip through if their lead technology differs.
-# This guard extracts the first meaningful token(s) from each title and
-# refuses to merge if they don't share a common technology prefix.
-# Examples that would be blocked regardless of similarity score:
-#   "Unity VR Developer"        vs "Oculus Quest VR Developer"   → Unity ≠ Oculus
-#   "Python Software Engineer"  vs "Java Software Engineer"      → Python ≠ Java
-#   "Tableau Data Analyst"      vs "Power BI Data Analyst"       → Tableau ≠ Power
-#   "AWS Cloud Engineer"        vs "Azure Cloud Engineer"        → AWS ≠ Azure
-TECH_PREFIX_GUARD = True
-
-# Generic words that are NOT technology qualifiers.
-# If the first word of a title is one of these, we look at the second word.
-_GENERIC_WORDS = {
-    "senior", "junior", "lead", "principal", "staff", "associate", "chief",
-    "head", "director", "vp", "engineer", "developer", "architect", "analyst",
-    "scientist", "specialist", "consultant", "manager", "administrator",
-    "intern", "entry", "mid", "level", "the", "a", "an",
-}
-
-
-def _title_tech_prefix(title: str) -> str:
-    """
-    Extract the leading technology token(s) from a job title.
-
-    Rules:
-    - Lowercase and split on whitespace
-    - Skip any leading generic words (seniority, role nouns, articles)
-    - Return the first non-generic word as the technology identifier
-    - If all words are generic, return the full lowercased title
-      (so we fall back to full-title comparison, which is safe)
-
-    Examples:
-        "Python Software Engineer"       → "python"
-        "Unity VR Developer"             → "unity"
-        "Oculus Quest VR Developer"      → "oculus"
-        "AWS Cloud Architect"            → "aws"
-        "Azure Cloud Architect"          → "azure"
-        "Senior React Frontend Engineer" → "react"
-        "MongoDB Developer"              → "mongodb"
-        "MongoDB NoSQL Developer"        → "mongodb"
-        "Java Backend Developer"         → "java"
-        "Java Backend Engineer"          → "java"   ← same prefix → can merge
-    """
-    words = re.sub(r"[^a-z0-9\s]", "", title.lower()).split()
-    for word in words:
-        if word not in _GENERIC_WORDS:
-            return word
-    return title.lower()
-
-
-def _safe_to_merge(title_a: str, title_b: str) -> bool:
-    """
-    Return True only if it is safe to treat these two titles as duplicates.
-
-    Two conditions must BOTH hold:
-      1. Their leading technology prefixes match  (e.g. both start with "python")
-      2. OR both titles have no distinguishing tech prefix (all-generic words)
-
-    If the prefixes differ the titles represent distinct specialisations and
-    must be kept separate even when their embeddings are very similar.
-    """
-    if not TECH_PREFIX_GUARD:
-        return True
-    prefix_a = _title_tech_prefix(title_a)
-    prefix_b = _title_tech_prefix(title_b)
-    return prefix_a == prefix_b
+MMR_LAMBDA              = 0.5
+DUPLICATE_SIM_THRESHOLD = 0.92
 
 
 class FAISSIndex:
@@ -150,6 +76,7 @@ class FAISSIndex:
         self.skill_meta: list[dict] = []        # [{job_idx, skill_name}]
 
         # Contextual embeddings matrix: (n_total_skills, dim) float16
+        # Stored separately from skill_meta to avoid Python object overhead
         self._ctx_embs: np.ndarray | None = None  # shape (n_skills, dim)
 
         # IDF weights
@@ -173,19 +100,23 @@ class FAISSIndex:
             await self.rebuild()
 
     def _load_from_disk(self) -> None:
+        # Job index + lightweight metadata (no embeddings)
         self.index = faiss.read_index(str(FAISS_INDEX_PATH))
         with open(FAISS_METADATA_PATH, "r") as f:
             self.metadata = json.load(f)
         self._embedding_dim = self.index.d
 
+        # Skill index
         self.skill_index = faiss.read_index(str(FAISS_SKILL_INDEX_PATH))
         with open(FAISS_SKILL_META_PATH, "r") as f:
             self.skill_meta = json.load(f)
 
+        # Contextual embeddings matrix (float16 .npy)
         if FAISS_CTX_EMBS_PATH.exists():
-            self._ctx_embs = np.load(str(FAISS_CTX_EMBS_PATH))
+            self._ctx_embs = np.load(str(FAISS_CTX_EMBS_PATH))  # float16
             logger.debug(f"Ctx embeddings loaded: shape={self._ctx_embs.shape}")
 
+        # IDF weights
         if FAISS_IDF_PATH.exists():
             with open(FAISS_IDF_PATH, "r") as f:
                 self.idf_weights = json.load(f)
@@ -197,17 +128,21 @@ class FAISSIndex:
         )
 
     def _save_to_disk(self) -> None:
+        # Job index + metadata (no embeddings in JSON)
         faiss.write_index(self.index, str(FAISS_INDEX_PATH))
         with open(FAISS_METADATA_PATH, "w") as f:
             json.dump(self.metadata, f)
 
+        # Skill index
         faiss.write_index(self.skill_index, str(FAISS_SKILL_INDEX_PATH))
         with open(FAISS_SKILL_META_PATH, "w") as f:
             json.dump(self.skill_meta, f)
 
+        # Contextual embeddings as float16 numpy binary
         if self._ctx_embs is not None:
             np.save(str(FAISS_CTX_EMBS_PATH), self._ctx_embs.astype(np.float16))
 
+        # IDF weights
         with open(FAISS_IDF_PATH, "w") as f:
             json.dump(self.idf_weights, f)
 
@@ -216,6 +151,7 @@ class FAISSIndex:
     # ── Rebuild ───────────────────────────────────────────────────────────────
 
     async def rebuild(self) -> None:
+        import gc
         jobs = fetch_all_jobs()
         if not jobs:
             logger.warning("No jobs in Firestore — FAISS indexes are empty.")
@@ -228,147 +164,87 @@ class FAISSIndex:
             self.idf_weights = {}
             return
 
-        logger.info(f"Building FAISS indexes for {len(jobs)} jobs...")
-
-        # Step 1: IDF weights
         N = len(jobs)
+        logger.info(f"Memory-safe rebuild: {N} jobs in batches of 50...")
+
+        # Step 1: IDF weights (pure counting — no embeddings)
         freq: Counter = Counter()
         for job in jobs:
             freq.update(set(s.lower() for s in job.get("skills", [])))
         self.idf_weights = {s: math.log(N / f) for s, f in freq.items() if f > 0}
         logger.info(f"IDF weights: {len(self.idf_weights)} unique skills.")
 
-        # Step 2: Job-level embeddings
-        job_texts = [
-            job["job_title"] + " " + " ".join(job.get("skills", []))
-            for job in jobs
-        ]
-        job_embeddings = self.engine.embed_batch(job_texts)   # (N, dim)
-        self._embedding_dim = job_embeddings.shape[1]
+        # Step 2: Embed job texts in batches of 50 → add to FAISS → free immediately
+        BATCH = 50
+        dim = self.engine.model.get_sentence_embedding_dimension()
+        self._embedding_dim = dim
+        self.index    = faiss.IndexFlatIP(dim)
+        self.metadata = []
 
-        # Step 3: Duplicate detection
-        # A pair is only a duplicate when BOTH conditions are true:
-        #   a) cosine similarity >= DUPLICATE_SIM_THRESHOLD (0.97)
-        #   b) their leading technology prefix matches (_safe_to_merge)
-        #
-        # This prevents false positives like:
-        #   "Unity VR Developer" vs "Oculus Quest VR Developer"  (sim≈0.94, diff prefix)
-        #   "Python Software Engineer" vs "Java Software Engineer" (sim≈0.95, diff prefix)
-        #   "AWS Cloud Engineer" vs "Azure Cloud Engineer"         (sim≈0.93, diff prefix)
-        #
-        # While still catching genuine redundancies like:
-        #   "MongoDB NoSQL Developer" vs "MongoDB Developer"       (sim≈0.99, same prefix)
-        #   "Java Backend Engineer" vs "Java Backend Developer"    (sim≈0.99, same prefix)
-        sim_matrix = job_embeddings @ job_embeddings.T
-        duplicate_of: dict[int, int] = {}
+        for start in range(0, N, BATCH):
+            chunk = jobs[start : start + BATCH]
+            texts = [
+                job["job_title"] + " " + " ".join(job.get("skills", []))
+                for job in chunk
+            ]
+            embs = self.engine.embed_batch(texts)
+            self.index.add(embs)
+            for job in chunk:
+                self.metadata.append({
+                    "job_title":      job["job_title"],
+                    "skills":         job.get("skills", []),
+                    "certifications": job.get("certifications", []),
+                    "doc_id":         job.get("id", ""),
+                })
+            del embs, texts
+            gc.collect()
+            logger.info(f"  Job batch done: {min(start + BATCH, N)}/{N}")
 
-        for i in range(N):
-            if i in duplicate_of:
-                continue
-            for j in range(i + 1, N):
-                if j in duplicate_of:
-                    continue
-
-                sim = float(sim_matrix[i, j])
-                if sim < DUPLICATE_SIM_THRESHOLD:
-                    continue
-
-                title_i = jobs[i]["job_title"]
-                title_j = jobs[j]["job_title"]
-
-                # Tech-prefix guard: different lead technology → never merge
-                if not _safe_to_merge(title_i, title_j):
-                    logger.debug(
-                        f"Prefix mismatch — kept both: '{title_i}' vs '{title_j}' "
-                        f"(sim={sim:.3f}, "
-                        f"prefix='{_title_tech_prefix(title_i)}' vs "
-                        f"'{_title_tech_prefix(title_j)}')"
-                    )
-                    continue
-
-                # Same tech prefix + high similarity → genuine duplicate
-                li = len(jobs[i].get("skills", []))
-                lj = len(jobs[j].get("skills", []))
-                dropped, kept = (j, i) if li >= lj else (i, j)
-                duplicate_of[dropped] = kept
-                logger.info(
-                    f"Duplicate: '{jobs[dropped]['job_title']}' ≈ "
-                    f"'{jobs[kept]['job_title']}' (sim={sim:.3f}) — dropped"
-                )
-
-        kept_indices    = [i for i in range(N) if i not in duplicate_of]
-        kept_jobs       = [jobs[i] for i in kept_indices]
-        kept_embeddings = job_embeddings[kept_indices]
-        logger.info(
-            f"{len(kept_jobs)} jobs kept after dedup "
-            f"({N - len(kept_jobs)} removed)."
-        )
-
-        # Step 4: Job FAISS index
-        self.index = faiss.IndexFlatIP(self._embedding_dim)
-        self.index.add(kept_embeddings)
-
-        # Step 5: Lightweight metadata
-        self.metadata = [
-            {
-                "job_title":      job["job_title"],
-                "skills":         job.get("skills", []),
-                "certifications": job.get("certifications", []),
-                "doc_id":         job.get("id", ""),
-            }
-            for job in kept_jobs
-        ]
-
-        # Step 6: Skill embeddings
-        all_bare_texts: list[str] = []
-        all_ctx_texts:  list[str] = []
-        job_skill_slices: list[tuple[int, int]] = []
-
-        for job in kept_jobs:
-            skills = job.get("skills", [])
-            start  = len(all_bare_texts)
-            all_bare_texts.extend(skills)
-            all_ctx_texts.extend(f"{job['job_title']}: {s}" for s in skills)
-            job_skill_slices.append((start, start + len(skills)))
-
-        if all_bare_texts:
-            logger.info(
-                f"Embedding {len(all_bare_texts)} skills × 2 (bare + ctx) in two batches..."
-            )
-            bare_embs = self.engine.embed_batch(all_bare_texts)
-            ctx_embs  = self.engine.embed_batch(all_ctx_texts)
-        else:
-            bare_embs = np.empty((0, self._embedding_dim), dtype=np.float32)
-            ctx_embs  = np.empty((0, self._embedding_dim), dtype=np.float32)
-
-        # Step 7: Skill FAISS index
-        self.skill_index = faiss.IndexFlatIP(self._embedding_dim)
+        # Step 3: Embed bare skill texts per job → add to skill FAISS → free immediately
+        # Collect ctx texts separately for Step 4
+        self.skill_index = faiss.IndexFlatIP(dim)
         self.skill_meta  = []
-        if len(bare_embs) > 0:
-            self.skill_index.add(bare_embs)
-            for job_idx, (job, (start, end)) in enumerate(
-                    zip(kept_jobs, job_skill_slices)
-            ):
-                for skill_name in job.get("skills", []):
-                    self.skill_meta.append({
-                        "job_idx":    job_idx,
-                        "skill_name": skill_name,
-                    })
+        all_ctx_texts: list[str] = []
 
-        # Step 8: Contextual embeddings as float16
-        self._ctx_embs = ctx_embs.astype(np.float16) if len(ctx_embs) > 0 else None
+        for job_idx, job in enumerate(jobs):
+            skills = job.get("skills", [])
+            if not skills:
+                continue
+            bare_embs = self.engine.embed_batch(skills)
+            self.skill_index.add(bare_embs)
+            for skill_name in skills:
+                self.skill_meta.append({"job_idx": job_idx, "skill_name": skill_name})
+            all_ctx_texts.extend(f"{job['job_title']}: {s}" for s in skills)
+            del bare_embs
+            if (job_idx + 1) % BATCH == 0:
+                gc.collect()
+                logger.info(f"  Skill batch done: {job_idx + 1}/{N}")
+
+        gc.collect()
+        logger.info(f"Skill index: {self.skill_index.ntotal} vectors.")
+
+        # Step 4: Embed contextual texts in batches of 500 → store as float16 matrix
+        ctx_chunks: list[np.ndarray] = []
+        CTX_BATCH = 500
+        for start in range(0, len(all_ctx_texts), CTX_BATCH):
+            chunk_embs = self.engine.embed_batch(
+                all_ctx_texts[start : start + CTX_BATCH]
+            ).astype(np.float16)
+            ctx_chunks.append(chunk_embs)
+            del chunk_embs
+            gc.collect()
+
+        self._ctx_embs = np.concatenate(ctx_chunks) if ctx_chunks else None
+        del ctx_chunks, all_ctx_texts
+        gc.collect()
 
         self._save_to_disk()
-
-        del bare_embs, ctx_embs, job_embeddings, kept_embeddings, sim_matrix
-        import gc; gc.collect()
+        gc.collect()
 
         logger.info(
             f"FAISS rebuild complete: {self.index.ntotal} jobs, "
             f"{self.skill_index.ntotal} skill vectors."
         )
-
-    # ── Job search with MMR ───────────────────────────────────────────────────
 
     def search(self, query_embedding: np.ndarray, top_k: int = 5) -> list[dict]:
         """Top-K job retrieval with MMR diversity re-ranking."""
@@ -392,10 +268,12 @@ class FAISSIndex:
         if len(candidates) <= top_k:
             return [info for _, info in candidates]
 
+        # MMR: reconstruct embeddings only for the candidate set (not all jobs)
         cand_embs = np.stack([
             self.index.reconstruct(idx) for idx, _ in candidates
-        ])
+        ])  # (fetch_k, dim)
 
+        selected_positions: list[int] = []
         selected_embs: list[np.ndarray] = []
         result: list[dict] = []
 
@@ -403,11 +281,11 @@ class FAISSIndex:
             if not selected_embs:
                 best_pos = int(np.argmax([info["faiss_score"] for _, info in candidates]))
             else:
-                sel_matrix = np.stack(selected_embs)
+                sel_matrix = np.stack(selected_embs)  # (n_sel, dim)
                 mmr_scores = []
                 for pos, (_, info) in enumerate(candidates):
-                    rel     = info["faiss_score"]
-                    max_sim = float(np.max(sel_matrix @ cand_embs[pos]))
+                    rel      = info["faiss_score"]
+                    max_sim  = float(np.max(sel_matrix @ cand_embs[pos]))
                     mmr_scores.append(rel - MMR_LAMBDA * max_sim)
                 best_pos = int(np.argmax(mmr_scores))
 
@@ -423,7 +301,10 @@ class FAISSIndex:
     def find_closest_skill(
             self, user_skill_emb: np.ndarray, threshold: float = 0.68
     ) -> tuple[str | None, float]:
-        """Find the closest skill in the index to a user skill embedding."""
+        """
+        Find the closest skill in the skill_index to a user skill embedding.
+        Used by resume_service as Gate 3a (replaces per-job dot-product loop).
+        """
         if self.skill_index is None or self.skill_index.ntotal == 0:
             return None, 0.0
 
@@ -440,8 +321,12 @@ class FAISSIndex:
     # ── Contextual embedding lookup ───────────────────────────────────────────
 
     def get_ctx_embedding(self, skill_global_idx: int) -> np.ndarray | None:
-        """Return the contextual embedding for a skill at its global index position."""
-        if self._ctx_embs is None or skill_global_idx >= len(self._ctx_embs):
+        """
+        Return the contextual embedding for a skill at its global skill index position.
+        Returns float32 (upcast from stored float16).
+        """
+        if (self._ctx_embs is None
+                or skill_global_idx >= len(self._ctx_embs)):
             return None
         return self._ctx_embs[skill_global_idx].astype(np.float32)
 
