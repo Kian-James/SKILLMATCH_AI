@@ -153,51 +153,6 @@ async def generate_synonyms():
     return {"status": "done", "skills_processed": processed}
 
 
-@app.get("/admin/rebuild-index")
-async def rebuild_index():
-    """
-    Rebuild FAISS indexes from current Firestore job corpus.
-    Runs in the background — returns immediately.
-    Check /admin/rebuild-status to see when it finishes.
-    """
-    import asyncio
-
-    async def _do_rebuild():
-        try:
-            app.state.rebuild_status = "running"
-            logger.info("Background FAISS rebuild starting...")
-            await app.state.faiss.rebuild()
-            gc.collect()
-
-            from ai_modules.nlp_processor import NLPProcessor
-            n = NLPProcessor.build_matcher_from_firestore()
-
-            # Invalidate OCR vocab cache so it rebuilds from new skills
-            import services.resume_service as rs_mod
-            rs_mod._ocr_vocab_embs = None
-
-            app.state.rebuild_status = "done"
-            app.state.rebuild_jobs   = app.state.faiss.index.ntotal if app.state.faiss.index else 0
-            logger.info(
-                f"Background rebuild done: "
-                f"{app.state.rebuild_jobs} jobs, {n} NLP patterns."
-            )
-        except Exception as e:
-            app.state.rebuild_status = f"error: {e}"
-            logger.error(f"Background rebuild failed: {e}")
-
-    app.state.rebuild_status = "starting"
-    asyncio.create_task(_do_rebuild())
-    return {"status": "rebuild started in background — check /admin/rebuild-status"}
-
-
-@app.get("/admin/rebuild-status")
-async def rebuild_status():
-    status = getattr(app.state, "rebuild_status", "not started")
-    jobs   = getattr(app.state, "rebuild_jobs",   0)
-    return {"status": status, "jobs_indexed": jobs}
-
-
 @app.get("/admin/build-implications")
 async def build_implications():
     from ai_modules.skill_implications import build_implications_with_llm
