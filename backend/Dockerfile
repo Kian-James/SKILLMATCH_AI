@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     && apt-get clean \
-    && rm -rf /var/lib/lib/lists/*
+    && rm -rf /var/lib/lists/*
 
 WORKDIR /app
 
@@ -33,14 +33,13 @@ RUN pip install --no-cache-dir spacy==3.7.4 && \
     pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
-# Layer 5: App requirements (includes gunicorn now)
+# Layer 5: App requirements (includes gunicorn)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir pdfplumber==0.11.0
 
 # Layer 6: Pre-download the embedding model into the image
-# all-MiniLM-L6-v2 is only 80MB — fits comfortably in free tier RAM
-# Baking it into the image means no download spike at runtime startup
+# all-MiniLM-L6-v2 is only 80MB — baking it in avoids download spike at runtime
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
 # Layer 7: Application code
@@ -53,17 +52,27 @@ ENV SPACY_MODEL=en_core_web_sm
 
 EXPOSE $PORT
 
-# Gunicorn with 3 Uvicorn workers:
-#   --preload   → app loads once in master process, workers fork and share
-#                 model memory via copy-on-write (~600MB base + ~150MB per
-#                 worker for request buffers = ~1.05GB idle on 2GB Render)
-#   --workers 3 → 3 truly parallel /analyze requests at once
-#   --timeout 120 → give analyze() up to 2 minutes before Gunicorn kills it
-#   --keep-alive 5 → reuse connections for Flutter app's repeated requests
+# Gunicorn with 3 Uvicorn workers — NO --preload flag.
+#
+# Why no --preload:
+#   --preload loads the app in the master process then forks workers.
+#   Each worker still runs startup_event independently, so 3 workers
+#   would all load ML models at the same time = OOM crash on 2 GB RAM.
+#
+# With lazy-load (no --preload):
+#   Each worker loads ML only when it first receives a request.
+#   /warmup warms up whichever worker receives it (usually worker 1).
+#   Workers 2 and 3 warm up on their first real /analyze request.
+#   Loads are staggered, not simultaneous — safe on 2 GB RAM.
+#
+#   RAM at idle after all 3 warmed: ~600 MB × 3 workers = ~1.8 GB
+#   (sentence-transformers shared libs reduce this somewhat via OS page sharing)
+#
+# --timeout 120: give analyze() up to 2 min before Gunicorn kills the worker
+# --keep-alive 5: reuse connections for Flutter app repeated requests
 CMD gunicorn main:app \
     --worker-class uvicorn.workers.UvicornWorker \
     --workers 3 \
     --bind 0.0.0.0:$PORT \
     --timeout 120 \
-    --preload \
     --keep-alive 5

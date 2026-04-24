@@ -1,25 +1,29 @@
 """
 main.py - FastAPI application entry point
 
-Render free tier: 512 MB RAM hard limit.
-Render standard (2 GB): run with Gunicorn 3 workers + --preload (see Dockerfile).
+Render standard (2 GB): Gunicorn 3 workers WITHOUT --preload (see Dockerfile).
+
+WHY NO --preload:
+  --preload loads the app in the master process before forking workers.
+  asyncio.create_task() in startup_event does not survive the fork —
+  the task runs in the master but workers each run startup_event again,
+  causing 3x simultaneous model loads = OOM crash on 2 GB RAM.
+
+  Solution: each worker lazy-loads on its FIRST request, protected by a
+  per-worker asyncio.Lock(). Since you already call /warmup after deploy,
+  worker 1 gets warmed up by /warmup, workers 2 and 3 warm up on their
+  first real /analyze request. Memory stays safe because loads are
+  sequential per worker (not all 3 at once).
 
 MEMORY STRATEGY:
   - Boot: only Firebase + synonym map (no ML, no FAISS, no torch)
-  - Startup kicks off warmup as a background task — ML models load immediately
-    after startup without blocking the first real request.
+  - ML loads lazily on first request per worker, protected by a lock
   - All heavy singletons (EmbeddingEngine, SkillClusterer, SkillNormalizer)
-    are module-level in resume_service — shared across requests, allocated once.
+    are module-level in resume_service — shared within each worker process
   - ResumeService instance cached on app.state after warmup — not re-created
-    per request.
-  - job_metadata.json no longer stores numpy arrays — stays ~2 MB in RAM.
-  - ctx_embeddings stored as float16 .npy — ~5 MB vs ~20 MB float32.
-
-CHANGES:
-  - startup_event now fires ensure_faiss_ready() as a background asyncio task
-    so ML models begin loading immediately on deploy (not on first request).
-  - ResumeService is instantiated once after warmup and cached on app.state.
-    Routes reuse it via _get_service() instead of constructing per request.
+    per request
+  - job_metadata.json no longer stores numpy arrays — stays ~2 MB in RAM
+  - ctx_embeddings stored as float16 .npy — ~5 MB vs ~20 MB float32
 """
 
 import asyncio
@@ -64,21 +68,25 @@ async def startup_event():
     from utils.skill_normalizer import SkillNormalizer
     SkillNormalizer.load_dynamic_synonyms()
 
-    # Step 3: FAISS + ML deferred but kicked off immediately in background.
-    # This means ML models start loading right after deploy instead of blocking
-    # the first real user request.
+    # Step 3: FAISS + ML deferred to first request (or /warmup call).
+    # Do NOT use asyncio.create_task here — with Gunicorn multi-worker,
+    # each worker runs startup_event independently. A background task would
+    # cause all 3 workers to load models simultaneously = OOM on 2 GB RAM.
+    # Instead each worker loads lazily on its first request, protected by
+    # a per-worker lock so only one load happens per worker at a time.
     app.state.faiss       = FAISSIndex()
     app.state.faiss_ready = False
 
-    logger.info("Startup complete. ML warmup starting in background...")
-    asyncio.create_task(ensure_faiss_ready())
+    logger.info("Startup complete. ML will lazy-load on first request or /warmup call.")
 
 
 async def ensure_faiss_ready():
     """
-    Load FAISS indexes and ML models.
-    Called automatically on startup (background task) and awaited by routes
-    as a no-op guard once already ready.
+    Load FAISS indexes and ML models on first request.
+    Per-worker: each Gunicorn worker has its own event loop and app.state,
+    so this lock is per-worker (not cross-process). That is correct —
+    we want each worker to load its own model copy exactly once,
+    not all at the same time.
     Explicit gc.collect() after each heavy step to keep peak RAM low.
     """
     if app.state.faiss_ready:
@@ -155,10 +163,10 @@ async def health_check():
 @app.get("/warmup")
 async def warmup():
     """
-    Pre-load FAISS + ML models after deploy.
+    Pre-load FAISS + ML models on this worker after deploy.
+    Call once after deploy to warm up worker 1. Workers 2 and 3
+    will warm up automatically on their first real request.
     Safe to call multiple times — no-op if already warmed up.
-    Warmup also starts automatically on startup, so this endpoint
-    is mainly useful for health checks or manual verification.
     """
     await ensure_faiss_ready()
     return {"status": "warmed up", "ml_ready": True}

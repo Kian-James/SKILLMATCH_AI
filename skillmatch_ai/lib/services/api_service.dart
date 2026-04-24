@@ -15,13 +15,13 @@ import '../models/growth_data.dart';
 class ApiService {
   // ── Base URL ────────────────────────────────────────────────────────────────
   // Production: your Render service URL
-  static const String _baseUrl =
-      'https://skillmatch-ai-b5s7.onrender.com/api/v1';
+  // static const String _baseUrl =
+  //     'https://skillmatch-ai-b5s7.onrender.com/api/v1';
 
   // Local development alternatives (comment/uncomment as needed):
   // static const String _baseUrl = 'http://10.0.2.2:8000/api/v1';       // Android emulator
   // static const String _baseUrl = 'http://localhost:8000/api/v1';       // iOS simulator
-  // static const String _baseUrl = 'http://YOUR_LOCAL_IP:8000/api/v1';  // Physical device
+  static const String _baseUrl = 'http://192.168.0.182:8000/api/v1';  // Physical device
 
   late final Dio _dio;
 
