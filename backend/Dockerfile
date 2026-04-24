@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/lib/lists/*
 
 WORKDIR /app
 
@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir spacy==3.7.4 && \
     pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
-# Layer 5: App requirements
+# Layer 5: App requirements (includes gunicorn now)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir pdfplumber==0.11.0
@@ -53,4 +53,17 @@ ENV SPACY_MODEL=en_core_web_sm
 
 EXPOSE $PORT
 
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+# Gunicorn with 3 Uvicorn workers:
+#   --preload   → app loads once in master process, workers fork and share
+#                 model memory via copy-on-write (~600MB base + ~150MB per
+#                 worker for request buffers = ~1.05GB idle on 2GB Render)
+#   --workers 3 → 3 truly parallel /analyze requests at once
+#   --timeout 120 → give analyze() up to 2 minutes before Gunicorn kills it
+#   --keep-alive 5 → reuse connections for Flutter app's repeated requests
+CMD gunicorn main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers 3 \
+    --bind 0.0.0.0:$PORT \
+    --timeout 120 \
+    --preload \
+    --keep-alive 5

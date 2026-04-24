@@ -2,11 +2,22 @@
 api/routes_resume.py
 POST /upload-resume  - OCR + NLP extraction only (no storage, auth required)
 POST /analyze        - Full analysis + saves snapshot with profile_vector (auth required)
+
+CHANGES:
+  - analyze() and upload_resume() now run service.analyze() via run_in_threadpool
+    so the async event loop is never blocked during CPU-heavy work (OCR/NLP/embed).
+  - save_analysis_snapshot() is fired as a background asyncio task — the response
+    is returned to the client immediately without waiting for the Firestore write.
+  - ResumeService is reused from app.state if already initialized (set during warmup).
 """
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Depends
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from loguru import logger
 
@@ -41,11 +52,21 @@ class AnalyzeResponse(BaseModel):
     message: str
 
 
+def _get_service(request: Request) -> ResumeService:
+    """
+    Reuse the ResumeService cached on app.state (set during warmup).
+    Falls back to constructing a new one if warmup hasn't run yet.
+    """
+    if hasattr(request.app.state, "resume_service"):
+        return request.app.state.resume_service
+    return ResumeService(request.app.state.faiss)
+
+
 @router.post("/upload-resume", response_model=UploadResponse)
 async def upload_resume(
-    request: Request,
-    file: UploadFile = File(...),
-    user: AuthenticatedUser = Depends(get_current_user),
+        request: Request,
+        file: UploadFile = File(...),
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
     content_type = file.content_type or ""
     if content_type not in ALLOWED_TYPES:
@@ -62,9 +83,10 @@ async def upload_resume(
 
     await request.app.state.ensure_faiss_ready()
 
-    service = ResumeService(request.app.state.faiss)
+    service = _get_service(request)
     try:
-        result = service.analyze(file_bytes, content_type)
+        # Run blocking CPU work in a thread — keeps the event loop free
+        result = await run_in_threadpool(service.analyze, file_bytes, content_type)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -84,9 +106,9 @@ async def upload_resume(
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_resume(
-    request: Request,
-    file: UploadFile = File(...),
-    user: AuthenticatedUser = Depends(get_current_user),
+        request: Request,
+        file: UploadFile = File(...),
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
     content_type = file.content_type or ""
     if content_type not in ALLOWED_TYPES:
@@ -98,32 +120,44 @@ async def analyze_resume(
 
     await request.app.state.ensure_faiss_ready()
 
-    service = ResumeService(request.app.state.faiss)
+    service = _get_service(request)
     try:
-        result = service.analyze(file_bytes, content_type)
+        # Run blocking CPU work in a thread — keeps the event loop free
+        result = await run_in_threadpool(service.analyze, file_bytes, content_type)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"[user={user.uid}] Full analysis error: {e}")
         raise HTTPException(status_code=500, detail="Analysis failed.")
 
-    get_or_create_user(
-        user_id=user.uid,
-        display_name=user.name or "",
-        email=user.email or "",
-    )
+    # Generate snapshot ID immediately so we can return it to the client
+    # without waiting for the Firestore write to complete.
+    snapshot_id = str(uuid.uuid4())
 
-    # Pass profile_vector so growth_service can compute career trajectory
     profile_vector: list[float] | None = result.get("query_embedding")
 
-    snapshot_id = save_analysis_snapshot(
-        user_id=user.uid,
-        skills=result["skills"],
-        certifications=result["certifications"],
-        top_job_matches=result["top_job_matches"],
-        best_match_score=result["best_match_score"],
-        profile_vector=profile_vector,
-    )
+    async def _save_snapshot():
+        try:
+            await run_in_threadpool(
+                save_analysis_snapshot,
+                user.uid,
+                result["skills"],
+                result["certifications"],
+                result["top_job_matches"],
+                result["best_match_score"],
+                profile_vector,
+            )
+            await run_in_threadpool(
+                get_or_create_user,
+                user.uid,
+                user.name or "",
+                user.email or "",
+                )
+        except Exception as e:
+            logger.error(f"[user={user.uid}] Background snapshot save failed: {e}")
+
+    # Fire-and-forget — client gets the response immediately
+    asyncio.create_task(_save_snapshot())
 
     return AnalyzeResponse(
         user_id=user.uid,

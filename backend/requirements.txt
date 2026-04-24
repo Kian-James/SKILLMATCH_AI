@@ -1,8 +1,10 @@
-# Core API
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
+# Core API (Lean versions to avoid typer conflicts)
+fastapi==0.110.3
+uvicorn==0.29.0
+gunicorn==22.0.0
 python-multipart==0.0.9
 pydantic==2.7.1
+typer==0.9.4
 
 # Firebase Admin SDK
 firebase-admin==6.5.0
@@ -28,7 +30,3 @@ aiofiles==23.2.1
 tenacity==8.3.0
 loguru==0.7.2
 requests==2.31.0
-
-# NOTE: torch, faiss-cpu, sentence-transformers, scikit-learn,
-# numpy, and spacy are installed directly in the Dockerfile
-# as separate layers for better caching. Do NOT add them here.

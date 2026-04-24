@@ -2,21 +2,24 @@
 main.py - FastAPI application entry point
 
 Render free tier: 512 MB RAM hard limit.
+Render standard (2 GB): run with Gunicorn 3 workers + --preload (see Dockerfile).
 
 MEMORY STRATEGY:
   - Boot: only Firebase + synonym map (no ML, no FAISS, no torch)
-  - First request (/warmup or real): lazy-load FAISS + ML models in sequence
-    with explicit gc.collect() between steps to release peak allocation.
+  - Startup kicks off warmup as a background task — ML models load immediately
+    after startup without blocking the first real request.
   - All heavy singletons (EmbeddingEngine, SkillClusterer, SkillNormalizer)
     are module-level in resume_service — shared across requests, allocated once.
+  - ResumeService instance cached on app.state after warmup — not re-created
+    per request.
   - job_metadata.json no longer stores numpy arrays — stays ~2 MB in RAM.
   - ctx_embeddings stored as float16 .npy — ~5 MB vs ~20 MB float32.
 
-STARTUP SEQUENCE:
-  1. init_firebase()                         — lightweight
-  2. SkillNormalizer.load_dynamic_synonyms() — dict merge from Firestore, no ML
-  3. FAISSIndex lazy-load on first request   — ML models load here
-  4. Dynamic KNOWN_SKILLS injection          — after FAISS loads job corpus
+CHANGES:
+  - startup_event now fires ensure_faiss_ready() as a background asyncio task
+    so ML models begin loading immediately on deploy (not on first request).
+  - ResumeService is instantiated once after warmup and cached on app.state.
+    Routes reuse it via _get_service() instead of constructing per request.
 """
 
 import asyncio
@@ -61,16 +64,21 @@ async def startup_event():
     from utils.skill_normalizer import SkillNormalizer
     SkillNormalizer.load_dynamic_synonyms()
 
-    # Step 3: FAISS + ML deferred to first request
+    # Step 3: FAISS + ML deferred but kicked off immediately in background.
+    # This means ML models start loading right after deploy instead of blocking
+    # the first real user request.
     app.state.faiss       = FAISSIndex()
     app.state.faiss_ready = False
 
-    logger.info("Startup complete. ML models will lazy-load on first request.")
+    logger.info("Startup complete. ML warmup starting in background...")
+    asyncio.create_task(ensure_faiss_ready())
 
 
 async def ensure_faiss_ready():
     """
-    Load FAISS indexes and ML models on first request.
+    Load FAISS indexes and ML models.
+    Called automatically on startup (background task) and awaited by routes
+    as a no-op guard once already ready.
     Explicit gc.collect() after each heavy step to keep peak RAM low.
     """
     if app.state.faiss_ready:
@@ -90,7 +98,7 @@ async def ensure_faiss_ready():
         gc.collect()
         logger.info("FAISS indexes loaded.")
 
-        # Build PhraseMatcher from Firestore job skills (replaces all static KNOWN_SKILLS)
+        # Build PhraseMatcher from Firestore job skills
         try:
             from ai_modules.nlp_processor import NLPProcessor
             n_patterns = NLPProcessor.build_matcher_from_firestore()
@@ -98,7 +106,7 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"PhraseMatcher build failed (non-fatal): {e}")
 
-        # Pre-warm OCR correction vocab embeddings so first real request is fast
+        # Pre-warm OCR correction vocab embeddings
         try:
             from services.resume_service import _get_ocr_vocab_embs
             _get_ocr_vocab_embs()
@@ -106,7 +114,7 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"OCR vocab pre-warm failed (non-fatal): {e}")
 
-        # Load LLM skill implication map (seed + Firestore entries)
+        # Load LLM skill implication map
         try:
             from ai_modules.skill_implications import load_implications_from_firestore
             n_implied = load_implications_from_firestore()
@@ -114,8 +122,17 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"Implication map load failed (non-fatal): {e}")
 
+        # Cache a single ResumeService instance on app.state so routes don't
+        # re-construct it (and re-resolve all singletons) on every request.
+        try:
+            from services.resume_service import ResumeService
+            app.state.resume_service = ResumeService(app.state.faiss)
+            logger.info("ResumeService instance cached on app.state.")
+        except Exception as e:
+            logger.warning(f"ResumeService pre-cache failed (non-fatal): {e}")
+
         app.state.faiss_ready = True
-        logger.info("All ML models ready.")
+        logger.info("All ML models ready. Serving requests.")
 
 
 app.state.ensure_faiss_ready = ensure_faiss_ready
@@ -139,8 +156,9 @@ async def health_check():
 async def warmup():
     """
     Pre-load FAISS + ML models after deploy.
-    Call once before going live to avoid cold-start delay on first real request.
-    Memory-safe: uses same lazy-load path with gc.collect() between steps.
+    Safe to call multiple times — no-op if already warmed up.
+    Warmup also starts automatically on startup, so this endpoint
+    is mainly useful for health checks or manual verification.
     """
     await ensure_faiss_ready()
     return {"status": "warmed up", "ml_ready": True}
