@@ -1,9 +1,6 @@
 """
 api/routes_jobs.py
 POST /recommend-jobs - Auth required, lazy FAISS load
-
-CHANGE: EmbeddingEngine import moved inside the route function — was at module
-level which caused torch to load at startup across all workers simultaneously.
 """
 from __future__ import annotations
 
@@ -13,10 +10,7 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from api.auth_middleware import get_current_user, AuthenticatedUser
-
-# ── DO NOT import EmbeddingEngine or any ai_modules here ──
-# EmbeddingEngine → sentence_transformers → torch (~300MB).
-# Top-level import causes all Gunicorn workers to load torch at startup.
+from ai_modules.embedding_engine import EmbeddingEngine
 
 router = APIRouter()
 
@@ -45,10 +39,8 @@ async def recommend_jobs(
         body: RecommendRequest,
         user: AuthenticatedUser = Depends(get_current_user),
 ):
+    # Lazy-load ML models on first request
     await request.app.state.ensure_faiss_ready()
-
-    # Import here so torch only loads after warmup, not at startup
-    from ai_modules.embedding_engine import EmbeddingEngine
 
     embedder = EmbeddingEngine()
     skill_emb = embedder.embed_skill_list(body.skills)

@@ -1,28 +1,19 @@
 """
 main.py - FastAPI application entry point
 
-Render standard (2 GB): Gunicorn 3 workers, no --preload.
+Single uvicorn worker — same as the original setup that worked.
 
-CRITICAL — WHY ALL ML IMPORTS ARE DEFERRED:
-  faiss_index.py imports EmbeddingEngine at module level.
-  EmbeddingEngine imports sentence_transformers which imports torch.
-  torch alone takes ~300MB and several minutes to load.
+Concurrency is handled inside the worker:
+  - run_in_threadpool in routes_resume.py runs analyze() in a thread pool
+    so the event loop stays free for other requests during analysis.
+  - Multiple /analyze calls are handled by Python's thread pool (default 40
+    threads), not by multiple processes. This is correct for CPU-bound ML
+    work on a single RAM-constrained server.
 
-  With 3 Gunicorn workers, ANY top-level import of faiss_index (or any
-  module that chains to torch) causes all 3 workers to load torch
-  simultaneously at startup = ~900MB RAM spike = OOM before the port
-  ever opens = Render "No open HTTP ports detected" loop.
-
-  Solution: keep ALL ML-related imports inside ensure_faiss_ready()
-  so they only run when the first request (or /warmup) arrives,
-  one worker at a time.
-
-STARTUP is now instant:
-  - Firebase init        (~1s)
-  - Synonym dict load    (~1s)
-  - Nothing else
-
-ML loads lazily on first request per worker.
+Why not Gunicorn multi-worker:
+  Each worker loads its own copy of torch + models (~600MB each).
+  3 workers = ~1.8GB just sitting idle on a 2GB server — no headroom
+  for actual request processing. Crashes on startup or under any load.
 """
 
 import asyncio
@@ -35,12 +26,7 @@ from loguru import logger
 
 from config import API_HOST, API_PORT, API_RELOAD
 from services.firebase_service import init_firebase
-
-# ── DO NOT import FAISSIndex or any ai_modules here ──
-# Any import that chains to torch/sentence-transformers will be executed
-# by all 3 workers simultaneously at startup, spiking RAM and crashing
-# before the HTTP port opens. All ML imports live inside ensure_faiss_ready().
-
+from ai_modules.faiss_index import FAISSIndex
 from api.routes_resume import router as resume_router
 from api.routes_jobs import router as jobs_router
 from api.routes_skills import router as skills_router
@@ -63,7 +49,6 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    # Instant: Firebase + synonyms only. No ML, no torch, no FAISS.
     logger.info("Initializing Firebase...")
     init_firebase()
 
@@ -71,18 +56,17 @@ async def startup_event():
     from utils.skill_normalizer import SkillNormalizer
     SkillNormalizer.load_dynamic_synonyms()
 
-    app.state.faiss       = None   # populated in ensure_faiss_ready()
+    app.state.faiss       = FAISSIndex()
     app.state.faiss_ready = False
 
-    logger.info("Startup complete. Port is open. ML loads on first request or /warmup.")
+    logger.info("Startup complete. ML will lazy-load on first request or /warmup.")
 
 
 async def ensure_faiss_ready():
     """
-    Lazy-load all ML models on first request per worker.
-    ALL heavy imports live here — never at module level.
-    Protected by a per-worker asyncio.Lock so only one load
-    happens per worker even if multiple requests arrive at once.
+    Load FAISS indexes and ML models on first request.
+    Single worker so no cross-process concerns — just a simple asyncio lock
+    to prevent duplicate loads if two requests arrive before warmup finishes.
     """
     if app.state.faiss_ready:
         return
@@ -94,12 +78,8 @@ async def ensure_faiss_ready():
         if app.state.faiss_ready:
             return
 
-        logger.info("Lazy-loading FAISS + ML models (first request on this worker)...")
+        logger.info("Lazy-loading FAISS + ML models...")
 
-        # Import here — not at module level — so torch only loads when needed
-        from ai_modules.faiss_index import FAISSIndex
-
-        app.state.faiss = FAISSIndex()
         await app.state.faiss.load_or_build()
         gc.collect()
         logger.info("FAISS indexes loaded.")
@@ -125,6 +105,7 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"Implication map load failed (non-fatal): {e}")
 
+        # Cache ResumeService once — reused by all requests
         try:
             from services.resume_service import ResumeService
             app.state.resume_service = ResumeService(app.state.faiss)
@@ -155,10 +136,6 @@ async def health_check():
 
 @app.get("/warmup")
 async def warmup():
-    """
-    Trigger ML load on whichever worker receives this request.
-    Call once after deploy. Other workers warm up on their first /analyze.
-    """
     await ensure_faiss_ready()
     return {"status": "warmed up", "ml_ready": True}
 
