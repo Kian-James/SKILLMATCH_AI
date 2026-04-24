@@ -3,6 +3,10 @@ api/routes_skills.py
 Endpoints:
   POST /skill-gap                — Compute skill gap for a target job (🔒 Auth required)
   GET  /skill-resources/{skill}  — Learning resources for a skill  (🔒 Auth required)
+
+CHANGE: JobService and llm_resources imports moved inside route functions.
+  JobService → EmbeddingEngine → torch. Top-level import = torch loads at
+  startup across all workers simultaneously = OOM before port opens.
 """
 
 from __future__ import annotations
@@ -12,11 +16,11 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from api.auth_middleware import get_current_user, AuthenticatedUser
-from services.job_service import JobService
-from ai_modules.llm_resources import generate_learning_resources
+
+# ── DO NOT import JobService or llm_resources here ──
+# Both chain to EmbeddingEngine → torch.
 
 router = APIRouter()
-_job_service = JobService()
 
 
 class SkillGapRequest(BaseModel):
@@ -41,9 +45,11 @@ class SkillGapResponse(BaseModel):
 @router.post("/skill-gap", response_model=SkillGapResponse)
 async def skill_gap(
         body: SkillGapRequest,
-        user: AuthenticatedUser = Depends(get_current_user),  # 🔒
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """Compute skill gap between user resume skills and a target job."""
+    from services.job_service import JobService
+    _job_service = JobService()
+
     result = _job_service.compute_skill_gap(
         user_skills=body.user_skills,
         target_job_title=body.target_job,
@@ -96,12 +102,10 @@ class ResourcesResponse(BaseModel):
 @router.get("/skill-resources/{skill}", response_model=ResourcesResponse)
 async def skill_resources(
         skill: str,
-        user: AuthenticatedUser = Depends(get_current_user),  # 🔒
+        user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """
-    Generate learning resources for a specific missing skill via Zephyr 7B.
-    Called when user taps a missing skill chip in the Skill Gap screen.
-    """
+    from ai_modules.llm_resources import generate_learning_resources
+
     if not skill.strip():
         raise HTTPException(status_code=400, detail="Skill name cannot be empty.")
 

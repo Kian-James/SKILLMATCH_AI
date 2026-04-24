@@ -1,29 +1,28 @@
 """
 main.py - FastAPI application entry point
 
-Render standard (2 GB): Gunicorn 3 workers WITHOUT --preload (see Dockerfile).
+Render standard (2 GB): Gunicorn 3 workers, no --preload.
 
-WHY NO --preload:
-  --preload loads the app in the master process before forking workers.
-  asyncio.create_task() in startup_event does not survive the fork —
-  the task runs in the master but workers each run startup_event again,
-  causing 3x simultaneous model loads = OOM crash on 2 GB RAM.
+CRITICAL — WHY ALL ML IMPORTS ARE DEFERRED:
+  faiss_index.py imports EmbeddingEngine at module level.
+  EmbeddingEngine imports sentence_transformers which imports torch.
+  torch alone takes ~300MB and several minutes to load.
 
-  Solution: each worker lazy-loads on its FIRST request, protected by a
-  per-worker asyncio.Lock(). Since you already call /warmup after deploy,
-  worker 1 gets warmed up by /warmup, workers 2 and 3 warm up on their
-  first real /analyze request. Memory stays safe because loads are
-  sequential per worker (not all 3 at once).
+  With 3 Gunicorn workers, ANY top-level import of faiss_index (or any
+  module that chains to torch) causes all 3 workers to load torch
+  simultaneously at startup = ~900MB RAM spike = OOM before the port
+  ever opens = Render "No open HTTP ports detected" loop.
 
-MEMORY STRATEGY:
-  - Boot: only Firebase + synonym map (no ML, no FAISS, no torch)
-  - ML loads lazily on first request per worker, protected by a lock
-  - All heavy singletons (EmbeddingEngine, SkillClusterer, SkillNormalizer)
-    are module-level in resume_service — shared within each worker process
-  - ResumeService instance cached on app.state after warmup — not re-created
-    per request
-  - job_metadata.json no longer stores numpy arrays — stays ~2 MB in RAM
-  - ctx_embeddings stored as float16 .npy — ~5 MB vs ~20 MB float32
+  Solution: keep ALL ML-related imports inside ensure_faiss_ready()
+  so they only run when the first request (or /warmup) arrives,
+  one worker at a time.
+
+STARTUP is now instant:
+  - Firebase init        (~1s)
+  - Synonym dict load    (~1s)
+  - Nothing else
+
+ML loads lazily on first request per worker.
 """
 
 import asyncio
@@ -36,7 +35,12 @@ from loguru import logger
 
 from config import API_HOST, API_PORT, API_RELOAD
 from services.firebase_service import init_firebase
-from ai_modules.faiss_index import FAISSIndex
+
+# ── DO NOT import FAISSIndex or any ai_modules here ──
+# Any import that chains to torch/sentence-transformers will be executed
+# by all 3 workers simultaneously at startup, spiking RAM and crashing
+# before the HTTP port opens. All ML imports live inside ensure_faiss_ready().
+
 from api.routes_resume import router as resume_router
 from api.routes_jobs import router as jobs_router
 from api.routes_skills import router as skills_router
@@ -59,35 +63,26 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    # Step 1: Firebase only — no ML loaded yet
+    # Instant: Firebase + synonyms only. No ML, no torch, no FAISS.
     logger.info("Initializing Firebase...")
     init_firebase()
 
-    # Step 2: Load LLM-generated synonyms from Firestore (pure dict ops, no ML)
     logger.info("Loading dynamic skill synonyms from Firestore...")
     from utils.skill_normalizer import SkillNormalizer
     SkillNormalizer.load_dynamic_synonyms()
 
-    # Step 3: FAISS + ML deferred to first request (or /warmup call).
-    # Do NOT use asyncio.create_task here — with Gunicorn multi-worker,
-    # each worker runs startup_event independently. A background task would
-    # cause all 3 workers to load models simultaneously = OOM on 2 GB RAM.
-    # Instead each worker loads lazily on its first request, protected by
-    # a per-worker lock so only one load happens per worker at a time.
-    app.state.faiss       = FAISSIndex()
+    app.state.faiss       = None   # populated in ensure_faiss_ready()
     app.state.faiss_ready = False
 
-    logger.info("Startup complete. ML will lazy-load on first request or /warmup call.")
+    logger.info("Startup complete. Port is open. ML loads on first request or /warmup.")
 
 
 async def ensure_faiss_ready():
     """
-    Load FAISS indexes and ML models on first request.
-    Per-worker: each Gunicorn worker has its own event loop and app.state,
-    so this lock is per-worker (not cross-process). That is correct —
-    we want each worker to load its own model copy exactly once,
-    not all at the same time.
-    Explicit gc.collect() after each heavy step to keep peak RAM low.
+    Lazy-load all ML models on first request per worker.
+    ALL heavy imports live here — never at module level.
+    Protected by a per-worker asyncio.Lock so only one load
+    happens per worker even if multiple requests arrive at once.
     """
     if app.state.faiss_ready:
         return
@@ -99,22 +94,23 @@ async def ensure_faiss_ready():
         if app.state.faiss_ready:
             return
 
-        logger.info("Lazy-loading FAISS + ML models...")
+        logger.info("Lazy-loading FAISS + ML models (first request on this worker)...")
 
-        # Load FAISS (triggers EmbeddingEngine → sentence-transformers → torch)
+        # Import here — not at module level — so torch only loads when needed
+        from ai_modules.faiss_index import FAISSIndex
+
+        app.state.faiss = FAISSIndex()
         await app.state.faiss.load_or_build()
         gc.collect()
         logger.info("FAISS indexes loaded.")
 
-        # Build PhraseMatcher from Firestore job skills
         try:
             from ai_modules.nlp_processor import NLPProcessor
             n_patterns = NLPProcessor.build_matcher_from_firestore()
-            logger.info(f"PhraseMatcher ready: {n_patterns} skill patterns from Firestore.")
+            logger.info(f"PhraseMatcher ready: {n_patterns} skill patterns.")
         except Exception as e:
             logger.warning(f"PhraseMatcher build failed (non-fatal): {e}")
 
-        # Pre-warm OCR correction vocab embeddings
         try:
             from services.resume_service import _get_ocr_vocab_embs
             _get_ocr_vocab_embs()
@@ -122,7 +118,6 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"OCR vocab pre-warm failed (non-fatal): {e}")
 
-        # Load LLM skill implication map
         try:
             from ai_modules.skill_implications import load_implications_from_firestore
             n_implied = load_implications_from_firestore()
@@ -130,17 +125,15 @@ async def ensure_faiss_ready():
         except Exception as e:
             logger.warning(f"Implication map load failed (non-fatal): {e}")
 
-        # Cache a single ResumeService instance on app.state so routes don't
-        # re-construct it (and re-resolve all singletons) on every request.
         try:
             from services.resume_service import ResumeService
             app.state.resume_service = ResumeService(app.state.faiss)
-            logger.info("ResumeService instance cached on app.state.")
+            logger.info("ResumeService cached on app.state.")
         except Exception as e:
             logger.warning(f"ResumeService pre-cache failed (non-fatal): {e}")
 
         app.state.faiss_ready = True
-        logger.info("All ML models ready. Serving requests.")
+        logger.info("All ML models ready.")
 
 
 app.state.ensure_faiss_ready = ensure_faiss_ready
@@ -163,10 +156,8 @@ async def health_check():
 @app.get("/warmup")
 async def warmup():
     """
-    Pre-load FAISS + ML models on this worker after deploy.
-    Call once after deploy to warm up worker 1. Workers 2 and 3
-    will warm up automatically on their first real request.
-    Safe to call multiple times — no-op if already warmed up.
+    Trigger ML load on whichever worker receives this request.
+    Call once after deploy. Other workers warm up on their first /analyze.
     """
     await ensure_faiss_ready()
     return {"status": "warmed up", "ml_ready": True}
