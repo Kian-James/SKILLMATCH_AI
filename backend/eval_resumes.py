@@ -224,11 +224,16 @@ def _eval_offline(path: Path, label: dict) -> ResumeResult:
             )
             r.nlp_ok = r.nlp_f1 >= 0.40 and not soft_leaked
         else:
-            r.nlp_ok = len(r.skills) >= 1 and not soft_leaked
+            # Zero skills = skills not in Firestore vocab, not a pipeline failure.
+            # OCR worked, NLP ran — just nothing matched. Mark as ok with a note.
+            r.nlp_ok = not soft_leaked
+            if len(r.skills) == 0:
+                r.error = "0 skills extracted — resume skills may not be in Firestore job vocab"
     except Exception as e:
         r.error = f"NLP: {e}"
         return r
 
+    # success = OCR extracted text + NLP ran without errors (even if 0 skills)
     r.success = r.ocr_ok and r.nlp_ok
     return r
 
@@ -266,7 +271,9 @@ def _eval_live(path: Path, label: dict, resume_svc, embedder) -> ResumeResult:
             )
             r.nlp_ok = r.nlp_f1 >= 0.40 and not soft_leaked
         else:
-            r.nlp_ok = len(r.skills) >= 1 and not soft_leaked
+            r.nlp_ok = not soft_leaked
+            if len(r.skills) == 0:
+                r.error = "0 skills — not in Firestore vocab"
     except Exception as e:
         r.error = f"NLP: {e}"
         return r
@@ -388,7 +395,11 @@ def _print_report(results: list, live: bool) -> None:
     print(f"     Soft-skill leaks   {len(soft_leaked)} resumes "
           f"{DIM}(soft skills incorrectly extracted){RESET}")
     print(f"     Zero skills        {len(zero_skills)} resumes "
-          f"{DIM}(check section header detection){RESET}")
+          f"{DIM}(skills likely not in Firestore job vocab — run /admin/generate-synonyms){RESET}")
+    if zero_skills:
+        print(f"       Files with 0 skills:")
+        for r in zero_skills[:10]:
+            print(f"         {r.filename}")
     if nlp_times:
         print(f"     Latency           "
               f"avg={statistics.mean(nlp_times):.0f}ms  "

@@ -20,6 +20,18 @@ FIX (two-column PDF):
     - If single-column: use pdfplumber's normal extract_text() which is
       more robust than PyPDF2 for most PDF types.
     - Fall back to Tesseract OCR if pdfplumber yields < 100 chars.
+
+IMPROVEMENT (scanned PDF / Tesseract accuracy):
+  All 202 resumes fell through to Tesseract because pdfplumber returned
+  < 100 chars (scanned/image-only PDFs). Tesseract at default settings
+  on scans loses words and misreads characters. Improvements:
+    1. DPI raised from 300 → 400 — more pixels = sharper characters
+    2. Image preprocessing — grayscale → contrast boost → sharpen → binarize
+    3. PSM changed from 6 (uniform block) to 4 (single column) — better for
+       resume layouts with varied indentation and bullet points
+    4. preserve_interword_spaces=1 — prevents words from merging across gaps
+    5. Upscale small images before OCR — tiny text at low DPI is the #1
+       cause of character misreads in scanned resumes
 """
 
 from __future__ import annotations
@@ -29,7 +41,7 @@ import tempfile
 from pathlib import Path
 
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 from pdf2image import convert_from_bytes
 from loguru import logger
 
@@ -107,9 +119,6 @@ def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
                 left_text  = page.crop((x0, top, mid, bottom)).extract_text() or ""
                 right_text = page.crop((mid, top, x1, bottom)).extract_text() or ""
 
-                # Join left column full text then right column full text
-                # This keeps section headers (SKILLS, CERTIFICATIONS) with
-                # their content instead of interleaving the two columns
                 combined = left_text.strip()
                 if right_text.strip():
                     combined += "\n\n" + right_text.strip()
@@ -126,22 +135,77 @@ def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
     return "\n\n".join(pages_text).strip()
 
 
+# ─── Tesseract image preprocessing ───────────────────────────────────────────
+
+def _preprocess_for_tesseract(img: Image.Image) -> Image.Image:
+    """
+    Preprocess a scanned resume image before OCR to improve character
+    recognition accuracy. Applied to every page before Tesseract runs.
+
+    Pipeline:
+      1. Convert to grayscale  — colour noise misleads Tesseract
+      2. Upscale if small      — tiny text at < 150px/inch causes misreads;
+                                 Tesseract accuracy drops sharply below 200dpi
+      3. Boost contrast        — faded/light scans produce grey characters
+                                 that OCR engines misread as spaces
+      4. Sharpen               — smeared characters from scanner compression
+                                 become distinct again after sharpening
+      5. Binarize (threshold)  — converts to pure black-and-white so Tesseract
+                                 sees crisp edges, not grey anti-aliased pixels.
+                                 Threshold 140: keeps faint ink visible while
+                                 removing scanner noise (typical grey ~200+)
+    """
+    # 1. Grayscale
+    img = img.convert("L")
+
+    # 2. Upscale if the image is too small (< 1800px wide means likely low DPI)
+    min_width = 1800
+    if img.width < min_width:
+        scale = min_width / img.width
+        new_size = (int(img.width * scale), int(img.height * scale))
+        img = img.resize(new_size, Image.LANCZOS)
+        logger.debug(f"Upscaled image to {new_size[0]}x{new_size[1]}")
+
+    # 3. Contrast boost — factor 2.0 works well for typical office scanner output
+    img = ImageEnhance.Contrast(img).enhance(2.0)
+
+    # 4. Sharpen — helps with slightly blurry scans
+    img = img.filter(ImageFilter.SHARPEN)
+
+    # 5. Binarize — threshold at 140 (0–255 scale)
+    img = img.point(lambda x: 0 if x < 140 else 255, "1").convert("L")
+
+    return img
+
+
 # ─── OCR helpers ──────────────────────────────────────────────────────────────
 
 def extract_text_from_image(image: Image.Image) -> str:
     """
-    Run Tesseract OCR on a PIL Image.
+    Run Tesseract OCR on a PIL Image with improved settings and preprocessing.
     Falls back to EasyOCR only if installed AND Tesseract returns < 50 chars.
+
+    Tesseract config changes vs original:
+      --psm 4  : Assume a single column of text of variable sizes.
+                 Better for resumes than --psm 6 (uniform block) because
+                 resumes mix headers, bullet points, and paragraphs.
+      --oem 3  : Default engine (LSTM neural net).
+      preserve_interword_spaces=1 : Prevents words from merging across
+                 visual gaps (e.g. skill tags with space between them).
     """
-    tess_config = "--psm 6 --oem 3"
+    preprocessed = _preprocess_for_tesseract(image)
+    tess_config = "--psm 4 --oem 3 -c preserve_interword_spaces=1"
+
     try:
-        text = pytesseract.image_to_string(image, config=tess_config).strip()
+        text = pytesseract.image_to_string(preprocessed, config=tess_config).strip()
         if len(text) >= 50:
+            logger.debug(f"Tesseract extracted {len(text)} chars.")
             return text
-        logger.warning("Tesseract returned minimal text.")
+        logger.warning(f"Tesseract returned only {len(text)} chars after preprocessing.")
     except Exception as e:
         logger.error(f"Tesseract failed: {e}")
 
+    # Fallback: EasyOCR if available
     if _EASYOCR_AVAILABLE:
         logger.info("Falling back to EasyOCR...")
         reader = _get_easyocr_reader()
@@ -152,6 +216,7 @@ def extract_text_from_image(image: Image.Image) -> str:
 
     logger.warning("EasyOCR not available — returning Tesseract output as-is.")
     try:
+        # Last resort: try original image without preprocessing
         return pytesseract.image_to_string(image, config="--psm 3 --oem 3").strip()
     except Exception as e:
         logger.error(f"Tesseract retry failed: {e}")
@@ -195,8 +260,10 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         logger.warning(f"PyPDF2 extraction failed: {e}")
 
     # ── Attempt 3: OCR on rasterized pages (scanned PDF) ─────────────────────
-    logger.info("Rasterizing PDF pages for OCR...")
-    images = convert_from_bytes(pdf_bytes, dpi=300)
+    # Use 400 DPI — significantly better than 300 DPI for character accuracy
+    # on small fonts (9–11pt) commonly used in resume templates.
+    logger.info("Rasterizing PDF pages for Tesseract OCR (400 DPI)...")
+    images = convert_from_bytes(pdf_bytes, dpi=400)
     all_text: list[str] = []
     for i, img in enumerate(images):
         logger.debug(f"  OCR on page {i + 1}/{len(images)}")
@@ -240,9 +307,10 @@ def extract_text_flagged(file_bytes: bytes, content_type: str) -> tuple[str, boo
                 return combined, False   # clean extraction
         except Exception:
             pass
-        # Fall through to Tesseract — flag as OCR
-        logger.info("Rasterizing PDF for Tesseract OCR...")
-        images   = convert_from_bytes(file_bytes, dpi=300)
+
+        # Fall through to Tesseract — 400 DPI + preprocessing
+        logger.info("Rasterizing PDF for Tesseract OCR (400 DPI)...")
+        images   = convert_from_bytes(file_bytes, dpi=400)
         all_text = [extract_text_from_image(img) for img in images]
         return "\n\n".join(all_text).strip(), True
 

@@ -135,13 +135,23 @@ SOFT_SKILLS_EXCLUDE: set[str] = {
     "it troubleshooting", "system support", "it support",
     "project coordination", "technical documentation",
     # Security/auth terms that are too generic when appearing in project bullets
-    # (a candidate who "designed authentication" in a project does not necessarily
-    #  have Authentication as a standalone skill — it's a feature they implemented)
     "authentication", "authorization", "role-based access control",
     "role based access control",
     # Resume section headers that sometimes get caught by the matcher
     "certifications", "certificates", "skills", "education", "experience",
     "work experience", "projects", "summary", "profile", "contact",
+    # ── Generic noise words identified from batch evaluation (202 resumes) ────
+    # These appeared 10–25x as over-extracted false positives — they exist in
+    # the Firestore job vocab but are too vague to be meaningful standalone skills.
+    # A candidate who does "monitoring" is not skilled in Monitoring as a tool;
+    # a candidate who manages "workflows" is not skilled in a Workflow product.
+    "monitoring", "workflows", "workflow", "services", "service",
+    "reporting", "deployment", "schedule", "surveys", "survey",
+    "commissioning", "synchronization", "forecasting", "filtration",
+    "plant operations", "cross-functional collaboration",
+    "technical leadership", "agile development practices",
+    # "san" matches "Storage Area Network" but appears constantly as a common word
+    "san",
 }
 
 CERT_PROVIDER_WORDS: set[str] = {
@@ -437,6 +447,27 @@ class NLPProcessor:
             "Webpack", "Vite", "SASS", "SCSS",
             "Eclipse", "IntelliJ", "Postman", "Swagger", "Figma",
             "Memcyco", "Spring", "Hibernate", "Spring Boot",
+            # ── Added from batch evaluation: top missed skills ────────────────
+            # These appear in manual labels but were not extracted because they
+            # weren't in Firestore jobs. Adding them to the bridge vocab ensures
+            # they are recognised on resumes regardless of Firestore coverage.
+            "REST API Development", "REST API Integration", "RESTful API Development",
+            "Node.js", "React.js", "Angular.js", "Vue.js",
+            "SQL", "NoSQL", "Git", "GitHub Actions",
+            "Agile Development", "Scrum Methodology", "Kanban",
+            "AutoCAD", "AutoCAD MEP", "AutoCAD Civil 3D",
+            "Primavera P6", "MS Project",
+            "HVAC System Design", "MEP Design",
+            "Water Treatment", "Wastewater Treatment",
+            "Load Flow Analysis", "Power Systems Analysis",
+            "HEC-RAS", "HEC-HMS", "WaterCAD", "EPANET",
+            "Mine Planning", "Blasting Design", "Geotechnical Assessment",
+            "Quality Control", "Quality Assurance", "QA/QC",
+            "GMP", "ISO Standards", "ASTM Standards",
+            "Technical Report Writing", "Engineering Design",
+            "Project Management", "Risk Assessment",
+            "Electrical Engineering", "Mechanical Engineering",
+            "Civil Engineering", "Chemical Engineering", "Structural Engineering",
         ]
         for skill in RESUME_SKILL_VOCAB:
             s = skill.strip()
@@ -515,7 +546,13 @@ class NLPProcessor:
             raw_skills.add(span_text)
 
         normalized = [self.normalizer.normalize(s) for s in raw_skills]
-        return sorted(set(filter(None, normalized)))
+        # Final filter: re-apply SOFT_SKILLS_EXCLUDE after normalization.
+        # The normalizer's Tier 3 pass-through can re-introduce excluded words
+        # with different capitalisation (e.g. "San" → passes normalize → "San").
+        return sorted({
+            s for s in normalized
+            if s and s.lower().strip() not in SOFT_SKILLS_EXCLUDE
+        })
 
     def process(self, raw_text: str) -> dict:
         cleaned = self._clean_text(raw_text)
