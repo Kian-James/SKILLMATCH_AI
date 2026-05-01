@@ -1,0 +1,41 @@
+Com - Abigail Cambell
+{
+  "expected_skills": [
+    "Zendesk",
+    "AnyDesk",
+    "SolarWinds Network Performance Monitor",
+    "Malwarebytes",
+    "macOS",
+    "Ansible",
+    "Microsoft Excel",
+    "Microsoft Azure"
+  ]
+}
+
+Com - Adira Patel
+{
+  "expected_skills": [
+    "Java",
+    "HTML/CSS",
+    "MySQL",
+    "Git",
+    "Jira",
+    "JUnit",
+    "Eclipse",
+    "Linux",
+    "Memcyco",
+    "Spring Boot",
+    "React Native"
+  ]
+}
+
+Com - Aaron Sterling
+{
+  "expected_skills": [
+    "Node.js",
+    "PostgreSQL",
+    "Docker",
+    "AWS",
+    "Microservices"
+  ]
+}

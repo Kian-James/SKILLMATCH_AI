@@ -1,163 +1,156 @@
 """
-main.py - FastAPI application entry point
+main.py
+───────
+FastAPI backend for AI-Based Resume Matching.
+Job data is fetched live from Firestore instead of a local JSON file.
 
-Single uvicorn worker — same as the original setup that worked.
-
-Concurrency is handled inside the worker:
-  - run_in_threadpool in routes_resume.py runs analyze() in a thread pool
-    so the event loop stays free for other requests during analysis.
-  - Multiple /analyze calls are handled by Python's thread pool (default 40
-    threads), not by multiple processes. This is correct for CPU-bound ML
-    work on a single RAM-constrained server.
-
-Why not Gunicorn multi-worker:
-  Each worker loads its own copy of torch + models (~600MB each).
-  3 workers = ~1.8GB just sitting idle on a 2GB server — no headroom
-  for actual request processing. Crashes on startup or under any load.
+Environment variables (loaded from .env):
+    FIREBASE_CREDENTIALS_PATH  – path to your serviceAccountKey.json
+    FIRESTORE_JOBS_COLLECTION  – Firestore collection name (default: jobs)
+    HOST                       – bind host  (default: 0.0.0.0)
+    PORT                       – bind port  (default: 8000)
 """
 
-import asyncio
-import gc
+import os
+import shutil
 
-import uvicorn
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from loguru import logger
+import faiss
+import numpy as np
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, HTTPException, UploadFile
 
-from config import API_HOST, API_PORT, API_RELOAD
-from services.firebase_service import init_firebase
-from ai_modules.faiss_index import FAISSIndex
-from api.routes_resume import router as resume_router
-from api.routes_jobs import router as jobs_router
-from api.routes_skills import router as skills_router
-from api.routes_growth import router as growth_router
+# ── Load .env ────────────────────────────────────────────────────────────────
+load_dotenv()
 
-app = FastAPI(
-    title="Resume Analyzer API",
-    description="AI-powered resume analysis with skill gap detection",
-    version="2.0.0",
+FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
+FIRESTORE_JOBS_COLLECTION  = os.getenv("FIRESTORE_JOBS_COLLECTION", "jobs")
+HOST                       = os.getenv("HOST", "0.0.0.0")
+PORT                       = int(os.getenv("PORT", "8000"))
+
+# ── Firebase / Firestore init ────────────────────────────────────────────────
+import firebase_admin
+from firebase_admin import credentials, firestore as fs
+
+if not firebase_admin._apps:
+    if not FIREBASE_CREDENTIALS_PATH:
+        raise RuntimeError(
+            "FIREBASE_CREDENTIALS_PATH is not set. "
+            "Add it to your .env file and restart."
+        )
+    cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+    firebase_admin.initialize_app(cred)
+
+db = fs.client()
+
+# ── Matcher helpers ──────────────────────────────────────────────────────────
+from matcher import (
+    extract_text,
+    extract_skills_from_corpus,
+    calculate_cosine_similarity,
+    identify_skill_gap,
+    model,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ── FastAPI app ──────────────────────────────────────────────────────────────
+app = FastAPI(title="AI Resume Matching API")
+
+# FAISS index – 384 dims for all-MiniLM-L6-v2
+index = faiss.IndexFlatL2(384)
 
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Initializing Firebase...")
-    init_firebase()
+# ── Firestore helper ─────────────────────────────────────────────────────────
 
-    logger.info("Loading dynamic skill synonyms from Firestore...")
-    from utils.skill_normalizer import SkillNormalizer
-    SkillNormalizer.load_dynamic_synonyms()
+def fetch_jobs_from_firestore() -> list:
+    """Retrieve all job documents from Firestore, ordered by their numeric 'id' field."""
+    docs = db.collection(FIRESTORE_JOBS_COLLECTION).stream()
+    jobs = [doc.to_dict() for doc in docs]
 
-    app.state.faiss       = FAISSIndex()
-    app.state.faiss_ready = False
+    if not jobs:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No jobs found in Firestore collection '{FIRESTORE_JOBS_COLLECTION}'. "
+                "Run generate_jobs.py first to seed the collection."
+            ),
+        )
 
-    logger.info("Startup complete. ML will lazy-load on first request or /warmup.")
-
-
-async def ensure_faiss_ready():
-    """
-    Load FAISS indexes and ML models on first request.
-    Single worker so no cross-process concerns — just a simple asyncio lock
-    to prevent duplicate loads if two requests arrive before warmup finishes.
-    """
-    if app.state.faiss_ready:
-        return
-
-    if not hasattr(app.state, "_faiss_lock"):
-        app.state._faiss_lock = asyncio.Lock()
-
-    async with app.state._faiss_lock:
-        if app.state.faiss_ready:
-            return
-
-        logger.info("Lazy-loading FAISS + ML models...")
-
-        await app.state.faiss.load_or_build()
-        gc.collect()
-        logger.info("FAISS indexes loaded.")
-
-        try:
-            from ai_modules.nlp_processor import NLPProcessor
-            n_patterns = NLPProcessor.build_matcher_from_firestore()
-            logger.info(f"PhraseMatcher ready: {n_patterns} skill patterns.")
-        except Exception as e:
-            logger.warning(f"PhraseMatcher build failed (non-fatal): {e}")
-
-        try:
-            from services.resume_service import _get_ocr_vocab_embs
-            _get_ocr_vocab_embs()
-            logger.info("OCR vocab embeddings pre-warmed.")
-        except Exception as e:
-            logger.warning(f"OCR vocab pre-warm failed (non-fatal): {e}")
-
-        try:
-            from ai_modules.skill_implications import load_implications_from_firestore
-            n_implied = load_implications_from_firestore()
-            logger.info(f"Skill implication map ready: {n_implied} skills covered.")
-        except Exception as e:
-            logger.warning(f"Implication map load failed (non-fatal): {e}")
-
-        # Cache ResumeService once — reused by all requests
-        try:
-            from services.resume_service import ResumeService
-            app.state.resume_service = ResumeService(app.state.faiss)
-            logger.info("ResumeService cached on app.state.")
-        except Exception as e:
-            logger.warning(f"ResumeService pre-cache failed (non-fatal): {e}")
-
-        app.state.faiss_ready = True
-        logger.info("All ML models ready.")
+    jobs.sort(key=lambda j: j.get("id", 0))
+    return jobs
 
 
-app.state.ensure_faiss_ready = ensure_faiss_ready
+# ── Endpoint ─────────────────────────────────────────────────────────────────
 
-app.include_router(resume_router, prefix="/api/v1", tags=["Resume"])
-app.include_router(jobs_router,   prefix="/api/v1", tags=["Jobs"])
-app.include_router(skills_router, prefix="/api/v1", tags=["Skills"])
-app.include_router(growth_router, prefix="/api/v1", tags=["Growth"])
+@app.post("/thesis-full-analysis")
+async def thesis_full_analysis(
+        file: UploadFile = File(...),
+):
+    # ── Fetch jobs from Firestore ────────────────────────────────────────────
+    jobs_corpus = fetch_jobs_from_firestore()
+
+    # ── Save upload to a temp file ───────────────────────────────────────────
+    temp_path = f"temp_{file.filename}"
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        # ── STAGE 1: OCR ────────────────────────────────────────────────────
+        raw_text, ocr_quality = extract_text(temp_path)
+
+        # ── STAGE 2: NLP skill extraction from corpus ────────────────────────
+        verified_skills = extract_skills_from_corpus(raw_text, jobs_corpus)
+
+        # ── STAGE 3: FAISS vector integrity ─────────────────────────────────
+        resume_vec = model.encode(raw_text, convert_to_tensor=True)
+        vec_np     = resume_vec.cpu().detach().numpy().reshape(1, -1).astype("float32")
+
+        pre_count = index.ntotal
+        index.add(vec_np)
+
+        D, I = index.search(vec_np, 1)
+        faiss_integrity = (
+            100.0 if I[0][0] == pre_count and D[0][0] < 0.0001 else 0.0
+        )
+
+        # ── Matching & career guidance ───────────────────────────────────────
+        top_5_matches = calculate_cosine_similarity(raw_text, verified_skills, jobs_corpus)
+
+        best      = top_5_matches[0]
+        secondary = top_5_matches[1] if len(top_5_matches) > 1 else best
+
+        return {
+            "PIPELINE_ACCURACY_REPORT": {
+                "STAGE_1_OCR_QUALITY":     f"{ocr_quality}%",
+                "STAGE_2_NLP_ACCURACY":    "Corpus-matched (Firestore skills)",
+                "STAGE_3_FAISS_INTEGRITY": f"{faiss_integrity}%",
+            },
+            "CAREER_GUIDANCE_SYSTEM": {
+                "JOB_RECOMMENDATIONS": top_5_matches,
+                "BEST_MATCH_SUMMARY": {
+                    "job_title":        best["title"],
+                    "confidence_score": best["score"],
+                    "gap_count":        best["gap_count"],
+                    "required_skills":  best["required_skills"],
+                    "matched_skills":   best["matched_skills"],
+                    "missing_skills":   best["missing_skills"],
+                },
+                "SKILL_RECOMMENDATIONS": {
+                    "target_job":        secondary["title"],
+                    "skill(s)_to_learn": secondary["missing_skills"],
+                },
+            },
+            "EXTRACTION_SUMMARY": {
+                "file_name":          file.filename,
+                "extracted_skills":   verified_skills,
+                "total_skills_found": len(verified_skills),
+            },
+        }
+
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status":   "ok",
-        "version":  "2.0.0",
-        "ml_ready": getattr(app.state, "faiss_ready", False),
-    }
-
-
-@app.get("/warmup")
-async def warmup():
-    await ensure_faiss_ready()
-    return {"status": "warmed up", "ml_ready": True}
-
-
-@app.get("/admin/generate-synonyms")
-async def generate_synonyms():
-    from utils.skill_normalizer import SkillNormalizer
-    processed = SkillNormalizer.generate_and_persist_synonyms()
-    return {"status": "done", "skills_processed": processed}
-
-
-@app.get("/admin/build-implications")
-async def build_implications():
-    from ai_modules.skill_implications import build_implications_with_llm
-    processed = build_implications_with_llm()
-    return {"status": "done", "skills_processed": processed}
-
-
+# ── Dev runner ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host=API_HOST,
-        port=API_PORT,
-        reload=API_RELOAD,
-    )
+    import uvicorn
+    uvicorn.run(app, host=HOST, port=PORT)
