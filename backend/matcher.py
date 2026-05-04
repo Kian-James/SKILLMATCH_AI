@@ -1,865 +1,1139 @@
+"""
+matcher.py
+==========
+Resume Skill & Certification Matcher
+
+Pipeline:
+  Stage 1   → Text acquisition   (PyMuPDF native text; EasyOCR fallback)
+  Stage 2   → Skill extraction   (Llama-3.1-8B via HF Inference API → fuzzy fallback)
+  Stage 2B  → Cert extraction    (Llama-3.1-8B via HF Inference API → regex fallback)
+  Stage 3   → Hybrid scoring     (SBERT cosine + skill-match ratio via FAISS)
+  Stage 4   → Gap analysis       (missing skills vs. best-matched job)
+
+LLM calls mirror generate_jobs.py exactly:
+  - POST https://router.huggingface.co/v1/chat/completions
+  - model: meta-llama/Llama-3.1-8B-Instruct:cerebras
+  - Authorization: Bearer {HF_TOKEN}
+  - No local model loading for the LLM — API only.
+
+Environment variables (loaded from .env by the caller):
+    HF_TOKEN          — HuggingFace API token          (required)
+    HF_MODEL          — override LLM model string
+                        (default: meta-llama/Llama-3.1-8B-Instruct:cerebras)
+    EASYOCR_LANGUAGES — comma-separated language codes (default: en)
+
+Requirements:
+    pip install requests easyocr pymupdf \
+                sentence-transformers faiss-cpu \
+                numpy Pillow tqdm python-dotenv rapidfuzz
+
+Changes (v4):
+  REMOVED  Hardcoded _OCR_CORRECTIONS dict — static token map replaced entirely.
+  ADDED    Embedding-based OCR correction:
+             build_ocr_corrector(allowlist) — encodes every allowlist entry with
+               SBERT and builds a small FAISS IndexFlatIP index over them.
+               Returns an OcrCorrector dataclass (index + canonical labels +
+               a per-token LRU cache).
+             _ocr_correct_token(token, corrector) — encodes one OCR token, finds
+               its nearest allowlist neighbour by cosine similarity, and returns
+               the canonical form when the similarity exceeds OCR_EMBED_THRESHOLD.
+               Falls back to the original token when no neighbour is close enough,
+               so the downstream fuzzy/exact matching still has a shot.
+             _apply_ocr_corrections(s, corrector) — replaces the old hardcoded
+               version; applies _ocr_correct_token token-by-token, identical
+               call-signature for callers that pass corrector=None (no-op).
+  UPDATED  discover_skills_dynamically — builds corrector from corpus allowlist
+             once per call and passes it through canonicalization helpers.
+  UPDATED  _canonicalize / _direct_scan_section — accept optional corrector arg.
+  KEPT     All FIX-1 … FIX-5 logic intact; only the correction mechanism changed.
+"""
+
+from __future__ import annotations
+
+# ── OpenMP / FAISS segfault guard — must be set before any torch/faiss import ─
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["OMP_NUM_THREADS"] = "1"
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-import fitz
-import easyocr
-import torch
+import json
+import logging
 import re
+import string
+import tempfile
+import unicodedata
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+from typing import Callable, Optional
+
+import easyocr
+import faiss
+import fitz          # PyMuPDF
 import numpy as np
-from pdf2image import convert_from_path
-from sentence_transformers import SentenceTransformer, util
+import requests
 from rapidfuzz import fuzz
+from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
 
-# ── Hardware ──────────────────────────────────────────────────────────────────
-device = "cuda" if torch.cuda.is_available() else "cpu"
+log = logging.getLogger(__name__)
 
-# ── SBERT ─────────────────────────────────────────────────────────────────────
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration — identical variable names to generate_jobs.py
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── EasyOCR ───────────────────────────────────────────────────────────────────
-reader = easyocr.Reader(["en"], gpu=(device == "cuda"))
+HF_TOKEN    = os.getenv("HF_TOKEN", "")
+HF_API_URL  = "https://router.huggingface.co/v1/chat/completions"
+HF_MODEL    = os.getenv("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct:cerebras")
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
-# ── Poppler ───────────────────────────────────────────────────────────────────
-POPPLER_PATH = None
+EMBEDDING_MODEL    = "sentence-transformers/all-MiniLM-L6-v2"
+OCR_LANGUAGES      = os.getenv("EASYOCR_LANGUAGES", "en").split(",")
+MIN_NATIVE_CHARS   = 50
+TOP_K              = 5
+
+# Minimum cosine similarity (0–1) for the embedding-based OCR corrector to
+# accept a nearest-neighbour as the "true" form of an OCR-garbled token.
+# Tune upward (e.g. 0.82) to be more conservative; downward (e.g. 0.72) to
+# be more aggressive.  0.78 is a good starting point for all-MiniLM-L6-v2.
+OCR_EMBED_THRESHOLD: float = float(os.getenv("OCR_EMBED_THRESHOLD", "0.78"))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lazy-loaded singletons
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ocr_reader: Optional[easyocr.Reader]      = None
+model:       Optional[SentenceTransformer] = None   # public — imported by main.py
 
 
-def extract_text(file_path: str):
-    """Stage 1: OCR Extraction with Quality Metric."""
-    text = ""
-    if file_path.lower().endswith(".pdf"):
-        doc = fitz.open(file_path)
-        text = " ".join([page.get_text("text") for page in doc])
-        doc.close()
+def _get_ocr_reader() -> easyocr.Reader:
+    global _ocr_reader
+    if _ocr_reader is None:
+        log.info("[OCR] Loading EasyOCR reader (gpu=False) …")
+        _ocr_reader = easyocr.Reader(OCR_LANGUAGES, gpu=False)
+    return _ocr_reader
 
-    if len(text.strip()) < 50:
-        images = convert_from_path(file_path, poppler_path=POPPLER_PATH)
-        text = " ".join(
-            [" ".join(reader.readtext(np.array(img), detail=0)) for img in images]
+
+def _get_sbert() -> SentenceTransformer:
+    global model
+    if model is None:
+        log.info(f"[SBERT] Loading {EMBEDDING_MODEL} …")
+        model = SentenceTransformer(EMBEDDING_MODEL)
+        log.info("[SBERT] Ready.")
+    return model
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HF Inference API call — mirrors generate_jobs.py call_llama() exactly
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _call_llama(system_prompt: str, user_prompt: str, max_tokens: int = 1024) -> str:
+    """
+    POST to the HF Inference API exactly as generate_jobs.py does.
+    Returns the raw assistant message string.
+    Raises RuntimeError on non-200 responses.
+    """
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": HF_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.0,   # deterministic — we want exact extractions
+        "stream": False,
+    }
+
+    response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=120)
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"HF API returned {response.status_code}: {response.text[:300]}"
         )
 
-    clean_text = re.sub(r"\s+", " ", text)
-    alnum_ratio = (
-        len([c for c in clean_text if c.isalnum()]) / len(clean_text)
-        if clean_text else 0
+    return response.json()["choices"][0]["message"]["content"].strip()
+
+
+def _clean_json_fence(text: str) -> str:
+    """Strip markdown code fences the model may emit."""
+    text = re.sub(r"^```[a-z]*\n?", "", text.strip())
+    text = re.sub(r"\n?```$",        "", text)
+    return text.strip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper — normalize
+# ─────────────────────────────────────────────────────────────────────────────
+
+def normalize(s: str) -> str:
+    """Strip punctuation/accents, collapse whitespace, lowercase. Public."""
+    s = unicodedata.normalize("NFKD", s)
+    s = s.encode("ascii", "ignore").decode()
+    s = s.translate(str.maketrans("", "", string.punctuation))
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Embedding-based OCR corrector
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class OcrCorrector:
+    """
+    Lightweight wrapper around a FAISS index built from allowlist embeddings.
+
+    Attributes
+    ----------
+    index      : faiss.IndexFlatIP — L2-normalised embeddings, inner-product
+                 search == cosine similarity.
+    labels     : list[str] — canonical allowlist strings in index-row order.
+    encode_fn  : callable(str) -> np.ndarray(float32, shape=(dim,)) — encodes
+                 a single string to a unit-norm vector.
+    cache      : dict[str, str] — per-request token → corrected form cache so
+                 repeated tokens (e.g. "Microsoft") only hit the index once.
+    """
+    index:     faiss.IndexFlatIP
+    labels:    list[str]
+    encode_fn: Callable[[str], np.ndarray]
+    cache:     dict[str, str] = field(default_factory=dict)
+
+
+def build_ocr_corrector(allowlist: list[str]) -> OcrCorrector:
+    """
+    Build an OcrCorrector from a list of canonical skill/cert strings.
+
+    Each allowlist entry is encoded with SBERT (all-MiniLM-L6-v2), L2-
+    normalised, and added to a FAISS IndexFlatIP so that nearest-neighbour
+    search returns the most semantically similar canonical form.
+
+    This replaces the old hardcoded _OCR_CORRECTIONS dict entirely — the
+    "correction table" is now the full Firestore skills/certs allowlist.
+
+    Parameters
+    ----------
+    allowlist : list of canonical strings from Firestore (required_skills /
+                required_certifications aggregated across all job documents).
+
+    Returns
+    -------
+    OcrCorrector ready for use in _ocr_correct_token().
+    """
+    if not allowlist:
+        # Return a no-op corrector — index has 0 vectors, lookup always misses.
+        sbert = _get_sbert()
+        dim   = sbert.get_sentence_embedding_dimension()
+        return OcrCorrector(
+            index     = faiss.IndexFlatIP(dim),
+            labels    = [],
+            encode_fn = lambda s: sbert.encode(s, normalize_embeddings=True).astype(np.float32),
+        )
+
+    sbert = _get_sbert()
+    log.info(f"[OcrCorrector] Encoding {len(allowlist)} allowlist entries …")
+
+    # Encode all allowlist strings in one batch for speed
+    vecs = sbert.encode(
+        allowlist,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        batch_size=64,
+    ).astype(np.float32)          # shape: (N, dim)
+
+    dim   = vecs.shape[1]
+    index = faiss.IndexFlatIP(dim)
+    faiss.normalize_L2(vecs)      # belt-and-suspenders — already unit from SBERT
+    index.add(vecs)
+
+    log.info(f"[OcrCorrector] Index built ({index.ntotal} entries, dim={dim}).")
+
+    def _encode_one(s: str) -> np.ndarray:
+        v = sbert.encode(s, normalize_embeddings=True).astype(np.float32)
+        faiss.normalize_L2(v.reshape(1, -1))
+        return v
+
+    return OcrCorrector(index=index, labels=list(allowlist), encode_fn=_encode_one)
+
+
+def _ocr_correct_token(token: str, corrector: OcrCorrector) -> str:
+    """
+    Return the canonical allowlist form nearest to *token* in embedding space,
+    provided the cosine similarity exceeds OCR_EMBED_THRESHOLD.
+
+    Design notes
+    ------------
+    • Single-token scope: we correct one whitespace-delimited token at a time
+      (called from _apply_ocr_corrections).  Multi-word allowlist entries are
+      candidates too — if "Microsoft Excel" is closest to the garbled token
+      "Microson Exel" split as ["Microson", "Exel"], the per-token correction
+      maps "Microson" → "Microsoft" and "Exel" → "Excel" independently, which
+      re-assembles correctly downstream when the corrected tokens are rejoined.
+
+    • Cache: the OcrCorrector.cache dict avoids re-encoding the same token
+      multiple times within a single request (e.g. "microsoft" appears many
+      times in a resume's skills section).
+
+    • Threshold guard: if the best cosine similarity is below
+      OCR_EMBED_THRESHOLD the original token is returned unchanged so the
+      downstream fuzzy/exact matching still has a chance.
+
+    Parameters
+    ----------
+    token     : single whitespace-free OCR token (may be garbled, e.g. "Microson").
+    corrector : OcrCorrector built from the Firestore allowlist.
+
+    Returns
+    -------
+    Canonical allowlist string if confident; otherwise the original token.
+    """
+    if not corrector.labels or not token.strip():
+        return token
+
+    # Strip trailing punctuation for the lookup key, but preserve for output
+    stripped = token.strip(".,;:()[]")
+    cache_key = stripped.lower()
+
+    if cache_key in corrector.cache:
+        corrected = corrector.cache[cache_key]
+        # Re-attach any trailing punctuation that was stripped
+        suffix = token[len(stripped):]
+        return corrected + suffix
+
+    vec = corrector.encode_fn(stripped).reshape(1, -1)
+    D, I = corrector.index.search(vec, 1)  # top-1 nearest neighbour
+
+    similarity = float(D[0][0])
+    if similarity >= OCR_EMBED_THRESHOLD and I[0][0] >= 0:
+        canonical = corrector.labels[I[0][0]]
+
+        # For multi-word canonical entries (e.g. "Microsoft Excel") we only
+        # want to return the single best-matching word from that entry when
+        # correcting a single token, not the whole phrase.  Find the word
+        # within the canonical entry whose normalized form is closest to the
+        # stripped token's normalized form.
+        canon_words = canonical.split()
+        if len(canon_words) > 1:
+            norm_stripped = normalize(stripped)
+            best_word = max(
+                canon_words,
+                key=lambda w: fuzz.ratio(normalize(w), norm_stripped),
+            )
+            corrected = best_word
+        else:
+            corrected = canonical
+
+        log.debug(
+            f"[OcrCorrector] '{stripped}' → '{corrected}' "
+            f"(sim={similarity:.3f}, nearest='{canonical}')"
+        )
+    else:
+        corrected = stripped  # below threshold — leave unchanged
+
+    corrector.cache[cache_key] = corrected
+    suffix = token[len(stripped):]
+    return corrected + suffix
+
+
+def _apply_ocr_corrections(s: str, corrector: Optional[OcrCorrector] = None) -> str:
+    """
+    Token-level OCR correction using the embedding-based OcrCorrector.
+
+    Splits the input into whitespace-separated tokens, corrects each token
+    individually using _ocr_correct_token(), then rejoins.  This allows
+    compound strings like "Microson Azuie" to be corrected to
+    "Microsoft Azure" token-by-token.
+
+    When corrector is None (e.g. in unit tests or fallback paths) the
+    function is a no-op and returns the original string unchanged.
+
+    Parameters
+    ----------
+    s         : raw OCR string, potentially containing garbled tokens.
+    corrector : OcrCorrector built from the Firestore allowlist, or None.
+
+    Returns
+    -------
+    String with OCR-garbled tokens replaced by their canonical allowlist forms.
+    """
+    if corrector is None:
+        return s
+    return " ".join(_ocr_correct_token(tok, corrector) for tok in s.split())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — Text acquisition
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _native_pdf_text(file_path: str) -> str:
+    doc   = fitz.open(file_path)
+    pages = [page.get_text("text") for page in doc]
+    doc.close()
+    return " ".join(pages).strip()
+
+
+def _ocr_fallback(file_path: str) -> str:
+    reader = _get_ocr_reader()
+
+    if file_path.lower().endswith(".pdf"):
+        try:
+            from pdf2image import convert_from_path
+            with tempfile.TemporaryDirectory() as tmpdir:
+                pages = convert_from_path(file_path, dpi=200, output_folder=tmpdir)
+                lines: list[str] = []
+                for img in tqdm(pages, desc="OCR pages", unit="page", leave=False):
+                    lines.extend(
+                        reader.readtext(np.array(img), detail=0, paragraph=True)
+                    )
+                return "\n".join(lines)
+        except Exception as exc:
+            log.warning(f"[OCR] pdf2image failed ({exc}); direct image fallback …")
+
+    result = reader.readtext(file_path, detail=0, paragraph=True)
+    return "\n".join(result)
+
+
+def _alnum_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return round(sum(c.isalnum() for c in text) / len(text) * 100, 2)
+
+
+def extract_text(file_path: str) -> tuple[str, float]:
+    """
+    Stage 1: Try PyMuPDF native text; fall back to EasyOCR.
+    Returns (text, ocr_quality_percent).
+    ocr_quality_percent is already × 100 (e.g. 87.4 means 87.4 %).
+    """
+    native = _native_pdf_text(file_path) if file_path.lower().endswith(".pdf") else ""
+
+    if len(native) >= MIN_NATIVE_CHARS:
+        log.info(f"[Stage 1] Native PDF text ({len(native)} chars).")
+        return native, _alnum_ratio(native)
+
+    log.info("[Stage 1] Native text too short — EasyOCR fallback …")
+    ocr_text = _ocr_fallback(file_path)
+    quality  = _alnum_ratio(ocr_text)
+    log.info(f"[Stage 1] OCR done ({len(ocr_text)} chars, quality {quality}%).")
+    return ocr_text, quality
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — Rule-based section locators (debug helpers + internal slicing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SKILL_HEADING_RE = re.compile(
+    r"^(skills?|technical\s+skills?|core\s+competenc\w+|technologies|"
+    r"tools?\s+&?\s*technologies?|expertise|proficienc\w+)",
+    re.I | re.M,
     )
-    return clean_text, round(alnum_ratio * 100, 2)
+_CERT_HEADING_RE = re.compile(
+    r"^(certifications?|licen[cs]es?\s*(&|and)?\s*certifications?|"
+    r"professional\s+certifications?|credentials?|accreditations?)",
+    re.I | re.M,
+    )
+
+# General next-section stopper (used by cert slicer).
+_NEXT_SECTION_RE = re.compile(
+    r"^\s*(experience|education|employment|projects?|awards?|publications?|"
+    r"references?|volunteer|languages?|interests?|activities|summary|objective)",
+    re.I | re.M,
+    )
+
+# Skills-specific stopper: stops at CERTIFICATIONS *and* all other sections.
+_SKILLS_END_RE = re.compile(
+    r"^\s*(certifications?|licen[cs]es?\s*(&|and)?\s*certifications?|"
+    r"professional\s+certifications?|credentials?|accreditations?|"
+    r"experience|education|employment|projects?|awards?|publications?|"
+    r"references?|volunteer|languages?|interests?|activities|summary|objective)",
+    re.I | re.M,
+    )
 
 
-# ── Known resume section headers ─────────────────────────────────────────────
-SECTION_END_HEADERS = [
-    'certifications', 'certificates', 'education', 'work experience',
-    'professional experience', 'experience', 'employment', 'projects',
-    'awards', 'references', 'publications', 'languages', 'summary',
-    'objective', 'profile', 'about',
-]
-
-
-def extract_skills_section(text: str) -> str:
+def _extract_skills_section_line_based(text: str) -> str:
     """
-    Option A: Find the Skills section boundary, then return ONLY the
-    isolated listed token lines — stripping all prose entirely.
+    Return the skills section as a comma-separated string where each entry is
+    a complete skill phrase — NOT one token per word.
 
-    OCR collapses PDF line-breaks into spaces, so a resume skills column:
-        Zendesk
-        AnyDesk
-        SolarWinds Network Performance Monitor
-        Malwarebytes
-    becomes one flat string:
-        "Zendesk AnyDesk SolarWinds Network Performance Monitor Malwarebytes"
+    "SolarWinds Network Performance Monitor" stays as one entry, not four.
 
-    The listed tokens are bare, capitalized, and NOT preceded by a verb
-    connector. Prose sentences inside the same section block always start
-    with a verb or have a verb within the first two words:
-        "Used Ansible for...", "Conducted data analysis using..."
+    Extraction strategy
+    -------------------
+    1. Locate the SKILLS heading; slice the block up to the next section.
+    2. Drop lines that look like a section heading (early-exit guard).
+    3. Detect the natural delimiter used inside the block and split on it:
 
-    Steps:
-      1. Fuzzy-detect the SKILLS header and the next section header to get
-         the raw section text (same boundary logic as before).
-      2. Walk the section word-by-word and collect only tokens that:
-           (a) start with a capital letter
-           (b) are NOT immediately preceded (<=2 words back) by a verb /
-               preposition connector
-           (c) are not pure noise (dates, numbers, single chars, company
-               suffixes, etc.)
-      3. Greedily grow each qualifying token into a multi-word phrase
-         (up to 6 words) as long as subsequent words also look like listed
-         items, stopping at a verb connector or noise boundary.
-      4. Return the collected phrases joined by spaces — this is the clean
-         token-only string passed to extract_skills_from_corpus().
+       Priority   Delimiter detected when…
+       ────────   ─────────────────────────────────────────────────────────────
+       1. comma   block contains "," (already comma-separated)
+       2. semi    block contains ";"
+       3. pipe    block contains "|"
+       4. bullet  any line starts with •, -, *, ◦, ▪, or a digit+dot
+       5. newline each non-empty line is one skill (most structured resumes)
+       6. space   fallback — OCR smashed everything onto one line with no
+                  internal delimiter; treat the whole line as one entry so
+                  "SolarWinds Network Performance Monitor" is preserved as-is.
 
-    Falls back to the full raw section text if no tokens are isolated,
-    and to the full document text if no skills header is found.
+    The returned string is the skill entries joined with ", " so the LLM
+    prompt and the debug field (skills_section_rule_based) receive:
+      "Zendesk, AnyDesk, SolarWinds Network Performance Monitor, Ansible, ..."
+    instead of the old per-word explosion:
+      "Zendesk, AnyDesk, SolarWinds, Network, Performance, Monitor, Ansible, ..."
     """
-    from difflib import SequenceMatcher
+    m = _SKILL_HEADING_RE.search(text)
+    if not m:
+        return ""
+    rest = text[m.end():]
 
-    def _r(a: str, b: str) -> int:
-        return round(SequenceMatcher(None, a.lower(), b.lower()).ratio() * 100)
+    end_m = _SKILLS_END_RE.search(rest)
+    block = rest[: end_m.start()].strip() if end_m else rest.strip()
 
-    SKILLS_HEADERS = [
-        'technical skills', 'key skills', 'core skills',
-        'skills summary', 'skills and expertise', 'skills',
-    ]
-
-    # ── Step 1: Locate the raw skills section via fuzzy header detection ──────
-    words        = text.split()
-    n            = len(words)
-    skills_start = None
-    skills_end   = None
-
-    for i in range(n):
-        for ws in (2, 1):
-            if i + ws > n:
-                continue
-            window = ' '.join(words[i:i + ws])
-            for header in SKILLS_HEADERS:
-                if len(header.split()) != ws:
-                    continue
-                if _r(window, header) >= 85:
-                    skills_start = i + ws
-                    break
-            if skills_start is not None:
-                break
-        if skills_start is not None:
+    # ── Drop lines that look like a new named section (early-exit guard) ──────
+    raw_lines = block.splitlines()
+    kept_lines: list[str] = []
+    for line in raw_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        words = stripped.split()
+        if (kept_lines
+                and len(words) >= 3
+                and sum(1 for w in words if w[0].isupper()) >= 2):
             break
+        kept_lines.append(stripped)
 
-    if skills_start is None:
-        return text  # fallback: no skills header found
+    if not kept_lines:
+        return ""
 
-    for i in range(skills_start, n):
-        for ws in (3, 2, 1):
-            if i + ws > n:
-                continue
-            window = ' '.join(words[i:i + ws])
-            for header in SECTION_END_HEADERS:
-                if len(header.split()) != ws:
-                    continue
-                if _r(window, header) >= 88:
-                    skills_end = i
-                    break
-            if skills_end is not None:
-                break
-        if skills_end is not None:
-            break
+    joined_block = "\n".join(kept_lines)
 
-    section_words = words[skills_start:skills_end] if skills_end else words[skills_start:]
-    if not section_words:
-        return text  # fallback: empty section
+    # ── Detect delimiter and split into skill entries ─────────────────
+    _BULLET_RE = re.compile(r"^\s*[\u2022\-\*\u25e6\u25aa]|\s*\d+\.\s+", re.M)
 
-    # ── Step 2 & 3: Extract only isolated listed tokens from the section ──────
-    # Verb/preposition connectors that signal prose context.
-    # A capitalized word preceded by any of these within 2 positions is a
-    # prose mention of a skill, not a listed item.
-    VERB_CONNECTORS = {
-        'using', 'used', 'use', 'leveraged', 'leverage', 'implemented',
-        'implement', 'with', 'via', 'through', 'by', 'for', 'from',
-        'deployed', 'deploy', 'conducted', 'conduct', 'provided', 'provide',
-        'assisted', 'assist', 'collaborated', 'monitored', 'monitor',
-        'worked', 'work', 'offered', 'offer', 'achieved', 'achieve',
-        'ensuring', 'ensure', 'reducing', 'reduce', 'resulting', 'result',
-        'including', 'include', 'maintaining', 'maintain',
-    }
+    entries: list[str] = []
 
-    # Tokens that are noise even when capitalized (company suffixes, stop
-    # words, location abbreviations, social links, etc.)
-    NOISE_TOKENS = {
-        'inc', 'llc', 'ltd', 'corp', 'ma', 'ca', 'ny', 'tx', 'current',
-        'present', 'linkedin', 'github', 'the', 'and', 'or', 'of', 'in',
-        'to', 'a', 'an', 'is', 'are', 'was', 'were',
-    }
+    if "," in joined_block:
+        # Already comma-separated — split on commas within each line
+        for line in kept_lines:
+            for part in re.split(r"\s*,\s*", line):
+                part = part.strip()
+                if part:
+                    entries.append(part)
 
-    sw = section_words
-    m  = len(sw)
+    elif ";" in joined_block:
+        for line in kept_lines:
+            for part in re.split(r"\s*;\s*", line):
+                part = part.strip()
+                if part:
+                    entries.append(part)
 
-    def _clean(w: str) -> str:
-        return re.sub(r'[^a-zA-Z0-9]', '', w)
+    elif "|" in joined_block:
+        for line in kept_lines:
+            for part in line.split("|"):
+                part = part.strip()
+                if part:
+                    entries.append(part)
 
-    def _is_noise(w: str) -> bool:
-        c = _clean(w).lower()
-        if not c or len(c) < 2:
-            return True
-        if c in NOISE_TOKENS:
-            return True
-        if re.fullmatch(r'\d+', c):
-            return True
-        return False
+    elif _BULLET_RE.search(joined_block):
+        # Strip bullet character; each line is one skill phrase
+        for line in kept_lines:
+            clean = re.sub(r"^\s*[\u2022\-\*\u25e6\u25aa]\s*|\s*\d+\.\s+", "", line).strip()
+            if clean:
+                entries.append(clean)
 
-    def _starts_capital(w: str) -> bool:
-        c = _clean(w)
-        return bool(c) and c[0].isupper()
+    elif len(kept_lines) > 1:
+        # Multiple lines, no inline delimiter — each line is one skill phrase
+        entries = [line.strip() for line in kept_lines if line.strip()]
 
-    def _preceded_by_verb(pos: int) -> bool:
-        for lookback in range(1, 3):
-            idx = pos - lookback
-            if idx < 0:
-                break
-            if _clean(sw[idx]).lower() in VERB_CONNECTORS:
-                return True
-        return False
+    else:
+        # Single OCR line, no delimiter — preserve as one entry per line so
+        # "SolarWinds Network Performance Monitor" is not split word-by-word.
+        # The LLM and direct-scan stages parse individual skills from this.
+        entries = [line.strip() for line in kept_lines if line.strip()]
 
-    candidates: list[str] = []
-    visited:    set[int]  = set()
-
-    for i in range(m):
-        if i in visited:
-            continue
-        w = sw[i]
-        if _is_noise(w):
-            continue
-        if not _starts_capital(w):
-            continue
-        if _preceded_by_verb(i):
-            continue
-
-        # Greedily grow into a multi-word listed phrase (max 6 words).
-        # Stop at a verb connector, noise, or a lowercase prose word (4+ chars).
-        MAX_PHRASE = 6
-        phrase_words = [w]
-        visited.add(i)
-
-        j = i + 1
-        while j < m and len(phrase_words) < MAX_PHRASE:
-            nw  = sw[j]
-            nwc = _clean(nw).lower()
-
-            if nwc in VERB_CONNECTORS:
-                break
-            if _is_noise(nw):
-                # Allow short joiners ("and", "of", "&") only when the very
-                # next word is also capitalized, e.g. "Security and Compliance"
-                if nwc in ('and', 'of', '&') and j + 1 < m and _starts_capital(sw[j + 1]):
-                    phrase_words.append(nw)
-                    visited.add(j)
-                    j += 1
-                    continue
-                break
-            if not _starts_capital(nw) and len(nwc) >= 4:
-                break
-
-            phrase_words.append(nw)
-            visited.add(j)
-            j += 1
-
-        phrase       = ' '.join(phrase_words).strip()
-        phrase_clean = _clean(phrase.replace(' ', ''))
-        if len(phrase_clean) >= 3:
-            candidates.append(phrase)
-
-    # ── Step 4: Return clean token string or fallback to raw section ──────────
-    if candidates:
-        return ' '.join(candidates)
-
-    return ' '.join(section_words)  # fallback: raw section if nothing isolated
+    return ", ".join(entries)
 
 
-def extract_certifications_section(text: str) -> str:
+def _extract_cert_section(text: str) -> str:
     """
-    Find the Certifications section of a resume using fuzzy header detection.
-    Returns only that section text, or empty string if none found.
-    Falls back to empty string (unlike skills, certs may not exist).
+    Return ONLY the certification tokens — the content on the same line as the
+    CERTIFICATIONS heading and any immediately following lines, stopping at the
+    next section boundary.  The heading word itself is stripped.
     """
-    from difflib import SequenceMatcher
-
-    def _r(a: str, b: str) -> int:
-        return round(SequenceMatcher(None, a.lower(), b.lower()).ratio() * 100)
-
-    CERT_HEADERS = [
-        'certifications and awards', 'certifications & awards',
-        'certifications and licenses', 'licenses and certifications',
-        'professional certifications', 'certifications', 'certificates',
-        'courses and certifications', 'training and certifications',
-        'awards and certifications',
-    ]
-
-    CERT_END_HEADERS = [
-        'education', 'work experience', 'professional experience',
-        'experience', 'employment', 'projects', 'awards', 'references',
-        'publications', 'languages', 'summary', 'objective', 'profile',
-        'skills', 'technical skills', 'key skills', 'about',
-    ]
-
-    words       = text.split()
-    n           = len(words)
-    cert_start  = None
-    cert_end    = None
-
-    for i in range(n):
-        for ws in (4, 3, 2, 1):
-            if i + ws > n:
-                continue
-            window = ' '.join(words[i:i + ws])
-            for header in CERT_HEADERS:
-                if len(header.split()) != ws:
-                    continue
-                if _r(window, header) >= 85:
-                    cert_start = i + ws
-                    break
-            if cert_start is not None:
-                break
-        if cert_start is not None:
-            break
-
-    if cert_start is None:
-        return ''
-
-    for i in range(cert_start, n):
-        for ws in (3, 2, 1):
-            if i + ws > n:
-                continue
-            window = ' '.join(words[i:i + ws])
-            for header in CERT_END_HEADERS:
-                if len(header.split()) != ws:
-                    continue
-                if _r(window, header) >= 88:
-                    cert_end = i
-                    break
-            if cert_end is not None:
-                break
-        if cert_end is not None:
-            break
-
-    cert_text = ' '.join(
-        words[cert_start:cert_end] if cert_end else words[cert_start:]
-    ).strip()
-
-    return cert_text
+    m = _CERT_HEADING_RE.search(text)
+    if not m:
+        return ""
+    rest  = text[m.end():]
+    end_m = _NEXT_SECTION_RE.search(rest)
+    block = rest[: end_m.start()].strip() if end_m else rest.strip()
+    return block
 
 
-def extract_certificates_from_section(cert_text: str, known_certs: list) -> list:
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — LLM prompts (same structure as generate_jobs.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SKILLS_SYSTEM = (
+    "You are a precision resume parser. Your task is to identify professional skills. "
+    "1. Look for the 'SKILLS' section in the text and extract those items first. "
+    "2. Cross-reference with the 'WORK EXPERIENCE' to validate and find additional tools mentioned. "
+    "3. IGNORE single-letter artifacts (like 'C', 'R') or two-letter acronyms (like 'AI', 'ML') "
+    "UNLESS they are clearly written as distinct skills in the document. "
+    "4. Format as a JSON array of strings. Standardize names (e.g., 'Microson' to 'Microsoft'). "
+    "Output ONLY the JSON array."
+)
+
+# FIX-1: Strengthened cert prompt — explicitly forbid splitting a single cert
+# into multiple items.
+_CERTS_SYSTEM = (
+    "You are a specialized resume parser. Extract COMPLETE professional certification names. "
+    "CRITICAL RULE: NEVER split a single certification into multiple array items. "
+    "Each certification is ONE complete string "
+    "(e.g., 'Microsoft Certified Azure Fundamentals' is ONE item, NOT two). "
+    "Each entry must be 10 words or fewer. "
+    "Output MUST be a valid JSON array of strings only. "
+    "Do not include markdown tags like ```json or any explanation. "
+    "Example: [\"AWS Certified Solutions Architect\", \"Google IT Support Professional\"]"
+)
+
+
+def _llm_extract_list(system: str, user: str, label: str) -> list[str]:
     """
-    Match known certificate names against the certifications section text.
-
-    Pass 1 — exact/normalised substring match
-    Pass 2 — OCR fuzzy using sliding window with three gates:
-              (a) first-word anchor >= 80
-              (b) second-word anchor >= 80 (if cert has 2+ words)
-              (c) full phrase >= 82
-    Pass 3 — partial prefix match: match just the first 3 words of a cert
-              against windows. Handles cases like:
-              "Microsoft Certified Azure Fundamentals" where the last word
-              is replaced by a year "2013" in the OCR output, so the full
-              4-word window never scores high enough.
+    Call Llama via the HF Inference API and parse the returned JSON array.
+    Returns [] on any failure so the caller applies a fuzzy fallback.
     """
-    from difflib import SequenceMatcher
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            raw   = _call_llama(system, user, max_tokens=512)
+            raw   = _clean_json_fence(raw)
+            start = raw.find("[")
+            end   = raw.rfind("]") + 1
+            if start == -1 or end <= start:
+                raise ValueError("No JSON array found in response.")
+            items = json.loads(raw[start:end])
+            if isinstance(items, list):
+                return [str(i).strip() for i in items if str(i).strip()]
+        except Exception as exc:
+            log.warning(f"[LLM/{label}] Attempt {attempt}/{MAX_RETRIES} failed: {exc}")
+            if attempt == MAX_RETRIES:
+                log.warning(f"[LLM/{label}] All retries exhausted — using fallback.")
+    return []
 
-    if not cert_text or not known_certs:
-        return []
 
-    def _r(a: str, b: str) -> int:
-        return round(SequenceMatcher(None, a.lower(), b.lower()).ratio() * 100)
+def _fuzzy_scan(text: str, allowlist: list[str], threshold: int = 88) -> list[str]:
+    """Fallback: find allowlist items that appear in text via fuzzy partial match."""
+    lower = text.lower()
+    return [a for a in allowlist if fuzz.partial_ratio(a.lower(), lower) >= threshold]
 
-    def normalize(s: str) -> str:
-        return re.sub(r"[\s.\-_/]", "", s).lower()
 
-    cert_lower      = cert_text.lower()
-    cert_normalized = normalize(cert_text)
-    cert_words      = cert_text.split()
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-2 + FIX-3: Shared canonicalization helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
-    known_certs_sorted = sorted(known_certs, key=len, reverse=True)
+def _build_allow_norm_sorted(allowlist_items: list[str]) -> list[tuple[str, str]]:
+    """
+    Return (normalized_key, canonical_value) pairs sorted by descending word
+    count so that longer allowlist entries are evaluated first (FIX-3).
+    """
+    pairs = [(normalize(a), a) for a in allowlist_items]
+    pairs.sort(key=lambda p: len(p[0].split()), reverse=True)
+    return pairs
 
-    exact_matches = set()
-    remaining     = []
 
-    # Pass 1: exact / normalised substring
-    for cert in known_certs_sorted:
-        cert_l    = cert.lower()
-        cert_norm = normalize(cert)
-        if len(cert_norm) <= 1:
-            continue
-        if cert_l in cert_lower or cert_norm in cert_normalized:
-            exact_matches.add(cert)
+def _canonicalize(
+        raw_item:      str,
+        allow_norm:    dict[str, str],
+        threshold:     int = 75,
+        _sorted_pairs: list[tuple[str, str]] | None = None,
+        corrector:     Optional[OcrCorrector] = None,
+) -> str:
+    """
+    Map a raw extracted string to its canonical allowlist form.
+
+    Strategy (in priority order):
+      1. Embedding-based OCR correction via _apply_ocr_corrections() with the
+         OcrCorrector built from the Firestore allowlist.  This replaces the old
+         hardcoded _OCR_CORRECTIONS dict — garbled tokens like "Microson" or
+         "Malwarcbytcs" are corrected dynamically by finding their nearest
+         neighbour in the allowlist embedding space.
+      2. Exact normalized match on the (possibly corrected) form.
+      3. Prefix / longest-match-first substring containment (FIX-3):
+         raw token ≥ 4 chars AND allowlist key starts with raw token.
+      4. max(token_sort_ratio, ratio) fuzzy match (FIX-2).
+      5. If best score < threshold, return the raw item unchanged (fails-open).
+
+    Parameters
+    ----------
+    raw_item      : string extracted by the LLM or direct scan.
+    allow_norm    : {normalized_key: canonical_value} dict.
+    threshold     : minimum fuzzy score to accept a match.
+    _sorted_pairs : pre-sorted (norm_key, canonical) pairs (longest first).
+    corrector     : OcrCorrector for embedding-based token correction, or None.
+    """
+    # 1. Embedding-based OCR correction (replaces hardcoded dict)
+    corrected = _apply_ocr_corrections(raw_item, corrector)
+    sn = normalize(corrected)
+
+    # 2. Exact match on corrected form
+    if sn in allow_norm:
+        return allow_norm[sn]
+
+    pairs = _sorted_pairs if _sorted_pairs is not None else list(allow_norm.items())
+
+    best_score: int = 0
+    best_val:   str = raw_item   # default: keep as-is
+
+    sn_word_count = len(sn.split())
+
+    for akey, aval in pairs:
+        # 3. Prefix substring containment — longest match first (FIX-3).
+        #
+        #    Guard conditions (ALL must hold to fire):
+        #      a. Raw token is ≥ 4 chars (blocks short noise like "ar", "ex").
+        #      b. The allowlist key starts with the raw token (prefix match).
+        #      c. The raw token is NOT itself a standalone allowlist entry —
+        #         if "microservices" is already in the allowlist, we must NOT
+        #         promote it to "microservices architecture" just because the
+        #         longer entry also starts with it.  Exact match (step 2) above
+        #         already handles that case and returns early; we re-check here
+        #         as a safety net for the sorted-pairs loop.
+        #      d. The allowlist key is at most 2× the word count of the raw
+        #         token — prevents a 1-word OCR fragment from being silently
+        #         expanded into a 4- or 5-word phrase.
+        akey_word_count = len(akey.split())
+        prefix_eligible = (
+                len(sn) >= 4
+                and akey.startswith(sn)
+                and sn not in allow_norm                        # guard (c)
+                and akey_word_count <= sn_word_count * 2        # guard (d)
+        )
+
+        if prefix_eligible:
+            score = 90
         else:
-            remaining.append(cert)
+            # 4. Dual-metric fuzzy (FIX-2)
+            score = max(
+                fuzz.token_sort_ratio(sn, akey),
+                fuzz.ratio(sn, akey),
+            )
 
-    # Pass 2: full OCR fuzzy (first + second word anchors + full phrase)
-    ocr_matches = set()
-    for cert in remaining:
-        cert_ws = cert.split()
-        cert_wc = len(cert_ws)
-        cert_fw = cert_ws[0]
-        cert_sw = cert_ws[1] if cert_wc >= 2 else None
+        if score > best_score:
+            best_score = score
+            best_val   = aval
+            if score == 90:
+                break   # early-exit: longest-prefix hit wins
 
-        if cert_wc == 1 and len(cert_ws[0]) < 11:
-            continue
+    return best_val if best_score >= threshold else raw_item
 
-        for start in range(len(cert_words) - cert_wc + 1):
-            ww     = cert_words[start:start + cert_wc]
-            window = ' '.join(ww)
-            if _r(cert_fw, ww[0]) < 80:
-                continue
-            if cert_sw and len(ww) >= 2:
-                if _r(cert_sw, ww[1]) < 80:
+
+def _direct_scan_section(
+        section_text: str,
+        sorted_pairs: list[tuple[str, str]],
+        threshold:    int = 82,
+        corrector:    Optional[OcrCorrector] = None,
+        allow_norm:   dict[str, str] | None = None,
+) -> list[str]:
+    """
+    FIX-5 — Direct token-window scan of the raw SKILLS section text.
+
+    Slides a window of 1–N tokens over every line, checks each window
+    against every allowlist entry (longest first) using dual-metric fuzzy
+    scoring, and collects matches above threshold.
+
+    Embedding-based OCR correction (_apply_ocr_corrections with corrector) is
+    applied to each line before tokenising, replacing the old hardcoded
+    per-token correction map.
+
+    allow_norm is used to prevent the prefix rule from promoting a window
+    that is already a standalone allowlist entry (e.g. "microservices") into
+    a longer entry ("microservices architecture") — mirrors the guard added
+    to _canonicalize().
+
+    Returns a list of canonical allowlist strings found in the section.
+    """
+    found: list[str] = []
+    seen:  set[str]  = set()
+    _allow_norm = allow_norm or {}
+    max_win = max((len(akey.split()) for akey, _ in sorted_pairs), default=1)
+
+    for line in section_text.splitlines():
+        # Apply embedding-based OCR corrections before building token windows
+        corr_line = _apply_ocr_corrections(line, corrector)
+        tokens    = normalize(corr_line).split()
+        n         = len(tokens)
+        for start in range(n):
+            for end in range(start + 1, min(start + max_win + 1, n + 1)):
+                window = " ".join(tokens[start:end])
+                if not window or len(window) < 4:
                     continue
-            if _r(cert, window) >= 82:
-                ocr_matches.add(cert)
-                break
+                window_word_count = len(window.split())
+                for akey, aval in sorted_pairs:
+                    akey_word_count = len(akey.split())
+                    prefix_eligible = (
+                            len(window) >= 4
+                            and akey.startswith(window)
+                            and window not in _allow_norm           # already exact — don't expand
+                            and akey_word_count <= window_word_count * 2  # no runaway expansion
+                    )
+                    if prefix_eligible:
+                        score = 90
+                    else:
+                        score = max(
+                            fuzz.token_sort_ratio(window, akey),
+                            fuzz.ratio(window, akey),
+                        )
+                    if score >= threshold:
+                        canon_n = normalize(aval)
+                        if canon_n not in seen:
+                            seen.add(canon_n)
+                            found.append(aval)
+                        break   # longest-first: first hit for this window wins
 
-    # Pass 3: prefix match for multi-word certs
-    already = exact_matches | ocr_matches
-    prefix_matches = set()
-    for cert in remaining:
-        if cert in already:
+    return found
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — Public extraction API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def discover_skills_dynamically(
+        resume_text:  str,
+        jobs_corpus:  list[dict],
+        extra_skills: list[str] | None = None,
+) -> list[str]:
+    """
+    Stage 2 — skill extraction via Llama (HF Inference API).
+
+    1. Locate the skills section with rule-based locator.
+    2. Build the corpus allowlist from jobs_corpus + extra_skills.
+    3. Build OcrCorrector from the allowlist (embedding-based, Firestore-driven).
+    4. POST to HF API with a JSON-array extraction prompt.
+    5. Canonicalise LLM output against corpus allowlist using _canonicalize()
+       (embedding correction → exact → prefix → dual-metric fuzzy, FIX-2/3).
+    6. FIX-5: Direct token-window scan of the raw SKILLS section to recover any
+       OCR-garbled tokens the LLM missed — merged with LLM results, deduped.
+    7. Fuzzy-scan fallback if both LLM and direct scan produce nothing.
+
+    Returns deduplicated, corpus-canonicalised skill strings.
+    """
+    # Build corpus allowlist
+    allowlist: set[str] = set()
+    for job in jobs_corpus:
+        allowlist.update(job.get("required_skills", []))
+    if extra_skills:
+        allowlist.update(extra_skills)
+    allowlist_list = sorted(allowlist)
+    allow_norm     = {normalize(a): a for a in allowlist_list}
+
+    # Sorted pairs: longest allowlist entry first (FIX-3)
+    sorted_pairs = _build_allow_norm_sorted(allowlist_list)
+
+    # Build the embedding-based OcrCorrector from the Firestore allowlist.
+    # This is done ONCE per discover_skills_dynamically() call and reused for
+    # all _canonicalize() and _direct_scan_section() calls below.
+    corrector = build_ocr_corrector(allowlist_list)
+
+    section = _extract_skills_section_line_based(resume_text) or resume_text[:3000]
+
+    user_prompt = (
+        f"Extract every technical skill, programming language, framework, tool, "
+        f"methodology, and soft skill from this resume section.\n\n"
+        f"The skills are listed as comma-separated tokens. Each token or short "
+        f"phrase between commas is a distinct skill candidate — treat each one "
+        f"individually and standardize any misspelled or OCR-garbled names "
+        f"(e.g. 'Microson' -> 'Microsoft', 'Azuie' -> 'Azure').\n\n"
+        f"Resume section (comma-separated):\n{section[:2500]}\n\n"
+        f"Return ONLY a JSON array of skill name strings. No other text."
+    )
+
+    raw = _llm_extract_list(_SKILLS_SYSTEM, user_prompt, "SKILLS")
+
+    # Canonicalise LLM output (embedding correction → exact → prefix → fuzzy).
+    # Only keep items that successfully mapped to an allowlist entry.
+    seen:      set[str]  = set()
+    canonical: list[str] = []
+
+    for skill in raw:
+        corrected = _apply_ocr_corrections(skill, corrector)
+        canon     = _canonicalize(
+            corrected, allow_norm, threshold=75,
+            _sorted_pairs=sorted_pairs, corrector=corrector,
+        )
+        # Drop if canonicalization failed (returned the raw/corrected input unchanged)
+        if normalize(canon) == normalize(corrected) and normalize(canon) not in allow_norm:
+            log.debug(f"[Skills/LLM] Dropped non-allowlist item: {skill!r}")
             continue
-        cert_ws  = cert.split()
-        cert_wc  = len(cert_ws)
-        if cert_wc < 2:
-            continue
-        prefix_len = min(3, cert_wc - 1)
-        prefix     = cert_ws[:prefix_len]
-        prefix_str = ' '.join(prefix)
+        cn = normalize(canon)
+        if cn and cn not in seen:
+            seen.add(cn)
+            canonical.append(canon)
 
-        for start in range(len(cert_words) - prefix_len + 1):
-            ww     = cert_words[start:start + prefix_len]
-            window = ' '.join(ww)
-            if _r(prefix[0], ww[0]) < 80:
-                continue
-            if prefix_len >= 2 and _r(prefix[1], ww[1]) < 80:
-                continue
-            if _r(prefix_str, window) >= 85:
-                prefix_matches.add(cert)
-                break
+    # FIX-5: Direct token-window scan — catches OCR tokens LLM missed/dropped
+    direct_hits = _direct_scan_section(
+        section, sorted_pairs, threshold=82, corrector=corrector, allow_norm=allow_norm
+    )
+    for hit in direct_hits:
+        hn = normalize(hit)
+        if hn and hn not in seen:
+            seen.add(hn)
+            canonical.append(hit)
+            log.debug(f"[Skills/DirectScan] Added: {hit}")
 
-    all_certs = exact_matches | ocr_matches | prefix_matches
+    if not canonical:
+        log.info("[Skills] LLM + direct scan produced nothing — fuzzy fallback.")
+        canonical = _fuzzy_scan(section, allowlist_list)
 
-    # Remove fragment if longer form also matched
-    to_remove = set()
-    certs_list = list(all_certs)
-    for ca in certs_list:
-        for cb in certs_list:
-            if ca != cb and ca.lower() in cb.lower():
-                to_remove.add(ca)
-    all_certs -= to_remove
-
-    return sorted(all_certs)
+    log.info(f"[Skills] {len(canonical)} skills discovered.")
+    return canonical
 
 
-def extract_skills_from_corpus(
+def extract_certificates(
         resume_text: str,
-        jobs_corpus: list,
-        extra_skills: list | None = None,
-) -> list:
+        allowlist:   list[str] | None = None,
+) -> list[str]:
     """
-    Stage 2: Skill Extraction matched against the live Firestore job corpus
-    PLUS any extra_skills (e.g. the full pool from labels.json).
+    Stage 2B — certification extraction via Llama (HF Inference API).
 
-    extract_skills_section() (Option A) already returns only the isolated
-    listed tokens — all prose has been stripped before we get here.
-    So both passes below operate on a clean token-only string.
+    1. Locate the cert section with rule-based locator.
+    2. POST to HF API with a JSON-array extraction prompt (FIX-1: never split).
+    3. Enforce ≤ 10-word-per-item guard.
+    4. Build OcrCorrector from allowlist (when provided) for embedding-based
+       canonicalization; fails-open when allowlist is None.
+    5. Regex fallback when LLM returns nothing.
 
-    Pass 1 — exact / normalised substring match (case-insensitive).
-             Skills are sorted longest-first so multi-word phrases like
-             "Microsoft Azure" or "SolarWinds Network Performance Monitor"
-             are matched before shorter fragments like "Azure".
-    Pass 2 — OCR-fuzzy sliding window for skills not caught by Pass 1.
-             Handles garbled OCR tokens like "Malwarcbytcs" → "Malwarebytes",
-             "Microson Azuie" → "Microsoft Azure", etc.
-             Uses first-word + second-word anchors to avoid false positives.
-
-    Post-processing:
-    - If a shorter skill is a substring of a longer matched skill, keep only
-      the longer one (e.g. "Azure" is dropped when "Microsoft Azure" matched).
-    - Case-variant deduplication keeps the canonical corpus form.
+    Returns deduplicated certification name strings.
     """
-    # ── Collect all unique skills: Firestore corpus + labels pool ─────────────
-    corpus_skills: set[str] = {
-        skill.strip()
-        for job in jobs_corpus
-        for skill in job.get("required_skills", [])
-    }
-    if extra_skills:
-        for s in extra_skills:
-            corpus_skills.add(s.strip())
+    section = _extract_cert_section(resume_text) or resume_text[:3000]
 
-    all_known_skills: list[str] = list(corpus_skills)
+    # FIX-1: Explicit no-splitting instruction in user prompt too
+    user_prompt = (
+        f"Extract every professional certification, license, and credential "
+        f"from this resume section. "
+        f"IMPORTANT: Each certification is ONE complete string — never split "
+        f"'Microsoft Certified Azure Fundamentals' into two separate items. "
+        f"Each must be 10 words or fewer.\n\n"
+        f"Resume section:\n{section[:2500]}\n\n"
+        f"Return ONLY a JSON array of certification name strings. No other text."
+    )
 
-    if not all_known_skills:
-        return []
+    raw = _llm_extract_list(_CERTS_SYSTEM, user_prompt, "CERTS")
 
-    # Sort longest-first so multi-word phrases are matched before fragments
-    all_known_skills.sort(key=len, reverse=True)
+    # ≤ 10-word guard
+    guarded: list[str] = [
+        " ".join(c.split()[:10]) for c in raw if c.strip()
+    ]
 
-    # ── Option A: extract_skills_section returns clean listed tokens only ─────
-    skills_section    = extract_skills_section(resume_text)
-    resume_lower      = skills_section.lower()
+    # Allowlist filter / dedup using shared _canonicalize() with OcrCorrector
+    if allowlist:
+        allow_norm   = {normalize(a): a for a in allowlist}
+        sorted_pairs = _build_allow_norm_sorted(allowlist)
+        # Build corrector from the certs allowlist for embedding-based correction
+        corrector    = build_ocr_corrector(allowlist)
+        seen:   set[str]  = set()
+        result: list[str] = []
+        for cert in guarded:
+            canon = _canonicalize(
+                cert, allow_norm, threshold=75,
+                _sorted_pairs=sorted_pairs, corrector=corrector,
+            )
+            n = normalize(canon)
+            if n and n not in seen:
+                seen.add(n)
+                result.append(canon)
+        guarded = result
+    else:
+        seen_n:  set[str]  = set()
+        deduped: list[str] = []
+        for c in guarded:
+            n = normalize(c)
+            if n not in seen_n:
+                seen_n.add(n)
+                deduped.append(c)
+        guarded = deduped
 
-    def normalize(s: str) -> str:
-        return re.sub(r'[\s.\-_/]', '', s).lower()
+    # Regex fallback
+    if not guarded:
+        log.info("[Certs] LLM produced nothing — regex fallback.")
+        cert_re = re.compile(
+            r"(?i)(certif\w+|licen[cs]\w+|aws|gcp|azure|pmp|cpa|cfa|"
+            r"ccna|comptia|cisco|oracle|google|microsoft|istqb|six\s+sigma)\b"
+        )
+        seen_fb: set[str] = set()
+        for line in section.splitlines():
+            line  = line.strip()
+            words = line.split()
+            if cert_re.search(line) and 1 <= len(words) <= 10:
+                n = normalize(line)
+                if n not in seen_fb:
+                    seen_fb.add(n)
+                    guarded.append(line)
 
-    resume_normalized = normalize(skills_section)
-
-    # ── Pass 1: exact / normalised substring match ────────────────────────────
-    exact_matches:    set[str] = set()
-    remaining_skills: list[str] = []
-
-    for skill in all_known_skills:
-        skill_lower = skill.lower()
-        skill_norm  = normalize(skill)
-
-        if len(skill_norm) <= 1:
-            continue
-
-        if len(skill_norm) <= 3:
-            pattern = rf'\b{re.escape(skill_lower)}\b'
-            if re.search(pattern, resume_lower):
-                exact_matches.add(skill)
-            else:
-                remaining_skills.append(skill)
-            continue
-
-        if skill_lower in resume_lower or skill_norm in resume_normalized:
-            exact_matches.add(skill)
-        else:
-            remaining_skills.append(skill)
-
-    # ── Pass 2: OCR-fuzzy sliding window ─────────────────────────────────────
-    # Operates on the already-clean token string from extract_skills_section(),
-    # so the window only ever sees listed items, never prose verbs.
-    ocr_fuzzy_matches: set[str] = set()
-    resume_words = skills_section.split()
-
-    def _word_ratio(a: str, b: str) -> int:
-        from difflib import SequenceMatcher
-        return round(SequenceMatcher(None, a.lower(), b.lower()).ratio() * 100)
-
-    for skill in remaining_skills:
-        skill_words      = skill.split()
-        skill_word_count = len(skill_words)
-
-        # Single-word skills need >= 6 chars to enter fuzzy matching
-        if skill_word_count == 1 and len(skill_words[0]) < 6:
-            continue
-
-        skill_first_word  = skill_words[0]
-        skill_second_word = skill_words[1] if skill_word_count >= 2 else None
-
-        for start in range(len(resume_words) - skill_word_count + 1):
-            window_words  = resume_words[start:start + skill_word_count]
-            window        = " ".join(window_words)
-            window_first  = window_words[0]
-
-            if _word_ratio(skill_first_word, window_first) < 80:
-                continue
-
-            if skill_second_word and skill_word_count >= 2:
-                window_second = window_words[1] if len(window_words) >= 2 else ""
-                if _word_ratio(skill_second_word, window_second) < 80:
-                    continue
-
-            if _word_ratio(skill, window) >= 82:
-                ocr_fuzzy_matches.add(skill)
-                break
-
-    all_matches = exact_matches | ocr_fuzzy_matches
-
-    # ── Post-process: prefer longer match over fragment ────────────────────────
-    to_remove: set[str] = set()
-    matches_list = list(all_matches)
-    for skill_a in matches_list:
-        for skill_b in matches_list:
-            if skill_a is skill_b:
-                continue
-            if skill_a.lower() in skill_b.lower() and skill_a.lower() != skill_b.lower():
-                to_remove.add(skill_a)
-
-    all_matches -= to_remove
-
-    # ── Post-process: deduplicate case variants, keep corpus form ─────────────
-    seen_normalized: dict[str, str] = {}
-    for skill in sorted(all_matches):
-        key = normalize(skill)
-        if key not in seen_normalized:
-            seen_normalized[key] = skill
-
-    return sorted(seen_normalized.values())
+    log.info(f"[Certs] {len(guarded)} certifications discovered.")
+    return guarded
 
 
-def canonicalize_skills_to_corpus(
-        extracted_skills: list,
-        jobs_corpus: list,
-        extra_skills: list | None = None,
-        semantic_threshold: float = 0.88,
-        fuzzy_threshold: int = 86,
-) -> list:
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 — NLP validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fuzzy_skill_verify(
+        discovered_list:   list[str],
+        ground_truth_list: list[str],
+        threshold:         int = 80,
+        resume_text:       str = "",   # kept for API compatibility
+) -> dict:
     """
-    Stage 2b: NLP Canonicalization Pass.
+    Compute NLP accuracy of discovered_list against ground_truth_list.
+    Matching: exact normalised → rapidfuzz token_sort_ratio ≥ threshold.
 
-    Maps each raw extracted skill to its canonical Firestore/corpus form.
-    Crucially, this function ONLY renames skills — it never introduces skills
-    that were not already found in the resume. If no confident mapping is found,
-    the raw extracted skill is kept as-is and dropped from the final output
-    (since it has no matching corpus entry and should not appear in scoring).
+    FIX-4: ground_truth_list should be passed as the BEST-matched job's
+    required_skills only (not all top-5 skills).
 
-    Two hard guards prevent hallucination:
-
-      Guard 1 — Length-ratio gate (anti-expansion):
-        A short token like "Mass" must not be mapped to a long corpus phrase
-        like "Mass and Energy Balance". The candidate is rejected if:
-            len(raw_token) / len(corpus_candidate) < LENGTH_RATIO_MIN
-        This blocks partial_ratio false positives where a common word in the
-        raw skill scores 100 as a substring of a long corpus phrase.
-
-      Guard 2 — Bidirectional fuzzy gate (Tier 1):
-        Both partial_ratio AND token_set_ratio must exceed the threshold.
-        partial_ratio alone is too permissive for short tokens.
-
-    Tier 1 — RapidFuzz (bidirectional, length-gated):
-        Handles genuine OCR garbles, e.g.:
-          "Malwarcbytcs"  → "Malwarebytes"       (both ratios high, lengths similar)
-          "SolarWinds"    → "SolarWinds Network Performance Monitor"
-                            (partial=100 but length-ratio passes since "SolarWinds"
-                             is the distinctive first token)
-
-    Tier 2 — SBERT cosine similarity (length-gated, high threshold):
-        Handles brand+product expansions where fuzzy character overlap is low:
-          "Azure"         → "Microsoft Azure"
-          "Excel"         → "Microsoft Excel"
-        Only fires when the raw skill is NOT a common English word (min 5 chars
-        or is multi-word), preventing noise tokens from getting semantic matches.
-
-    If neither tier produces a confident, length-safe mapping the skill is
-    dropped — it was an OCR noise token or generic word with no corpus entry.
-
-    Args:
-        extracted_skills:   Raw skills list from extract_skills_from_corpus().
-        jobs_corpus:        Firestore job documents (dicts with required_skills).
-        extra_skills:       Additional skill pool (e.g. from labels.json).
-        semantic_threshold: Min SBERT cosine score (raised to 0.88 vs old 0.82).
-        fuzzy_threshold:    Min RapidFuzz score (raised to 86 vs old 80).
-
-    Returns:
-        Sorted, deduplicated list of canonical skill names from the corpus.
-        Skills with no confident corpus mapping are excluded.
+    Returns {"NLP_ACCURACY": "87.50%", "matched_skills": [...], "unmatched_skills": [...]}
     """
-    # ── Build the full corpus skill pool ──────────────────────────────────────
-    corpus_skills: set[str] = {
-        skill.strip()
-        for job in jobs_corpus
-        for skill in job.get("required_skills", [])
-    }
-    if extra_skills:
-        corpus_skills.update(s.strip() for s in extra_skills)
+    if not ground_truth_list:
+        return {
+            "NLP_ACCURACY":     "N/A",
+            "matched_skills":   [],
+            "unmatched_skills": [],
+        }
 
-    # Longest-first so deduplication later picks the fuller canonical form
-    corpus_list: list[str] = sorted(corpus_skills, key=len, reverse=True)
+    disc_norms = {normalize(s) for s in discovered_list}
+    matched:   list[str] = []
+    unmatched: list[str] = []
 
-    if not corpus_list or not extracted_skills:
-        return extracted_skills
-
-    # ── Precompute corpus embeddings once (batch for speed) ───────────────────
-    corpus_embeddings = model.encode(corpus_list, convert_to_tensor=True)
-
-    # Minimum length ratio: raw skill length vs corpus candidate length.
-    # Prevents "Mass" (4 chars) from mapping to "Mass and Energy Balance" (26 chars).
-    # 4/26 = 0.15, well below the 0.45 floor.
-    # "SolarWinds" (10) vs "SolarWinds Network Performance Monitor" (38): 10/38 = 0.26
-    # — this would be blocked too, so for known first-token anchors we use a
-    # separate anchor check in Tier 1 rather than relying on length ratio alone.
-    LENGTH_RATIO_MIN = 0.45
-
-    def _length_ok(raw: str, candidate: str) -> bool:
-        """
-        Accept the mapping if:
-          (a) length ratio is above the floor, OR
-          (b) the raw skill is a clean prefix/anchor of the candidate
-              (first word of candidate starts with the raw skill, case-insensitive).
-        Rule (b) handles "SolarWinds" → "SolarWinds Network Performance Monitor"
-        and "Malwarebytes" OCR garbles without needing a high length ratio.
-        """
-        ratio = len(raw) / max(len(candidate), 1)
-        if ratio >= LENGTH_RATIO_MIN:
-            return True
-        # Anchor check: raw is a substantial first-token match
-        candidate_first = candidate.split()[0].lower()
-        raw_clean = raw.lower().strip()
-        if len(raw_clean) >= 5 and candidate_first.startswith(raw_clean[:5]):
-            return True
-        # Allow if raw skill (multi-word) shares ALL its words with candidate
-        raw_words = set(raw_clean.split())
-        cand_words = set(candidate.lower().split())
-        if len(raw_words) > 1 and raw_words.issubset(cand_words):
-            return True
-        return False
-
-    canonical: set[str] = set()
-
-    for raw_skill in extracted_skills:
-        raw_lower = raw_skill.lower().strip()
-        raw_words = raw_lower.split()
-        best_match: str | None = None
-
-        # ── Tier 1: Bidirectional fuzzy match (length-gated) ─────────────────
-        # Uses BOTH partial_ratio (substring-aware) AND token_set_ratio
-        # (word-order-insensitive). Both must exceed the threshold.
-        # This double-gate kills cases like:
-        #   "Mass" → partial_ratio=100 vs "Mass and Energy Balance" (substring hit)
-        #   but token_set_ratio("mass", "mass and energy balance") ≈ 44 → rejected.
-        best_fuzz_score = 0
-        best_fuzz_skill: str | None = None
-
-        for cs in corpus_list:
-            cs_lower = cs.lower()
-
-            # Fast pre-filter: skip corpus entries that share no word-start chars
-            # with the raw skill to avoid scoring every entry for every skill.
-            if raw_words and not any(
-                    cs_lower.startswith(w[:3]) or w[:3] in cs_lower
-                    for w in raw_words if len(w) >= 3
-            ):
-                continue
-
-            p_score  = fuzz.partial_ratio(raw_lower, cs_lower)
-            ts_score = fuzz.token_set_ratio(raw_lower, cs_lower)
-            combined = min(p_score, ts_score)   # both must be high
-
-            if combined > best_fuzz_score and _length_ok(raw_skill, cs):
-                best_fuzz_score = combined
-                best_fuzz_skill = cs
-
-        if best_fuzz_score >= fuzzy_threshold and best_fuzz_skill:
-            best_match = best_fuzz_skill
-
-        # ── Tier 2: Semantic match via SBERT (length-gated, high threshold) ───
-        # Only runs when Tier 1 found nothing above threshold.
-        # Guards:
-        #   - raw skill must be >= 5 chars or multi-word (blocks noise tokens)
-        #   - cosine threshold raised to 0.88 (was 0.82) for tighter control
-        #   - length ratio gate applied to semantic candidate too
-        if best_match is None:
-            raw_char_len = len(raw_skill.replace(" ", ""))
-            is_multiword = len(raw_words) > 1
-
-            if raw_char_len >= 5 or is_multiword:
-                raw_vec    = model.encode(raw_skill, convert_to_tensor=True)
-                cos_scores = util.cos_sim(raw_vec, corpus_embeddings)[0]
-
-                # Check top-3 candidates in case the best by score fails length gate
-                top_indices = cos_scores.argsort(descending=True)[:3].tolist()
-                for idx in top_indices:
-                    top_score     = float(cos_scores[idx])
-                    top_candidate = corpus_list[idx]
-                    if top_score >= semantic_threshold and _length_ok(raw_skill, top_candidate):
-                        best_match = top_candidate
-                        break
-
-        # ── Decision ─────────────────────────────────────────────────────────
-        # Only add to canonical set if a confident corpus mapping was found.
-        # Skills with no mapping are DROPPED — they are OCR noise or generic
-        # words that don't belong in the scored skill profile.
-        if best_match is not None:
-            canonical.add(best_match)
-
-    # ── Remove fragment skills subsumed by a longer canonical match ───────────
-    # e.g. once "Microsoft Azure" is in the set, bare "Azure" is redundant.
-    result      = list(canonical)
-    to_drop: set[str] = set()
-    for skill_a in result:
-        for skill_b in result:
-            if skill_a != skill_b and skill_a.lower() in skill_b.lower():
-                to_drop.add(skill_a)
-
-    return sorted(canonical - to_drop)
-
-
-def fuzzy_skill_verify(discovered_list: list, ground_truth_list: list, threshold: int = 80):
-    """Stage 2 validation against expected skills."""
-    matches = []
     for truth in ground_truth_list:
-        for discovered in discovered_list:
-            if fuzz.partial_ratio(truth.lower(), discovered.lower()) >= threshold:
-                matches.append(truth)
-                break
-    return matches
+        tn = normalize(truth)
+        if tn in disc_norms:
+            matched.append(truth)
+            continue
+        best = max(
+            (fuzz.token_sort_ratio(tn, dn) for dn in disc_norms),
+            default=0,
+        )
+        (matched if best >= threshold else unmatched).append(truth)
+
+    pct = len(matched) / len(ground_truth_list) * 100
+    return {
+        "NLP_ACCURACY":     f"{pct:.2f}%",
+        "matched_skills":   matched,
+        "unmatched_skills": unmatched,
+    }
 
 
-def calculate_cosine_similarity(resume_text: str, resume_skills: list, jobs_corpus: list):
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 — SBERT + FAISS hybrid scoring
+# ─────────────────────────────────────────────────────────────────────────────
+
+def identify_skill_gap(
+        resume_skills: list[str],
+        job_skills:    list[str],
+) -> list[str]:
+    """Return skills in job_skills absent from resume_skills."""
+    have = {normalize(s) for s in resume_skills}
+    return [s for s in job_skills if normalize(s) not in have]
+
+
+def _encode_jobs(jobs_corpus: list[dict]) -> np.ndarray:
     """
-    Stage 3: Hybrid Scoring — uses pre-computed SBERT embeddings from Firestore
-    when available, falls back to live encoding for manually inserted jobs.
+    Encode job documents with SBERT.
+    Reuses stored 'embedding' field when present; generates and writes back otherwise.
     """
-    resume_profile = f"Skills: {' '.join(resume_skills)}. Resume: {resume_text}"
-    resume_vec = model.encode(resume_profile, convert_to_tensor=True)
+    sbert   = _get_sbert()
+    vectors: list[np.ndarray] = []
 
-    job_vecs_list      = []
-    jobs_to_encode_idx = []
-
-    for i, job in enumerate(jobs_corpus):
-        if "embedding" in job and job["embedding"]:
-            vec = torch.tensor(job["embedding"], dtype=torch.float32).to(device)
-            job_vecs_list.append(vec)
+    for job in tqdm(jobs_corpus, desc="Encoding jobs", leave=False):
+        stored = job.get("embedding") or []
+        if isinstance(stored, list) and len(stored) > 0:
+            vec = np.array(stored, dtype=np.float32)
         else:
-            job_vecs_list.append(None)
-            jobs_to_encode_idx.append(i)
+            text = (
+                f"{job.get('title','')} {job.get('description','')} "
+                f"{' '.join(job.get('required_skills', []))} "
+                f"{' '.join(job.get('required_certifications', []))}"
+            )
+            vec = sbert.encode(text, normalize_embeddings=True).astype(np.float32)
+            job["embedding"] = vec.tolist()   # write back for cache_job_embeddings()
 
-    if jobs_to_encode_idx:
-        profiles = [
-            f"Job: {jobs_corpus[i]['title']}. "
-            f"Core Skills: {' '.join(jobs_corpus[i]['required_skills'] * 3)}. "
-            f"Desc: {jobs_corpus[i]['description']}"
-            for i in jobs_to_encode_idx
-        ]
-        live_vecs = model.encode(profiles, convert_to_tensor=True)
-        for idx, vec in zip(jobs_to_encode_idx, live_vecs):
-            job_vecs_list[idx] = vec
+        vectors.append(vec)
 
-    job_vecs      = torch.stack(job_vecs_list).to(device)
-    cosine_scores = util.cos_sim(resume_vec, job_vecs)[0]
+    matrix = np.vstack(vectors).astype(np.float32)
+    faiss.normalize_L2(matrix)
+    return matrix
 
-    def _skill_matched(job_skill: str, resume_skill_set: set, resume_skills_raw: list) -> bool:
-        """
-        Returns True if a job_skill is covered by the resume.
-        Three-tier check:
-        1. Exact lowercase match  ("ansible" == "ansible")
-        2. Substring check        ("azure" in "microsoft azure" or vice-versa)
-        3. Fuzzy token match      (partial_ratio >= 88, catches OCR/spacing variants)
-        """
-        jsl = job_skill.lower().strip()
 
-        if jsl in resume_skill_set:
-            return True
+def calculate_cosine_similarity(
+        resume_text:   str,
+        resume_skills: list[str],
+        jobs_corpus:   list[dict],
+        top_k:         int = TOP_K,
+) -> list[dict]:
+    """
+    Stage 3 — hybrid scoring: 0.70 × cosine  +  0.30 × skill_match_ratio.
 
-        for rs in resume_skills_raw:
-            rsl = rs.lower().strip()
-            if jsl in rsl or rsl in jsl:
-                return True
+    NLP validation (fuzzy_skill_verify) is run against every matched job's
+    required_skills so each result carries its own accuracy breakdown — not
+    just the best match.
 
-        if len(jsl) >= 4:
-            for rs in resume_skills_raw:
-                if fuzz.partial_ratio(jsl, rs.lower().strip()) >= 88:
-                    return True
+    Returns top_k job dicts sorted by score descending:
+      {job_id, title, industry, score, cosine_score, match_ratio,
+       gap_count, required_skills, matched_skills, missing_skills,
+       nlp_validation: {NLP_ACCURACY, matched_skills, unmatched_skills}}
+    """
+    sbert = _get_sbert()
 
-        return False
+    q_text = f"{resume_text[:500]} {' '.join(resume_skills)}"
+    q_vec  = sbert.encode(q_text, normalize_embeddings=True).astype(np.float32)
+    q_vec  = q_vec.reshape(1, -1)
+    faiss.normalize_L2(q_vec)
 
-    results = []
-    for i, score in enumerate(cosine_scores):
-        raw_semantic_score = float(score)
-        job_skills = jobs_corpus[i]["required_skills"]
+    job_matrix = _encode_jobs(jobs_corpus)
+    dim        = job_matrix.shape[1]
+    index      = faiss.IndexFlatIP(dim)
+    index.add(job_matrix)
 
-        resume_set = {s.lower() for s in resume_skills}
-        matched    = [s for s in job_skills if _skill_matched(s, resume_set, resume_skills)]
-        missing    = [s for s in job_skills if not _skill_matched(s, resume_set, resume_skills)]
-        gap_count  = len(missing)
-        match_ratio = len(matched) / len(job_skills) if job_skills else 0
-        final_score = (raw_semantic_score * 0.6) + (match_ratio * 0.4)
+    k                 = min(top_k, index.ntotal)
+    cos_scores, idxs  = index.search(q_vec, k)
+    resume_norms      = {normalize(s) for s in resume_skills}
+    results: list[dict] = []
 
-        if gap_count == 0:
-            final_score = min(0.985, final_score * 1.25)
+    for cosine_score, idx in zip(cos_scores[0], idxs[0]):
+        if idx < 0:
+            continue
+        job     = jobs_corpus[idx]
+        req     = job.get("required_skills", [])
+        matched = [s for s in req if normalize(s) in resume_norms]
+        missing = identify_skill_gap(resume_skills, req)
+
+        match_ratio = len(matched) / len(req) if req else 0.0
+        hybrid      = round(0.70 * float(cosine_score) + 0.30 * match_ratio, 4)
+
+        # Per-job NLP validation: how many of THIS job's required skills did
+        # the resume's discovered skill list cover (exact + fuzzy threshold)?
+        nlp_validation = fuzzy_skill_verify(
+            discovered_list   = resume_skills,
+            ground_truth_list = req,
+        )
 
         results.append({
-            "job_id":          jobs_corpus[i].get("id"),
-            "title":           jobs_corpus[i]["title"],
-            "industry":        jobs_corpus[i].get("industry", "Computing"),
-            "score":           f"{round(final_score * 100, 2)}%",
-            "gap_count":       gap_count,
-            "required_skills": job_skills,
+            "job_id":          job.get("id", job.get("_id", "")),
+            "title":           job.get("title", ""),
+            "industry":        job.get("industry", ""),
+            "score":           hybrid,
+            "cosine_score":    round(float(cosine_score), 4),
+            "match_ratio":     round(match_ratio, 4),
+            "gap_count":       len(missing),
+            "required_skills": req,
             "matched_skills":  matched,
             "missing_skills":  missing,
+            "nlp_validation":  nlp_validation,
         })
 
-    return sorted(results, key=lambda x: float(x["score"].replace("%", "")), reverse=True)[:5]
-
-
-def identify_skill_gap(resume_skills: list, job_skills: list):
-    """Stage 4: Gap Analysis."""
-    resume_set = {s.strip().lower() for s in resume_skills}
-    return [s for s in job_skills if s.lower() not in resume_set]
+    results.sort(key=lambda r: r["score"], reverse=True)
+    log.info(
+        f"[Stage 3] {len(results)} jobs scored; "
+        f"top = {results[0]['score'] if results else 'N/A'}."
+    )
+    return results

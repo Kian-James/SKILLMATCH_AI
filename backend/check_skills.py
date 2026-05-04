@@ -42,8 +42,7 @@ for skill in sorted(all_skills):
 to_check = [
     "Zendesk",
     "AnyDesk",
-    "SolarWinds Network",
-    "Performance Monitor",
+    "SolarWinds Network Performance Monitor",
     "Malwarebytes",
     "macOS",
     "Ansible",
