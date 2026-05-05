@@ -37,6 +37,22 @@ Changes (v3):
   main.py reads nlp_validation directly from best["nlp_validation"] instead
   of calling fuzzy_skill_verify() separately, eliminating the duplicate call.
   The DEBUG_REPORT now shows per-job NLP accuracy for all top matches.
+
+Changes (v4):
+  Propagates the is_native_pdf flag from extract_text() (matcher.py v6) so
+  that the early-exit guard inside _extract_skills_section_line_based is
+  bypassed for native PDF resumes.  Without this, multi-word skill lines like
+  "Flutter & Firebase Development" were mistaken for section headings and
+  truncated after the first skill line.
+
+  Specific changes:
+  - extract_text() now returns (text, quality, is_native_pdf) — the third
+    value replaces the separate PyMuPDF re-open that was used to derive
+    text_source.  The redundant _fitz block has been removed.
+  - discover_skills_dynamically() receives is_native_pdf=is_native so the
+    extractor skips the early-exit guard for native PDF text.
+  - text_source is derived directly from is_native ("native_pdf" / "ocr")
+    instead of re-opening the file with fitz.
 """
 
 # ── OpenMP / FAISS segfault guard — must be before any torch/faiss import ─────
@@ -49,7 +65,6 @@ import logging
 import shutil
 
 import faiss
-import fitz as _fitz   # PyMuPDF — used to detect native text availability
 import numpy as np
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -111,7 +126,10 @@ async def thesis_full_analysis(
     1.  Fetch jobs corpus + derive skills/certs allowlists from Firestore.
     2.  Save upload to a temp file.
     3.  Stage 1  : Text acquisition — PyMuPDF native; EasyOCR fallback.
+                   extract_text() now returns (text, quality, is_native_pdf).
     4.  Stage 2  : Skill extraction via Llama-3.1-8B (HF Inference API).
+                   is_native_pdf passed so early-exit guard is skipped for
+                   native PDF resumes (matcher.py v6 fix).
     5.  Stage 2B : Cert extraction via Llama-3.1-8B (HF Inference API).
     6.  Stage 3  : calculate_cosine_similarity() → hybrid scoring → top-5,
                    each result now includes nlp_validation computed against
@@ -133,12 +151,14 @@ async def thesis_full_analysis(
 
     try:
         # ── STAGE 1: Text acquisition ─────────────────────────────────────────
-        resume_text, ocr_quality = extract_text(temp_path)
+        # extract_text() returns (text, quality, is_native_pdf) since matcher
+        # v6.  is_native_pdf=True means PyMuPDF extracted sufficient text;
+        # False means EasyOCR was used as the fallback.
+        resume_text, ocr_quality, is_native = extract_text(temp_path)
 
-        _doc    = _fitz.open(temp_path)
-        _native = " ".join(p.get_text("text") for p in _doc).strip()
-        _doc.close()
-        text_source = "native_pdf" if len(_native) >= 50 else "ocr"
+        # Derive the human-readable text_source label from the flag directly —
+        # no need to re-open the file with fitz as in the previous version.
+        text_source = "native_pdf" if is_native else "ocr"
 
         if not resume_text.strip():
             raise HTTPException(
@@ -147,14 +167,22 @@ async def thesis_full_analysis(
             )
 
         # ── DEBUG: rule-based section slices ──────────────────────────────────
-        skills_section_debug = _extract_skills_section_line_based(resume_text)
-        cert_section_debug   = _extract_cert_section(resume_text)
+        # Pass is_native_pdf here too so the debug field reflects the same
+        # section-boundary logic that the live pipeline uses.
+        skills_section_debug = _extract_skills_section_line_based(
+            resume_text,
+            is_native_pdf=is_native,
+        )
+        cert_section_debug = _extract_cert_section(resume_text)
 
         # ── STAGE 2: Skill extraction (Llama via HF API) ──────────────────────
+        # is_native_pdf bypasses the early-exit guard so all skill lines are
+        # captured for native PDF resumes (matcher.py v6 fix).
         discovered_skills = discover_skills_dynamically(
-            resume_text  = resume_text,
-            jobs_corpus  = jobs_corpus,
-            extra_skills = firestore_skills,
+            resume_text   = resume_text,
+            jobs_corpus   = jobs_corpus,
+            extra_skills  = firestore_skills,
+            is_native_pdf = is_native,
         )
 
         # ── STAGE 2B: Cert extraction (Llama via HF API) ──────────────────────
@@ -164,7 +192,7 @@ async def thesis_full_analysis(
         )
 
         # ── STAGE 3: Hybrid scoring + per-job NLP validation ──────────────────
-        # calculate_cosine_similarity now embeds nlp_validation in every result
+        # calculate_cosine_similarity embeds nlp_validation in every result
         # dict, so we don't need a separate fuzzy_skill_verify() call here.
         top_5_matches = calculate_cosine_similarity(
             resume_text   = resume_text,

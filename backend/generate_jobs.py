@@ -5,14 +5,16 @@ Generates job listings via Llama 3.1 8B (Cerebras / HF Inference Provider),
 encodes each job with SBERT (all-MiniLM-L6-v2), and stores both the job data
 and its embedding vector in Firestore.
 
+Batch strategy:
+  - 100 jobs total, 10 per batch (10 batches)
+  - Batches alternate: Batch 1 = Computing, Batch 2 = Engineering, ...
+  - If a job title already exists in Firestore, its required_skills are MERGED
+    (union of old + new, capped at 10 unique skills), and embedding is re-generated.
+
 Uniqueness strategy:
-  1. Every already-used title is sent in the avoid list every batch — not just
-     the last 15 — so the model is always aware of everything it has made.
-  2. Fuzzy duplicate detection: new titles are compared against all existing
-     titles using token overlap. Near-matches (e.g. "Python Backend Dev" vs
-     "Python Backend Developer") are rejected before hitting Firestore.
-  3. Titles are validated to contain at least one tech/stack keyword so the
-     model cannot fall back to generic names.
+  1. Every already-used title is sent in the avoid list every batch.
+  2. Fuzzy duplicate detection via Jaccard token overlap (threshold 0.75).
+  3. Titles must contain at least one tech/stack keyword.
 
 Usage:
     python generate_jobs.py
@@ -21,9 +23,6 @@ Requirements in .env:
     HF_TOKEN                   – Hugging Face API token
     FIREBASE_CREDENTIALS_PATH  – path to your serviceAccountKey.json
     FIRESTORE_JOBS_COLLECTION  – Firestore collection name (default: jobs)
-    JOB_COUNT                  – total jobs to generate (default: 50)
-    BATCH_SIZE                 – jobs per API call (default: 5)
-    MAX_RETRIES                – retries per failed batch (default: 3)
 """
 
 import os
@@ -42,16 +41,19 @@ load_dotenv()
 HF_TOKEN                  = os.getenv("HF_TOKEN")
 FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
 FIRESTORE_JOBS_COLLECTION = os.getenv("FIRESTORE_JOBS_COLLECTION", "jobs")
-JOB_COUNT                 = int(os.getenv("JOB_COUNT", "50"))
-BATCH_SIZE                = int(os.getenv("BATCH_SIZE", "5"))
-MAX_RETRIES               = int(os.getenv("MAX_RETRIES", "3"))
+
+JOB_COUNT  = 100   # fixed: 100 jobs total
+BATCH_SIZE = 10    # fixed: 10 jobs per batch
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
 HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_MODEL   = "meta-llama/Llama-3.1-8B-Instruct:cerebras"
 
-# ── Style examples (never sent as titles to copy — only as format guidance) ──
-# The model sees these so it understands the specificity level expected.
-# It is explicitly told NOT to copy these — only to match their style.
+# ── Batch order: odd batches = Computing, even batches = Engineering ──────────
+# Batch 1 → Computing, Batch 2 → Engineering, Batch 3 → Computing, ...
+INDUSTRY_ORDER = ["Computing", "Engineering"]   # index 0 = batch 1
+
+# ── Style examples ────────────────────────────────────────────────────────────
 STYLE_EXAMPLES = {
     "Engineering": [
         "Embedded C Firmware Engineer",
@@ -79,41 +81,33 @@ STYLE_EXAMPLES = {
     ],
 }
 
-# Tech/stack keywords — a generated title must contain at least one of these
-# so generic titles like "Software Engineer" get rejected automatically.
+# ── Tech keywords ─────────────────────────────────────────────────────────────
 TECH_KEYWORDS = {
-    # Languages
     "python", "go", "golang", "java", "rust", "c++", "ruby", "swift", "kotlin",
     "typescript", "javascript", "scala", "elixir", "haskell", "r", "matlab",
     "fortran", "cobol", "perl", "lua", "dart", "solidity",
-    # Frameworks / libraries
     "react", "vue", "angular", "next.js", "django", "fastapi", "flask",
     "spring", "rails", "express", "laravel", "pytorch", "tensorflow", "keras",
     "hugging face", "scikit", "spark", "flink", "kafka", "airflow", "dbt",
     "ros", "ros2", "unity", "unreal", "opengl", "vulkan", "webassembly",
-    # Infra / cloud / devops
     "kubernetes", "docker", "terraform", "ansible", "helm", "aws", "gcp",
     "azure", "ci/cd", "jenkins", "github actions", "linux", "nginx",
     "istio", "prometheus", "grafana", "datadog", "snowflake", "databricks",
-    # Hardware / EE / embedded
     "fpga", "rtos", "arm", "cortex", "pcb", "vhdl", "verilog", "can bus",
     "plc", "scada", "dsp", "rf", "5g", "iot", "embedded", "firmware",
     "microcontroller", "avr", "stm32", "zephyr", "freertos",
-    # Mechanical / civil / chem
     "solidworks", "catia", "ansys", "autocad", "revit", "bim", "cfd",
-    "fea", "gd&t", "ros2", "matlab", "simulink",
-    # DB / security / qa
+    "fea", "gd&t", "simulink",
     "postgresql", "mysql", "mongodb", "redis", "elasticsearch", "cassandra",
     "sqlite", "oracle", "selenium", "cypress", "pytest", "appsec",
     "penetration", "siem", "splunk",
-    # Specialisms (counted as specific enough on their own)
     "mlops", "nlp", "llm", "computer vision", "reinforcement", "generative",
     "blockchain", "smart contract", "autonomous", "robotics", "mechatronics",
     "biomedical", "pharmaceutical", "geotechnical", "hydraulic", "satellite",
     "fiber optic", "voip", "antenna", "signal processing",
 }
 
-# ── Validate env ─────────────────────────────────────────────────────────────
+# ── Validate env ──────────────────────────────────────────────────────────────
 errors = []
 if not HF_TOKEN:
     errors.append("HF_TOKEN is not set.")
@@ -159,19 +153,33 @@ def get_existing_titles(existing_docs: dict) -> list:
     return [v.get("title", "") for v in existing_docs.values()]
 
 
+# ── Skill merging ─────────────────────────────────────────────────────────────
+
+def merge_skills(old_skills: list, new_skills: list, cap: int = 10) -> list:
+    """
+    Merge two skill lists, preserving order and removing case-insensitive
+    duplicates. Old skills come first; new unique skills are appended.
+    Result is capped at `cap` entries (default 10).
+    """
+    seen   = set()
+    merged = []
+    for skill in old_skills + new_skills:
+        key = skill.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(skill.strip())
+        if len(merged) >= cap:
+            break
+    return merged
+
+
 # ── Duplicate detection ───────────────────────────────────────────────────────
 
 def _tokenize(title: str) -> set:
-    """Lowercase word tokens, stripping punctuation."""
     return set(re.findall(r"[a-z0-9]+", title.lower()))
 
 
 def is_duplicate(new_title: str, existing_titles: list, threshold: float = 0.75) -> bool:
-    """
-    Returns True if new_title is too similar to any existing title.
-    Uses Jaccard similarity on word tokens.
-    e.g. "Python Backend Dev" vs "Python Backend Developer" → 0.75 → duplicate.
-    """
     new_tokens = _tokenize(new_title)
     if not new_tokens:
         return True
@@ -181,14 +189,12 @@ def is_duplicate(new_title: str, existing_titles: list, threshold: float = 0.75)
             continue
         intersection = new_tokens & existing_tokens
         union        = new_tokens | existing_tokens
-        similarity   = len(intersection) / len(union)
-        if similarity >= threshold:
+        if len(intersection) / len(union) >= threshold:
             return True
     return False
 
 
 def has_tech_keyword(title: str) -> bool:
-    """Returns True if the title contains at least one recognised tech keyword."""
     title_lower = title.lower()
     return any(kw in title_lower for kw in TECH_KEYWORDS)
 
@@ -212,7 +218,6 @@ Hard rules:
 def build_prompt(batch_size: int, all_existing_titles: list, industry: str) -> str:
     style_examples = ", ".join(STYLE_EXAMPLES[industry])
 
-    # Send EVERY existing title so the model has full awareness of what exists
     avoid_block = ""
     if all_existing_titles:
         avoid_block = (
@@ -247,7 +252,7 @@ def call_llama(prompt: str) -> str:
             {"role": "user",   "content": prompt},
         ],
         "max_tokens": 1500,
-        "temperature": 0.7,  # slightly higher — we WANT creative titles now
+        "temperature": 0.7,
         "stream": False,
     }
 
@@ -262,7 +267,6 @@ def call_llama(prompt: str) -> str:
 # ── Parser ────────────────────────────────────────────────────────────────────
 
 def _repair_truncated_json(raw: str) -> list:
-    """Depth-tracking brace scanner — salvages complete objects from truncated output."""
     objects, depth, start = [], 0, None
     for i, ch in enumerate(raw):
         if ch == "{":
@@ -300,18 +304,16 @@ def parse_jobs(raw: str, batch_size: int, expected_industry: str,
     if not jobs_raw:
         raise ValueError("No parseable job objects found in model output.")
 
-    validated      = []
-    seen_this_batch = []  # track titles within this batch to catch intra-batch dupes
+    validated       = []
+    seen_this_batch = []
 
     for i, job in enumerate(jobs_raw):
-        # ── Field presence ────────────────────────────────────────────────────
         missing = [k for k in ("title", "industry", "description", "required_skills")
                    if k not in job]
         if missing:
             print(f"  [WARN] Job {i+1} missing {missing} — skipping.")
             continue
 
-        # ── Industry check ────────────────────────────────────────────────────
         raw_industry = job["industry"].strip()
         if raw_industry not in ("Engineering", "Computing"):
             print(f"  [WARN] '{job['title']}' invalid industry '{raw_industry}' — skipping.")
@@ -322,18 +324,15 @@ def parse_jobs(raw: str, batch_size: int, expected_industry: str,
 
         title = job["title"].strip()
 
-        # ── Tech keyword check ────────────────────────────────────────────────
         if not has_tech_keyword(title):
             print(f"  [WARN] '{title}' has no tech keyword — too generic, skipping.")
             continue
 
-        # ── Fuzzy duplicate check against ALL existing + this batch ───────────
-        all_seen = all_existing_titles + seen_this_batch
-        if is_duplicate(title, all_seen):
-            print(f"  [WARN] '{title}' is too similar to an existing title — skipping.")
+        # Only skip intra-batch dupes here; cross-collection dupes are handled in seed_jobs
+        if is_duplicate(title, seen_this_batch):
+            print(f"  [WARN] '{title}' is a near-duplicate within this batch — skipping.")
             continue
 
-        # ── Skills check ──────────────────────────────────────────────────────
         skills = job["required_skills"]
         if not isinstance(skills, list):
             print(f"  [WARN] '{title}' has non-list skills — skipping.")
@@ -341,7 +340,7 @@ def parse_jobs(raw: str, batch_size: int, expected_industry: str,
         if len(skills) > 5:
             skills = skills[:5]
         elif len(skills) < 5:
-            print(f"  [WARN] '{title}' has {len(skills)} skills — skipping.")
+            print(f"  [WARN] '{title}' has {len(skills)} skills (need 5) — skipping.")
             continue
 
         description = job["description"].replace("\n", " ").replace("\r", "").strip()
@@ -376,60 +375,107 @@ def embed_jobs(jobs: list) -> list:
     return jobs
 
 
-# ── Seeder ────────────────────────────────────────────────────────────────────
+# ── Seeder (with merge logic) ─────────────────────────────────────────────────
 
-def seed_jobs(jobs: list, existing_docs: dict) -> None:
+def seed_jobs(jobs: list, existing_docs: dict) -> tuple[int, int]:
+    """
+    Write each job to Firestore.
+      - NEW job   → full document set
+      - EXISTING  → merge required_skills (union), update description &
+                    embedding; preserve all other existing fields.
+
+    Returns (new_count, merged_count).
+    """
     collection_ref = db.collection(FIRESTORE_JOBS_COLLECTION)
+    new_count    = 0
+    merged_count = 0
+
     for job in jobs:
-        doc_id = title_to_doc_id(job["title"])
-        # By this point duplicates are already filtered — every job here is new
-        collection_ref.document(doc_id).set(job)
-        existing_docs[doc_id] = job
-        print(f"  ✓  [{job['industry']}] {job['title']}")
+        doc_id    = title_to_doc_id(job["title"])
+        existing  = existing_docs.get(doc_id)
+
+        if existing is None:
+            # ── Brand-new job ─────────────────────────────────────────────────
+            collection_ref.document(doc_id).set(job)
+            existing_docs[doc_id] = job
+            new_count += 1
+            print(f"  ✓ NEW     [{job['industry']}] {job['title']}")
+        else:
+            # ── Merge into existing job ───────────────────────────────────────
+            old_skills    = existing.get("required_skills", [])
+            merged_skills = merge_skills(old_skills, job["required_skills"])
+
+            # Re-embed with merged skills so the vector stays accurate
+            merged_job = {
+                **existing,
+                "required_skills": merged_skills,
+                "description":     job["description"],   # refresh description
+                "embedding":       job["embedding"],      # will re-encode below
+            }
+
+            # Re-encode using merged skills
+            profile = (
+                f"Job: {merged_job['title']}. Industry: {merged_job['industry']}. "
+                f"Core Skills: {' '.join(merged_skills * 3)}. "
+                f"Desc: {merged_job['description']}"
+            )
+            vec = sbert.encode([profile], convert_to_numpy=True, show_progress_bar=False)[0]
+            merged_job["embedding"] = vec.astype(float).tolist()
+
+            collection_ref.document(doc_id).set(merged_job)
+            existing_docs[doc_id] = merged_job
+            merged_count += 1
+            added = len(merged_skills) - len(old_skills)
+            print(f"  ↻ MERGED  [{job['industry']}] {job['title']}  "
+                  f"(skills: {len(old_skills)} → {len(merged_skills)}, +{added} new)")
+
+    return new_count, merged_count
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # ── Totals per industry: 50 each (100 / 2) ───────────────────────────────
+    INDUSTRY_TARGET = JOB_COUNT // 2   # 50 each
+    TOTAL_BATCHES   = JOB_COUNT // BATCH_SIZE  # 10 batches
+
     print("[INFO] Checking existing Firestore jobs …")
     existing_docs   = get_existing_docs()
     existing_titles = get_existing_titles(existing_docs)
-    print(f"[INFO] {len(existing_titles)} existing jobs found.")
+    print(f"[INFO] {len(existing_titles)} existing jobs found.\n")
 
-    industries_cycle = ["Engineering", "Computing"]
-    industry_targets = {
-        "Engineering": JOB_COUNT - JOB_COUNT // 2,
-        "Computing":   JOB_COUNT // 2,
-    }
-    industry_counts = {"Engineering": 0, "Computing": 0}
+    print(f"[INFO] Plan: {JOB_COUNT} jobs  |  {BATCH_SIZE}/batch  |  {TOTAL_BATCHES} batches")
+    print(f"[INFO] Order: Batch 1=Computing, Batch 2=Engineering, alternating …")
+    print(f"[INFO] LLM  : {HF_MODEL}")
+    print(f"[INFO] Embed: sentence-transformers/all-MiniLM-L6-v2")
+    print(f"[INFO] Store: Firestore / {FIRESTORE_JOBS_COLLECTION}\n")
 
-    print(f"\n[INFO] Generating {JOB_COUNT} NEW unique jobs in batches of {BATCH_SIZE}")
-    print(f"[INFO] Industries : Engineering / Computing (alternating per batch)")
-    print(f"[INFO] LLM        : {HF_MODEL}")
-    print(f"[INFO] Embed      : sentence-transformers/all-MiniLM-L6-v2")
-    print(f"[INFO] Store      : Firestore / {FIRESTORE_JOBS_COLLECTION}")
-    print(f"[INFO] Retries    : {MAX_RETRIES} per batch\n")
+    industry_counts  = {"Engineering": 0, "Computing": 0}
+    industry_targets = {"Engineering": INDUSTRY_TARGET, "Computing": INDUSTRY_TARGET}
 
-    all_jobs  = []
-    batch_num = 0
-    ind_idx   = 0
+    total_new    = 0
+    total_merged = 0
+    all_jobs     = []
 
-    while len(all_jobs) < JOB_COUNT:
-        industry = industries_cycle[ind_idx % 2]
-        ind_idx += 1
+    for batch_num in range(1, TOTAL_BATCHES + 1):
+        # Batch 1 → index 0 → Computing; Batch 2 → index 1 → Engineering; …
+        industry = INDUSTRY_ORDER[(batch_num - 1) % 2]
 
-        remaining = industry_targets[industry] - industry_counts[industry]
-        if remaining <= 0:
-            industry = industries_cycle[ind_idx % 2]
-            ind_idx += 1
-            remaining = industry_targets[industry] - industry_counts[industry]
-            if remaining <= 0:
+        # If this industry's quota is already full, take from the other
+        if industry_counts[industry] >= industry_targets[industry]:
+            other = "Engineering" if industry == "Computing" else "Computing"
+            if industry_counts[other] >= industry_targets[other]:
+                print(f"[INFO] Both industry quotas met — stopping early.")
                 break
+            industry = other
 
+        remaining    = industry_targets[industry] - industry_counts[industry]
         current_size = min(BATCH_SIZE, remaining)
-        batch_num   += 1
 
-        print(f"[BATCH {batch_num}] {industry} — requesting {current_size} unique job(s) …")
+        print(f"{'─'*60}")
+        print(f"[BATCH {batch_num:02d}/{TOTAL_BATCHES}]  {industry}  "
+              f"— requesting {current_size} job(s)  "
+              f"(quota: {industry_counts[industry]}/{industry_targets[industry]})")
 
         jobs = []
         for attempt in range(1, MAX_RETRIES + 1):
@@ -440,8 +486,7 @@ if __name__ == "__main__":
                                         existing_titles)
                 if jobs:
                     break
-                print(f"  [RETRY {attempt}/{MAX_RETRIES}] 0 valid unique jobs — retrying …")
-
+                print(f"  [RETRY {attempt}/{MAX_RETRIES}] 0 valid jobs returned — retrying …")
             except (ValueError, json.JSONDecodeError, RuntimeError) as exc:
                 print(f"  [RETRY {attempt}/{MAX_RETRIES}] Error: {exc}")
                 if attempt < MAX_RETRIES:
@@ -453,22 +498,27 @@ if __name__ == "__main__":
             continue
 
         jobs = embed_jobs(jobs)
-        print(f"  [INFO] Seeding batch {batch_num} into Firestore …")
-        seed_jobs(jobs, existing_docs)
+        n, m = seed_jobs(jobs, existing_docs)
 
-        for j in jobs:
-            industry_counts[j["industry"]] += 1
+        total_new    += n
+        total_merged += m
 
+        # Only new jobs count toward the industry quota
+        industry_counts[industry] += n
         all_jobs.extend(jobs)
+
+        # Add all titles (new + merged) to the avoid list for future batches
         existing_titles.extend([j["title"] for j in jobs])
 
-        time.sleep(1)
+        time.sleep(1)   # polite rate-limit pause
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    print(f"\n[SUCCESS] {len(all_jobs)}/{JOB_COUNT} unique job documents written.")
-    print(f"[INFO]    Engineering jobs : {industry_counts['Engineering']}")
-    print(f"[INFO]    Computing jobs   : {industry_counts['Computing']}")
-    print(f"[INFO]    Total in Firestore now : {len(existing_docs)}")
-    print(f"[INFO]    Each document includes a 384-dim SBERT embedding.")
-    print(f"[INFO]    Collection : {FIRESTORE_JOBS_COLLECTION}")
-    print(f"[INFO]    Model used : {HF_MODEL}")
+    print(f"\n{'═'*60}")
+    print(f"[DONE]  Jobs processed   : {len(all_jobs)}")
+    print(f"[DONE]  New documents    : {total_new}")
+    print(f"[DONE]  Merged documents : {total_merged}")
+    print(f"[DONE]  Engineering new  : {industry_counts['Engineering']}")
+    print(f"[DONE]  Computing new    : {industry_counts['Computing']}")
+    print(f"[DONE]  Total in Firestore now : {len(existing_docs)}")
+    print(f"[DONE]  Collection       : {FIRESTORE_JOBS_COLLECTION}")
+    print(f"[DONE]  Model            : {HF_MODEL}")

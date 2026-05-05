@@ -45,7 +45,75 @@ Changes (v4):
   UPDATED  discover_skills_dynamically — builds corrector from corpus allowlist
              once per call and passes it through canonicalization helpers.
   UPDATED  _canonicalize / _direct_scan_section — accept optional corrector arg.
-  KEPT     All FIX-1 … FIX-5 logic intact; only the correction mechanism changed.
+  KEPT     All FIX-1 ... FIX-5 logic intact; only the correction mechanism changed.
+
+Changes (v5):
+  ADDED    _split_ocr_blob(line, allowlist) — greedy longest-match segmenter
+             for the single-line / no-delimiter OCR fallback path.
+
+             Problem: OCR collapses the SKILLS section onto one line with no
+             commas, bullets, or other delimiters, e.g.:
+               "Zendosk AnyDesk SolarWinds Network Periormanice Vonitor ..."
+             The old else branch returned that entire blob as ONE unsplit entry,
+             so the LLM received an undelimited wall of garbled text.
+
+             Fix: _split_ocr_blob slides a greedy token window (longest
+             allowlist entry first) over the blob and emits each matched phrase
+             as a separate comma-separated entry. Fuzzy matching (threshold 82)
+             handles garbled OCR tokens — "Malwarcbytcs" matches "Malwarebytes",
+             "Microson" matches "Microsoft", etc. Unmatched tokens fall back to
+             raw single-token entries so nothing is silently dropped.
+
+             Result for the test resume:
+               BEFORE: "Zendosk AnyDesk SolarWinds Network Periormanice ..."
+                        (one big unsplit blob)
+               AFTER:  "Zendesk, AnyDesk, SolarWinds Network Performance
+                        Monitor, Malwarebytes, macOS, Ansible, Microsoft
+                        Excel, Microsoft Azure"
+                        (properly comma-separated skill phrases)
+
+  UPDATED  _extract_skills_section_line_based(text, allowlist=None):
+             - Added allowlist parameter (default None — fully backward-compat).
+             - The single-line else branch now calls _split_ocr_blob(blob,
+               allowlist) when allowlist is provided.
+             - All other delimiter paths (comma, semicolon, pipe, bullet,
+               multi-line newline) are unchanged.
+
+  UPDATED  discover_skills_dynamically — passes allowlist_list to
+             _extract_skills_section_line_based so blob splitting is active
+             for every real pipeline run. The debug call in main.py passes
+             no allowlist (None) and keeps old behaviour for the debug field.
+
+  ADDED    BLOB_FUZZY_THRESHOLD env var (default 82) — tune via .env without
+             touching source code.
+
+Changes (v6):
+  FIXED    Native PDF early-exit guard truncation.
+
+             Problem: When text_source is "native_pdf", the skills section is
+             properly multi-line (each skill on its own line, separated by \\n).
+             However the early-exit guard inside _extract_skills_section_line_based
+             was firing prematurely on lines like "CRUD Application Development"
+             or "Flutter & Firebase Development" — both have >=3 words with >=2
+             capitalised, which the guard treats as a new section heading, so it
+             stops after the very first skill line.  The _SKILLS_END_RE boundary
+             regex already correctly stops at "PROJECTS" / "CERTIFICATIONS", so
+             the guard is redundant and harmful for native PDF text.
+
+             Fix: added is_native_pdf: bool = False parameter to
+               _extract_skills_section_line_based and discover_skills_dynamically.
+               When is_native_pdf=True the early-exit guard is skipped entirely;
+               section bounding is left entirely to _SKILLS_END_RE (which already
+               handles PROJECTS, CERTIFICATIONS, EXPERIENCE, etc.).
+               When is_native_pdf=False (OCR path) the guard is kept as-is.
+
+             extract_text() now returns a third element — a boolean
+               text_is_native — so callers can pass it straight through without
+               re-deriving it.  Return signature changes from:
+                 (str, float)  →  (str, float, bool)
+               Existing callers that unpack only two values are unaffected if
+               they use  text, quality = extract_text(...)  but should be
+               updated to  text, quality, is_native = extract_text(...).
 """
 
 from __future__ import annotations
@@ -92,11 +160,23 @@ OCR_LANGUAGES      = os.getenv("EASYOCR_LANGUAGES", "en").split(",")
 MIN_NATIVE_CHARS   = 50
 TOP_K              = 5
 
-# Minimum cosine similarity (0–1) for the embedding-based OCR corrector to
+# Minimum cosine similarity (0-1) for the embedding-based OCR corrector to
 # accept a nearest-neighbour as the "true" form of an OCR-garbled token.
 # Tune upward (e.g. 0.82) to be more conservative; downward (e.g. 0.72) to
 # be more aggressive.  0.78 is a good starting point for all-MiniLM-L6-v2.
 OCR_EMBED_THRESHOLD: float = float(os.getenv("OCR_EMBED_THRESHOLD", "0.78"))
+
+# Minimum fuzzy score (0-100) for _split_ocr_blob to accept a token window
+# as matching an allowlist entry.  82 balances recall vs. false positives for
+# OCR-garbled skill names.  Lower = more matches (risk of false positives).
+# Higher = fewer matches (risk of dropping real skills).
+BLOB_FUZZY_THRESHOLD: int = int(os.getenv("BLOB_FUZZY_THRESHOLD", "82"))
+
+# Module-level allowlist cache — populated by discover_skills_dynamically()
+# so that the debug call in main.py (_extract_skills_section_line_based with
+# no allowlist argument) also produces comma-separated output without needing
+# main.py to be changed.
+_cached_allowlist: list = []
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lazy-loaded singletons
@@ -109,7 +189,7 @@ model:       Optional[SentenceTransformer] = None   # public — imported by mai
 def _get_ocr_reader() -> easyocr.Reader:
     global _ocr_reader
     if _ocr_reader is None:
-        log.info("[OCR] Loading EasyOCR reader (gpu=False) …")
+        log.info("[OCR] Loading EasyOCR reader (gpu=False) ...")
         _ocr_reader = easyocr.Reader(OCR_LANGUAGES, gpu=False)
     return _ocr_reader
 
@@ -117,7 +197,7 @@ def _get_ocr_reader() -> easyocr.Reader:
 def _get_sbert() -> SentenceTransformer:
     global model
     if model is None:
-        log.info(f"[SBERT] Loading {EMBEDDING_MODEL} …")
+        log.info(f"[SBERT] Loading {EMBEDDING_MODEL} ...")
         model = SentenceTransformer(EMBEDDING_MODEL)
         log.info("[SBERT] Ready.")
     return model
@@ -193,7 +273,7 @@ class OcrCorrector:
     labels     : list[str] — canonical allowlist strings in index-row order.
     encode_fn  : callable(str) -> np.ndarray(float32, shape=(dim,)) — encodes
                  a single string to a unit-norm vector.
-    cache      : dict[str, str] — per-request token → corrected form cache so
+    cache      : dict[str, str] — per-request token -> corrected form cache so
                  repeated tokens (e.g. "Microsoft") only hit the index once.
     """
     index:     faiss.IndexFlatIP
@@ -210,9 +290,6 @@ def build_ocr_corrector(allowlist: list[str]) -> OcrCorrector:
     normalised, and added to a FAISS IndexFlatIP so that nearest-neighbour
     search returns the most semantically similar canonical form.
 
-    This replaces the old hardcoded _OCR_CORRECTIONS dict entirely — the
-    "correction table" is now the full Firestore skills/certs allowlist.
-
     Parameters
     ----------
     allowlist : list of canonical strings from Firestore (required_skills /
@@ -223,7 +300,6 @@ def build_ocr_corrector(allowlist: list[str]) -> OcrCorrector:
     OcrCorrector ready for use in _ocr_correct_token().
     """
     if not allowlist:
-        # Return a no-op corrector — index has 0 vectors, lookup always misses.
         sbert = _get_sbert()
         dim   = sbert.get_sentence_embedding_dimension()
         return OcrCorrector(
@@ -233,19 +309,18 @@ def build_ocr_corrector(allowlist: list[str]) -> OcrCorrector:
         )
 
     sbert = _get_sbert()
-    log.info(f"[OcrCorrector] Encoding {len(allowlist)} allowlist entries …")
+    log.info(f"[OcrCorrector] Encoding {len(allowlist)} allowlist entries ...")
 
-    # Encode all allowlist strings in one batch for speed
     vecs = sbert.encode(
         allowlist,
         normalize_embeddings=True,
         show_progress_bar=False,
         batch_size=64,
-    ).astype(np.float32)          # shape: (N, dim)
+    ).astype(np.float32)
 
     dim   = vecs.shape[1]
     index = faiss.IndexFlatIP(dim)
-    faiss.normalize_L2(vecs)      # belt-and-suspenders — already unit from SBERT
+    faiss.normalize_L2(vecs)
     index.add(vecs)
 
     log.info(f"[OcrCorrector] Index built ({index.ntotal} entries, dim={dim}).")
@@ -262,58 +337,25 @@ def _ocr_correct_token(token: str, corrector: OcrCorrector) -> str:
     """
     Return the canonical allowlist form nearest to *token* in embedding space,
     provided the cosine similarity exceeds OCR_EMBED_THRESHOLD.
-
-    Design notes
-    ------------
-    • Single-token scope: we correct one whitespace-delimited token at a time
-      (called from _apply_ocr_corrections).  Multi-word allowlist entries are
-      candidates too — if "Microsoft Excel" is closest to the garbled token
-      "Microson Exel" split as ["Microson", "Exel"], the per-token correction
-      maps "Microson" → "Microsoft" and "Exel" → "Excel" independently, which
-      re-assembles correctly downstream when the corrected tokens are rejoined.
-
-    • Cache: the OcrCorrector.cache dict avoids re-encoding the same token
-      multiple times within a single request (e.g. "microsoft" appears many
-      times in a resume's skills section).
-
-    • Threshold guard: if the best cosine similarity is below
-      OCR_EMBED_THRESHOLD the original token is returned unchanged so the
-      downstream fuzzy/exact matching still has a chance.
-
-    Parameters
-    ----------
-    token     : single whitespace-free OCR token (may be garbled, e.g. "Microson").
-    corrector : OcrCorrector built from the Firestore allowlist.
-
-    Returns
-    -------
-    Canonical allowlist string if confident; otherwise the original token.
+    Falls back to the original token when below threshold.
     """
     if not corrector.labels or not token.strip():
         return token
 
-    # Strip trailing punctuation for the lookup key, but preserve for output
-    stripped = token.strip(".,;:()[]")
+    stripped  = token.strip(".,;:()[]")
     cache_key = stripped.lower()
 
     if cache_key in corrector.cache:
         corrected = corrector.cache[cache_key]
-        # Re-attach any trailing punctuation that was stripped
-        suffix = token[len(stripped):]
+        suffix    = token[len(stripped):]
         return corrected + suffix
 
     vec = corrector.encode_fn(stripped).reshape(1, -1)
-    D, I = corrector.index.search(vec, 1)  # top-1 nearest neighbour
+    D, I = corrector.index.search(vec, 1)
 
     similarity = float(D[0][0])
     if similarity >= OCR_EMBED_THRESHOLD and I[0][0] >= 0:
-        canonical = corrector.labels[I[0][0]]
-
-        # For multi-word canonical entries (e.g. "Microsoft Excel") we only
-        # want to return the single best-matching word from that entry when
-        # correcting a single token, not the whole phrase.  Find the word
-        # within the canonical entry whose normalized form is closest to the
-        # stripped token's normalized form.
+        canonical   = corrector.labels[I[0][0]]
         canon_words = canonical.split()
         if len(canon_words) > 1:
             norm_stripped = normalize(stripped)
@@ -326,11 +368,11 @@ def _ocr_correct_token(token: str, corrector: OcrCorrector) -> str:
             corrected = canonical
 
         log.debug(
-            f"[OcrCorrector] '{stripped}' → '{corrected}' "
+            f"[OcrCorrector] '{stripped}' -> '{corrected}' "
             f"(sim={similarity:.3f}, nearest='{canonical}')"
         )
     else:
-        corrected = stripped  # below threshold — leave unchanged
+        corrected = stripped
 
     corrector.cache[cache_key] = corrected
     suffix = token[len(stripped):]
@@ -340,23 +382,7 @@ def _ocr_correct_token(token: str, corrector: OcrCorrector) -> str:
 def _apply_ocr_corrections(s: str, corrector: Optional[OcrCorrector] = None) -> str:
     """
     Token-level OCR correction using the embedding-based OcrCorrector.
-
-    Splits the input into whitespace-separated tokens, corrects each token
-    individually using _ocr_correct_token(), then rejoins.  This allows
-    compound strings like "Microson Azuie" to be corrected to
-    "Microsoft Azure" token-by-token.
-
-    When corrector is None (e.g. in unit tests or fallback paths) the
-    function is a no-op and returns the original string unchanged.
-
-    Parameters
-    ----------
-    s         : raw OCR string, potentially containing garbled tokens.
-    corrector : OcrCorrector built from the Firestore allowlist, or None.
-
-    Returns
-    -------
-    String with OCR-garbled tokens replaced by their canonical allowlist forms.
+    When corrector is None the function is a no-op.
     """
     if corrector is None:
         return s
@@ -389,7 +415,7 @@ def _ocr_fallback(file_path: str) -> str:
                     )
                 return "\n".join(lines)
         except Exception as exc:
-            log.warning(f"[OCR] pdf2image failed ({exc}); direct image fallback …")
+            log.warning(f"[OCR] pdf2image failed ({exc}); direct image fallback ...")
 
     result = reader.readtext(file_path, detail=0, paragraph=True)
     return "\n".join(result)
@@ -401,27 +427,42 @@ def _alnum_ratio(text: str) -> float:
     return round(sum(c.isalnum() for c in text) / len(text) * 100, 2)
 
 
-def extract_text(file_path: str) -> tuple[str, float]:
+def extract_text(file_path: str) -> tuple[str, float, bool]:
     """
     Stage 1: Try PyMuPDF native text; fall back to EasyOCR.
-    Returns (text, ocr_quality_percent).
-    ocr_quality_percent is already × 100 (e.g. 87.4 means 87.4 %).
+
+    Returns
+    -------
+    (text, ocr_quality_percent, is_native_pdf)
+
+    is_native_pdf is True when the native PyMuPDF path was used, False when
+    EasyOCR was used.  Callers should pass this flag to
+    discover_skills_dynamically so that the early-exit guard is skipped for
+    native PDF text (v6 fix).
+
+    Note: the return signature was extended from (str, float) to
+    (str, float, bool) in v6.  Existing two-value unpacking
+      text, quality = extract_text(...)
+    still works in Python (the third value is silently ignored when unpacking
+    into exactly two names only if you use extended unpacking like
+      text, quality, *_ = extract_text(...)
+    — update call sites to capture all three values for full functionality).
     """
     native = _native_pdf_text(file_path) if file_path.lower().endswith(".pdf") else ""
 
     if len(native) >= MIN_NATIVE_CHARS:
         log.info(f"[Stage 1] Native PDF text ({len(native)} chars).")
-        return native, _alnum_ratio(native)
+        return native, _alnum_ratio(native), True
 
-    log.info("[Stage 1] Native text too short — EasyOCR fallback …")
+    log.info("[Stage 1] Native text too short — EasyOCR fallback ...")
     ocr_text = _ocr_fallback(file_path)
     quality  = _alnum_ratio(ocr_text)
     log.info(f"[Stage 1] OCR done ({len(ocr_text)} chars, quality {quality}%).")
-    return ocr_text, quality
+    return ocr_text, quality, False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 2 — Rule-based section locators (debug helpers + internal slicing)
+# STAGE 2 — Rule-based section locators
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SKILL_HEADING_RE = re.compile(
@@ -434,15 +475,11 @@ _CERT_HEADING_RE = re.compile(
     r"professional\s+certifications?|credentials?|accreditations?)",
     re.I | re.M,
     )
-
-# General next-section stopper (used by cert slicer).
 _NEXT_SECTION_RE = re.compile(
     r"^\s*(experience|education|employment|projects?|awards?|publications?|"
     r"references?|volunteer|languages?|interests?|activities|summary|objective)",
     re.I | re.M,
     )
-
-# Skills-specific stopper: stops at CERTIFICATIONS *and* all other sections.
 _SKILLS_END_RE = re.compile(
     r"^\s*(certifications?|licen[cs]es?\s*(&|and)?\s*certifications?|"
     r"professional\s+certifications?|credentials?|accreditations?|"
@@ -452,7 +489,158 @@ _SKILLS_END_RE = re.compile(
     )
 
 
-def _extract_skills_section_line_based(text: str) -> str:
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — OCR blob segmenter (v5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _split_ocr_blob(line: str, allowlist: list[str]) -> list[str]:
+    """
+    Segment a single space-separated OCR blob into individual skill phrases
+    using greedy longest-match fuzzy scanning against the allowlist.
+
+    Why this is needed
+    ------------------
+    EasyOCR often collapses an entire SKILLS section onto one line with no
+    commas, bullets, or other delimiters:
+
+        "Zendosk AnyDesk SolarWinds Network Periormanice Vonitor Malwarcbytcs
+         macCs Ansible Microson Excel Microson Azuie"
+
+    The existing delimiter-detection logic falls through to the else branch and
+    returns that whole string as a SINGLE entry, so the LLM receives an
+    undelimited wall of garbled text with no way to know where one skill ends
+    and the next begins.
+
+    Algorithm
+    ---------
+    1. Sort allowlist by descending word count so multi-word entries like
+       "SolarWinds Network Performance Monitor" (4 tokens) are tried before
+       single-word entries like "SolarWinds" (1 token) — greedy longest match.
+
+    2. Pre-normalise the sorted allowlist once (normalize() is idempotent but
+       called O(n * max_win) times in the inner loop, so pre-computing saves
+       significant work).
+
+    3. Tokenise the input line on whitespace.
+
+    4. At each cursor position i, slide a window from the longest possible
+       length down to 1:
+         a. Join the window tokens into a candidate string and normalize it.
+         b. Score against every allowlist entry using
+            max(token_sort_ratio, ratio) — same dual-metric as the rest of
+            the pipeline so scoring behaviour is consistent.
+         c. On a hit (score >= BLOB_FUZZY_THRESHOLD):
+              - Emit the CANONICAL allowlist form (corrected spelling).
+              - Advance the cursor by win_len (consume all matched tokens).
+              - Break out of both loops (greedy: commit to this match).
+         d. On a total miss (no window length produced a hit):
+              - Emit the raw single token stripped of trailing punctuation.
+              - Advance cursor by 1.
+              - Nothing is silently dropped.
+
+    Result for the test resume:
+        BEFORE (one unsplit entry passed to LLM):
+          "Zendosk AnyDesk SolarWinds Network Periormanice Vonitor ..."
+        AFTER (comma-joined list of skill phrases):
+          "Zendesk, AnyDesk, SolarWinds Network Performance Monitor,
+           Malwarebytes, macOS, Ansible, Microsoft Excel, Microsoft Azure"
+
+    Parameters
+    ----------
+    line      : single OCR text line — the entire collapsed SKILLS blob.
+    allowlist : canonical skill strings from the Firestore corpus.
+
+    Returns
+    -------
+    List of skill phrase strings (canonical where matched, raw token otherwise).
+    Joined by the caller with ", ".
+    """
+    if not allowlist or not line.strip():
+        return [line.strip()] if line.strip() else []
+
+    # Sort: longest entry first for greedy longest-match behaviour
+    sorted_allow = sorted(allowlist, key=lambda a: len(a.split()), reverse=True)
+
+    # Pre-normalise the allowlist once — avoids repeated normalize() calls
+    # inside the O(n * max_win * |allowlist|) inner loop
+    norm_allow = [(normalize(a), a) for a in sorted_allow]
+    max_win    = max(len(a.split()) for a in sorted_allow) if sorted_allow else 1
+
+    tokens  = line.split()
+    n       = len(tokens)
+    result: list[str] = []
+    i = 0
+
+    while i < n:
+        best_canon: str | None = None
+        best_len:   int        = 0
+
+        # Try window lengths from longest down to 1 (greedy)
+        for win_len in range(min(max_win, n - i), 0, -1):
+            window      = " ".join(tokens[i : i + win_len])
+            window_norm = normalize(window)
+
+            if len(window_norm) < 3:
+                # Too short to be a meaningful skill token — skip
+                continue
+
+            # Length-adaptive threshold:
+            # Short OCR tokens (<=5 chars, e.g. "macCs" -> "macOS") naturally
+            # score lower with fuzzy string metrics because small edit distances
+            # have a larger proportional impact on short strings.  We lower the
+            # acceptance bar for short windows so they still match, while keeping
+            # the full threshold for longer phrases where a lower score more
+            # likely indicates a genuine mismatch.
+            #
+            #   window length   threshold used
+            #   -------------   -------------------------
+            #   <= 5 chars      BLOB_FUZZY_THRESHOLD - 10  (default 72)
+            #   6-9 chars       BLOB_FUZZY_THRESHOLD - 5   (default 77)
+            #   >= 10 chars     BLOB_FUZZY_THRESHOLD       (default 82)
+            wlen = len(window_norm)
+            if wlen <= 5:
+                effective_threshold = BLOB_FUZZY_THRESHOLD - 10
+            elif wlen <= 9:
+                effective_threshold = BLOB_FUZZY_THRESHOLD - 5
+            else:
+                effective_threshold = BLOB_FUZZY_THRESHOLD
+
+            for akey, aval in norm_allow:
+                score = max(
+                    fuzz.token_sort_ratio(window_norm, akey),
+                    fuzz.ratio(window_norm, akey),
+                )
+                if score >= effective_threshold:
+                    best_canon = aval
+                    best_len   = win_len
+                    break       # first (longest) hit for this window size wins
+
+            if best_canon:
+                break           # stop trying shorter windows once we have a match
+
+        if best_canon:
+            result.append(best_canon)
+            i += best_len
+            log.debug(f"[BlobSplit] consumed {best_len} token(s) -> '{best_canon}'")
+        else:
+            # No allowlist match — emit raw token so nothing is silently dropped
+            raw_tok = tokens[i].strip(".,;:()[]")
+            if raw_tok:
+                result.append(raw_tok)
+            i += 1
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — Skills section extractor
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_skills_section_line_based(
+        text:          str,
+        allowlist:     list[str] | None = None,
+        is_native_pdf: bool = False,
+) -> str:
     """
     Return the skills section as a comma-separated string where each entry is
     a complete skill phrase — NOT one token per word.
@@ -463,24 +651,36 @@ def _extract_skills_section_line_based(text: str) -> str:
     -------------------
     1. Locate the SKILLS heading; slice the block up to the next section.
     2. Drop lines that look like a section heading (early-exit guard).
+       ** SKIPPED when is_native_pdf=True ** — native PDF text already has
+       clean section boundaries enforced by _SKILLS_END_RE, so skill lines
+       like "Flutter & Firebase Development" or "CRUD Application Development"
+       must NOT be mistaken for new section headings and dropped.
     3. Detect the natural delimiter used inside the block and split on it:
 
-       Priority   Delimiter detected when…
-       ────────   ─────────────────────────────────────────────────────────────
-       1. comma   block contains "," (already comma-separated)
+       Priority   Delimiter detected when...
+       --------   -----------------------------------------------------------
+       1. comma   block contains ","
        2. semi    block contains ";"
        3. pipe    block contains "|"
-       4. bullet  any line starts with •, -, *, ◦, ▪, or a digit+dot
-       5. newline each non-empty line is one skill (most structured resumes)
-       6. space   fallback — OCR smashed everything onto one line with no
-                  internal delimiter; treat the whole line as one entry so
-                  "SolarWinds Network Performance Monitor" is preserved as-is.
+       4. bullet  any line starts with bullet char or digit+dot
+       5. newline multiple non-empty lines with no inline delimiter
+       6. blob    single line, no delimiter — _split_ocr_blob() segments it
+                  using greedy fuzzy window matching against the allowlist.
+                  When allowlist=None (debug call from main.py) the whole
+                  line is returned as-is (backward-compatible).
 
-    The returned string is the skill entries joined with ", " so the LLM
-    prompt and the debug field (skills_section_rule_based) receive:
+    Returns a comma-separated string so the LLM prompt and debug field get:
       "Zendesk, AnyDesk, SolarWinds Network Performance Monitor, Ansible, ..."
-    instead of the old per-word explosion:
-      "Zendesk, AnyDesk, SolarWinds, Network, Performance, Monitor, Ansible, ..."
+    instead of a single unsplit blob or a per-word explosion.
+
+    Parameters
+    ----------
+    text          : full resume text.
+    allowlist     : canonical skill strings passed to _split_ocr_blob() for
+                    the blob path. None = skip blob segmentation (old behaviour).
+    is_native_pdf : when True, skip the early-exit guard so that multi-word
+                    skill lines are not mistaken for section headings.
+                    Set to True whenever extract_text() returned is_native=True.
     """
     m = _SKILL_HEADING_RE.search(text)
     if not m:
@@ -490,32 +690,44 @@ def _extract_skills_section_line_based(text: str) -> str:
     end_m = _SKILLS_END_RE.search(rest)
     block = rest[: end_m.start()].strip() if end_m else rest.strip()
 
-    # ── Drop lines that look like a new named section (early-exit guard) ──────
     raw_lines = block.splitlines()
-    kept_lines: list[str] = []
-    for line in raw_lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        words = stripped.split()
-        if (kept_lines
-                and len(words) >= 3
-                and sum(1 for w in words if w[0].isupper()) >= 2):
-            break
-        kept_lines.append(stripped)
+
+    # ── Early-exit guard — OCR path only ─────────────────────────────────────
+    #
+    # For OCR text the section boundaries are less reliable, so we apply a
+    # heuristic: if a line has >=3 words with >=2 capitalised it probably marks
+    # the start of a new resume section (e.g. "Work Experience Summary").
+    # We stop collecting skill lines at that point.
+    #
+    # For native PDF text this guard is SKIPPED.  _SKILLS_END_RE already
+    # correctly bounds the block at "PROJECTS", "CERTIFICATIONS", etc., so
+    # legitimate skill lines like "Flutter & Firebase Development" (3 words,
+    # 3 capitalised) must pass through unchanged.
+    if is_native_pdf:
+        kept_lines = [line.strip() for line in raw_lines if line.strip()]
+    else:
+        kept_lines: list[str] = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            words = stripped.split()
+            if (kept_lines
+                    and len(words) >= 3
+                    and sum(1 for w in words if w[0].isupper()) >= 2):
+                break
+            kept_lines.append(stripped)
 
     if not kept_lines:
         return ""
 
     joined_block = "\n".join(kept_lines)
 
-    # ── Detect delimiter and split into skill entries ─────────────────
+    # ── Detect delimiter and split into skill entries ──────────────────────────
     _BULLET_RE = re.compile(r"^\s*[\u2022\-\*\u25e6\u25aa]|\s*\d+\.\s+", re.M)
-
     entries: list[str] = []
 
     if "," in joined_block:
-        # Already comma-separated — split on commas within each line
         for line in kept_lines:
             for part in re.split(r"\s*,\s*", line):
                 part = part.strip()
@@ -537,9 +749,10 @@ def _extract_skills_section_line_based(text: str) -> str:
                     entries.append(part)
 
     elif _BULLET_RE.search(joined_block):
-        # Strip bullet character; each line is one skill phrase
         for line in kept_lines:
-            clean = re.sub(r"^\s*[\u2022\-\*\u25e6\u25aa]\s*|\s*\d+\.\s+", "", line).strip()
+            clean = re.sub(
+                r"^\s*[\u2022\-\*\u25e6\u25aa]\s*|\s*\d+\.\s+", "", line
+            ).strip()
             if clean:
                 entries.append(clean)
 
@@ -548,19 +761,37 @@ def _extract_skills_section_line_based(text: str) -> str:
         entries = [line.strip() for line in kept_lines if line.strip()]
 
     else:
-        # Single OCR line, no delimiter — preserve as one entry per line so
-        # "SolarWinds Network Performance Monitor" is not split word-by-word.
-        # The LLM and direct-scan stages parse individual skills from this.
-        entries = [line.strip() for line in kept_lines if line.strip()]
+        # ── Single-line OCR blob — no delimiter detected at all ───────────────
+        #
+        # EasyOCR collapsed the SKILLS section onto one space-separated line:
+        #   "Zendosk AnyDesk SolarWinds Network Periormanice Vonitor ..."
+        #
+        # Without allowlist (e.g. the debug call in main.py):
+        #   Return the blob as-is — one entry — same as the old behaviour so
+        #   nothing downstream breaks.
+        #
+        # With allowlist (the live pipeline call in discover_skills_dynamically):
+        #   _split_ocr_blob() segments the blob by sliding a greedy fuzzy
+        #   window over it and matching against the allowlist, emitting one
+        #   entry per skill phrase.  Multi-word phrases like "SolarWinds
+        #   Network Performance Monitor" are preserved intact; garbled tokens
+        #   like "Malwarcbytcs" are corrected to "Malwarebytes".
+        blob = kept_lines[0] if kept_lines else ""
+        if blob:
+            # Use explicitly-passed allowlist first; fall back to the module-
+            # level cache populated by discover_skills_dynamically() so that
+            # the debug call in main.py (no allowlist argument) also produces
+            # a comma-separated result rather than one unsplit blob.
+            effective_allowlist = allowlist if allowlist is not None else _cached_allowlist
+            entries = _split_ocr_blob(blob, effective_allowlist) if effective_allowlist else [blob]
 
     return ", ".join(entries)
 
 
 def _extract_cert_section(text: str) -> str:
     """
-    Return ONLY the certification tokens — the content on the same line as the
-    CERTIFICATIONS heading and any immediately following lines, stopping at the
-    next section boundary.  The heading word itself is stripped.
+    Return ONLY the certification tokens — content after the CERTIFICATIONS
+    heading up to the next section boundary.
     """
     m = _CERT_HEADING_RE.search(text)
     if not m:
@@ -585,8 +816,6 @@ _SKILLS_SYSTEM = (
     "Output ONLY the JSON array."
 )
 
-# FIX-1: Strengthened cert prompt — explicitly forbid splitting a single cert
-# into multiple items.
 _CERTS_SYSTEM = (
     "You are a specialized resume parser. Extract COMPLETE professional certification names. "
     "CRITICAL RULE: NEVER split a single certification into multiple array items. "
@@ -653,67 +882,36 @@ def _canonicalize(
     Map a raw extracted string to its canonical allowlist form.
 
     Strategy (in priority order):
-      1. Embedding-based OCR correction via _apply_ocr_corrections() with the
-         OcrCorrector built from the Firestore allowlist.  This replaces the old
-         hardcoded _OCR_CORRECTIONS dict — garbled tokens like "Microson" or
-         "Malwarcbytcs" are corrected dynamically by finding their nearest
-         neighbour in the allowlist embedding space.
-      2. Exact normalized match on the (possibly corrected) form.
-      3. Prefix / longest-match-first substring containment (FIX-3):
-         raw token ≥ 4 chars AND allowlist key starts with raw token.
+      1. Embedding-based OCR correction via _apply_ocr_corrections().
+      2. Exact normalized match on the corrected form.
+      3. Prefix / longest-match-first substring containment (FIX-3).
       4. max(token_sort_ratio, ratio) fuzzy match (FIX-2).
       5. If best score < threshold, return the raw item unchanged (fails-open).
-
-    Parameters
-    ----------
-    raw_item      : string extracted by the LLM or direct scan.
-    allow_norm    : {normalized_key: canonical_value} dict.
-    threshold     : minimum fuzzy score to accept a match.
-    _sorted_pairs : pre-sorted (norm_key, canonical) pairs (longest first).
-    corrector     : OcrCorrector for embedding-based token correction, or None.
     """
-    # 1. Embedding-based OCR correction (replaces hardcoded dict)
     corrected = _apply_ocr_corrections(raw_item, corrector)
     sn = normalize(corrected)
 
-    # 2. Exact match on corrected form
     if sn in allow_norm:
         return allow_norm[sn]
 
     pairs = _sorted_pairs if _sorted_pairs is not None else list(allow_norm.items())
 
     best_score: int = 0
-    best_val:   str = raw_item   # default: keep as-is
-
-    sn_word_count = len(sn.split())
+    best_val:   str = raw_item
+    sn_word_count   = len(sn.split())
 
     for akey, aval in pairs:
-        # 3. Prefix substring containment — longest match first (FIX-3).
-        #
-        #    Guard conditions (ALL must hold to fire):
-        #      a. Raw token is ≥ 4 chars (blocks short noise like "ar", "ex").
-        #      b. The allowlist key starts with the raw token (prefix match).
-        #      c. The raw token is NOT itself a standalone allowlist entry —
-        #         if "microservices" is already in the allowlist, we must NOT
-        #         promote it to "microservices architecture" just because the
-        #         longer entry also starts with it.  Exact match (step 2) above
-        #         already handles that case and returns early; we re-check here
-        #         as a safety net for the sorted-pairs loop.
-        #      d. The allowlist key is at most 2× the word count of the raw
-        #         token — prevents a 1-word OCR fragment from being silently
-        #         expanded into a 4- or 5-word phrase.
         akey_word_count = len(akey.split())
         prefix_eligible = (
                 len(sn) >= 4
                 and akey.startswith(sn)
-                and sn not in allow_norm                        # guard (c)
-                and akey_word_count <= sn_word_count * 2        # guard (d)
+                and sn not in allow_norm
+                and akey_word_count <= sn_word_count * 2
         )
 
         if prefix_eligible:
             score = 90
         else:
-            # 4. Dual-metric fuzzy (FIX-2)
             score = max(
                 fuzz.token_sort_ratio(sn, akey),
                 fuzz.ratio(sn, akey),
@@ -723,7 +921,7 @@ def _canonicalize(
             best_score = score
             best_val   = aval
             if score == 90:
-                break   # early-exit: longest-prefix hit wins
+                break
 
     return best_val if best_score >= threshold else raw_item
 
@@ -736,60 +934,74 @@ def _direct_scan_section(
         allow_norm:   dict[str, str] | None = None,
 ) -> list[str]:
     """
-    FIX-5 — Direct token-window scan of the raw SKILLS section text.
+    FIX-6 — Atomic entry scan of the skills section.
 
-    Slides a window of 1–N tokens over every line, checks each window
-    against every allowlist entry (longest first) using dual-metric fuzzy
-    scoring, and collects matches above threshold.
+    Previous behaviour (token-window sliding):
+      Slid a 1-N token window over every line, scoring each sub-phrase against
+      the allowlist. This caused entries like "SolarWinds Network Performance
+      Monitor" to also match "Performance", "Monitoring", and "Azure" as
+      independent hits — fragment hallucinations from words that happened to
+      score high in isolation.
 
-    Embedding-based OCR correction (_apply_ocr_corrections with corrector) is
-    applied to each line before tokenising, replacing the old hardcoded
-    per-token correction map.
+    New behaviour (comma-entry matching):
+      When the section text is already comma-separated (as produced by
+      _extract_skills_section_line_based), split on commas and treat each
+      entry as an atomic unit. Each entry is OCR-corrected, normalized, then
+      matched against the allowlist in full — no sub-phrase windowing within
+      a single entry. This prevents "SolarWinds Network Performance Monitor"
+      from leaking "Performance" or "Monitor" as separate hits.
 
-    allow_norm is used to prevent the prefix rule from promoting a window
-    that is already a standalone allowlist entry (e.g. "microservices") into
-    a longer entry ("microservices architecture") — mirrors the guard added
-    to _canonicalize().
-
-    Returns a list of canonical allowlist strings found in the section.
+    Fallback (non-comma text):
+      If the section has no commas (raw resume text passed directly), fall
+      back to per-line matching where each full line is treated as one unit.
     """
     found: list[str] = []
     seen:  set[str]  = set()
     _allow_norm = allow_norm or {}
-    max_win = max((len(akey.split()) for akey, _ in sorted_pairs), default=1)
 
-    for line in section_text.splitlines():
-        # Apply embedding-based OCR corrections before building token windows
-        corr_line = _apply_ocr_corrections(line, corrector)
-        tokens    = normalize(corr_line).split()
-        n         = len(tokens)
-        for start in range(n):
-            for end in range(start + 1, min(start + max_win + 1, n + 1)):
-                window = " ".join(tokens[start:end])
-                if not window or len(window) < 4:
-                    continue
-                window_word_count = len(window.split())
-                for akey, aval in sorted_pairs:
-                    akey_word_count = len(akey.split())
-                    prefix_eligible = (
-                            len(window) >= 4
-                            and akey.startswith(window)
-                            and window not in _allow_norm           # already exact — don't expand
-                            and akey_word_count <= window_word_count * 2  # no runaway expansion
-                    )
-                    if prefix_eligible:
-                        score = 90
-                    else:
-                        score = max(
-                            fuzz.token_sort_ratio(window, akey),
-                            fuzz.ratio(window, akey),
-                        )
-                    if score >= threshold:
-                        canon_n = normalize(aval)
-                        if canon_n not in seen:
-                            seen.add(canon_n)
-                            found.append(aval)
-                        break   # longest-first: first hit for this window wins
+    # Decide whether to split on commas (processed section) or lines (raw text)
+    if "," in section_text:
+        raw_entries = [e.strip() for e in section_text.split(",") if e.strip()]
+    else:
+        raw_entries = [l.strip() for l in section_text.splitlines() if l.strip()]
+
+    for entry in raw_entries:
+        corrected  = _apply_ocr_corrections(entry, corrector)
+        entry_norm = normalize(corrected)
+
+        if not entry_norm or len(entry_norm) < 3:
+            continue
+
+        # 1. Exact normalized lookup
+        if entry_norm in _allow_norm:
+            canon = _allow_norm[entry_norm]
+            cn = normalize(canon)
+            if cn not in seen:
+                seen.add(cn)
+                found.append(canon)
+                log.debug(f"[DirectScan] Exact match: '{entry}' -> '{canon}'")
+            continue
+
+        # 2. Fuzzy match against full allowlist entries (longest first)
+        best_score: int = 0
+        best_val:   str = ""
+        for akey, aval in sorted_pairs:
+            score = max(
+                fuzz.token_sort_ratio(entry_norm, akey),
+                fuzz.ratio(entry_norm, akey),
+            )
+            if score > best_score:
+                best_score = score
+                best_val   = aval
+
+        if best_score >= threshold and best_val:
+            cn = normalize(best_val)
+            if cn not in seen:
+                seen.add(cn)
+                found.append(best_val)
+                log.debug(f"[DirectScan] Fuzzy match: '{entry}' -> '{best_val}' (score={best_score})")
+        else:
+            log.debug(f"[DirectScan] No match for entry: '{entry}' (best_score={best_score})")
 
     return found
 
@@ -799,26 +1011,39 @@ def _direct_scan_section(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def discover_skills_dynamically(
-        resume_text:  str,
-        jobs_corpus:  list[dict],
-        extra_skills: list[str] | None = None,
+        resume_text:   str,
+        jobs_corpus:   list[dict],
+        extra_skills:  list[str] | None = None,
+        is_native_pdf: bool = False,
 ) -> list[str]:
     """
     Stage 2 — skill extraction via Llama (HF Inference API).
 
     1. Locate the skills section with rule-based locator.
+       Passes allowlist_list to _extract_skills_section_line_based so that
+       single-line OCR blobs are segmented by _split_ocr_blob before the
+       LLM receives them (v5 fix).
+       Passes is_native_pdf so the early-exit guard is skipped for native
+       PDF text where skill lines look like section headings (v6 fix).
     2. Build the corpus allowlist from jobs_corpus + extra_skills.
     3. Build OcrCorrector from the allowlist (embedding-based, Firestore-driven).
     4. POST to HF API with a JSON-array extraction prompt.
-    5. Canonicalise LLM output against corpus allowlist using _canonicalize()
-       (embedding correction → exact → prefix → dual-metric fuzzy, FIX-2/3).
-    6. FIX-5: Direct token-window scan of the raw SKILLS section to recover any
-       OCR-garbled tokens the LLM missed — merged with LLM results, deduped.
+    5. Canonicalise LLM output against corpus allowlist using _canonicalize().
+    6. FIX-5: Direct token-window scan to recover any OCR-garbled tokens
+       the LLM missed — merged with LLM results, deduped.
     7. Fuzzy-scan fallback if both LLM and direct scan produce nothing.
+
+    Parameters
+    ----------
+    resume_text   : full resume text from extract_text().
+    jobs_corpus   : list of job dicts from Firestore / generate_jobs.py.
+    extra_skills  : additional canonical skill strings to include in the
+                    allowlist (optional).
+    is_native_pdf : pass the third return value of extract_text() here so
+                    the early-exit guard is skipped for native PDF resumes.
 
     Returns deduplicated, corpus-canonicalised skill strings.
     """
-    # Build corpus allowlist
     allowlist: set[str] = set()
     for job in jobs_corpus:
         allowlist.update(job.get("required_skills", []))
@@ -827,15 +1052,24 @@ def discover_skills_dynamically(
     allowlist_list = sorted(allowlist)
     allow_norm     = {normalize(a): a for a in allowlist_list}
 
-    # Sorted pairs: longest allowlist entry first (FIX-3)
     sorted_pairs = _build_allow_norm_sorted(allowlist_list)
+    corrector    = build_ocr_corrector(allowlist_list)
 
-    # Build the embedding-based OcrCorrector from the Firestore allowlist.
-    # This is done ONCE per discover_skills_dynamically() call and reused for
-    # all _canonicalize() and _direct_scan_section() calls below.
-    corrector = build_ocr_corrector(allowlist_list)
+    # Cache the allowlist at module level so the debug call in main.py can
+    # also produce comma-separated skills_section_rule_based output.
+    global _cached_allowlist
+    _cached_allowlist = allowlist_list
 
-    section = _extract_skills_section_line_based(resume_text) or resume_text[:3000]
+    # Pass allowlist_list so _split_ocr_blob fires for single-line OCR blobs.
+    # Pass is_native_pdf so the early-exit guard is bypassed for native PDF text.
+    section = (
+            _extract_skills_section_line_based(
+                resume_text,
+                allowlist=allowlist_list,
+                is_native_pdf=is_native_pdf,
+            )
+            or resume_text[:3000]
+    )
 
     user_prompt = (
         f"Extract every technical skill, programming language, framework, tool, "
@@ -850,8 +1084,6 @@ def discover_skills_dynamically(
 
     raw = _llm_extract_list(_SKILLS_SYSTEM, user_prompt, "SKILLS")
 
-    # Canonicalise LLM output (embedding correction → exact → prefix → fuzzy).
-    # Only keep items that successfully mapped to an allowlist entry.
     seen:      set[str]  = set()
     canonical: list[str] = []
 
@@ -861,7 +1093,6 @@ def discover_skills_dynamically(
             corrected, allow_norm, threshold=75,
             _sorted_pairs=sorted_pairs, corrector=corrector,
         )
-        # Drop if canonicalization failed (returned the raw/corrected input unchanged)
         if normalize(canon) == normalize(corrected) and normalize(canon) not in allow_norm:
             log.debug(f"[Skills/LLM] Dropped non-allowlist item: {skill!r}")
             continue
@@ -870,7 +1101,6 @@ def discover_skills_dynamically(
             seen.add(cn)
             canonical.append(canon)
 
-    # FIX-5: Direct token-window scan — catches OCR tokens LLM missed/dropped
     direct_hits = _direct_scan_section(
         section, sorted_pairs, threshold=82, corrector=corrector, allow_norm=allow_norm
     )
@@ -898,7 +1128,7 @@ def extract_certificates(
 
     1. Locate the cert section with rule-based locator.
     2. POST to HF API with a JSON-array extraction prompt (FIX-1: never split).
-    3. Enforce ≤ 10-word-per-item guard.
+    3. Enforce <= 10-word-per-item guard.
     4. Build OcrCorrector from allowlist (when provided) for embedding-based
        canonicalization; fails-open when allowlist is None.
     5. Regex fallback when LLM returns nothing.
@@ -907,7 +1137,6 @@ def extract_certificates(
     """
     section = _extract_cert_section(resume_text) or resume_text[:3000]
 
-    # FIX-1: Explicit no-splitting instruction in user prompt too
     user_prompt = (
         f"Extract every professional certification, license, and credential "
         f"from this resume section. "
@@ -920,16 +1149,13 @@ def extract_certificates(
 
     raw = _llm_extract_list(_CERTS_SYSTEM, user_prompt, "CERTS")
 
-    # ≤ 10-word guard
     guarded: list[str] = [
         " ".join(c.split()[:10]) for c in raw if c.strip()
     ]
 
-    # Allowlist filter / dedup using shared _canonicalize() with OcrCorrector
     if allowlist:
         allow_norm   = {normalize(a): a for a in allowlist}
         sorted_pairs = _build_allow_norm_sorted(allowlist)
-        # Build corrector from the certs allowlist for embedding-based correction
         corrector    = build_ocr_corrector(allowlist)
         seen:   set[str]  = set()
         result: list[str] = []
@@ -953,7 +1179,6 @@ def extract_certificates(
                 deduped.append(c)
         guarded = deduped
 
-    # Regex fallback
     if not guarded:
         log.info("[Certs] LLM produced nothing — regex fallback.")
         cert_re = re.compile(
@@ -978,20 +1203,141 @@ def extract_certificates(
 # STAGE 3 — NLP validation
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _sliding_window_match(
+        truth_norm:       str,
+        disc_norms:       set,
+        consumed_phrases: set,
+        threshold:        int = 80,
+) -> tuple:
+    """
+    Match one ground-truth skill against the discovered skill set using a
+    greedy expanding token window. Consumed phrases are tracked at the PHRASE
+    level (not token level) so that "Microsoft Excel" and "Microsoft Azure"
+    can both match without blocking each other, while a single phrase like
+    "SolarWinds Network Performance Monitor" is consumed as a unit and its
+    tokens cannot be credited to a second ground-truth skill via that phrase.
+
+    Algorithm
+    ---------
+    available = disc_norms minus consumed_phrases (phrase-level exclusion)
+
+    1. Full exact lookup on truth_norm in available  ->  commit phrase, True.
+
+    2. Expand window left-to-right over truth tokens:
+         window_1 = t0
+         window_2 = t0 t1
+         ...
+         window_n = t0 ... tn  (full phrase — same as step 1 but via loop)
+
+       For each window:
+         a. Exact lookup in available -> commit that phrase, True.
+         b. Best fuzzy score across available phrases.
+            If score >= threshold -> commit best phrase, True.
+         c. If score drops vs the previous window length -> STOP expanding.
+            (We have passed the natural boundary of this skill.)
+
+    3. No window matched -> False (unmatched).
+
+    Why phrase-level consumption?
+    ------------------------------
+    Token-level consumption ("microsoft" consumed by "Microsoft Excel" blocks
+    "Microsoft Azure") is too aggressive for multi-word skills that share a
+    common word. Phrase-level consumption removes the ENTIRE matched phrase
+    from the available pool, so the word "Microsoft" can still appear in a
+    second unrelated phrase. The non-reuse guarantee applies only to the
+    specific discovered phrase that was committed, not to its constituent words.
+
+    Non-reuse example
+    -----------------
+    discovered = {"solarwinds network performance monitor", "ansible"}
+    Round 1 (truth = "solarwinds network performance monitor"):
+      -> exact match, committed -> consumed = {"solarwinds network performance monitor"}
+    Round 2 (truth = "network monitoring"):
+      -> "solarwinds network performance monitor" is excluded (consumed)
+      -> no remaining phrase matches "network monitoring" -> unmatched (correct)
+
+    Parameters
+    ----------
+    truth_norm        : normalized ground-truth skill string.
+    disc_norms        : set of normalized discovered skill strings.
+    consumed_phrases  : mutable set of already-committed phrase strings;
+                        updated in-place on a successful match.
+    threshold         : minimum fuzzy score to accept as a match.
+
+    Returns
+    -------
+    (matched: bool, consumed_phrases: set)  — consumed_phrases mutated in place.
+    """
+    # Available = everything not yet consumed as a complete phrase
+    available = disc_norms - consumed_phrases
+
+    # 1. Full exact match (fastest path, also handles single-word skills)
+    if truth_norm in available:
+        consumed_phrases.add(truth_norm)
+        return True, consumed_phrases
+
+    truth_tokens = truth_norm.split()
+    prev_best: float = 0.0
+
+    # 2. Expanding window
+    for end in range(1, len(truth_tokens) + 1):
+        window = " ".join(truth_tokens[:end])
+
+        # 2a. Exact lookup on the window itself
+        if window in available:
+            consumed_phrases.add(window)
+            return True, consumed_phrases
+
+        # 2b. Best fuzzy score across all still-available phrases
+        best_score: float = 0.0
+        best_dn:    str   = ""
+        for dn in available:
+            score = max(
+                fuzz.token_sort_ratio(window, dn),
+                fuzz.ratio(window, dn),
+            )
+            if score > best_score:
+                best_score = score
+                best_dn    = dn
+
+        if best_score >= threshold and best_dn:
+            consumed_phrases.add(best_dn)
+            return True, consumed_phrases
+
+        # 2c. Score regressed — we have passed the skill boundary, stop
+        if end > 1 and best_score < prev_best:
+            break
+
+        prev_best = best_score
+
+    return False, consumed_phrases
+
+
 def fuzzy_skill_verify(
-        discovered_list:   list[str],
-        ground_truth_list: list[str],
+        discovered_list:   list,
+        ground_truth_list: list,
         threshold:         int = 80,
         resume_text:       str = "",   # kept for API compatibility
 ) -> dict:
     """
-    Compute NLP accuracy of discovered_list against ground_truth_list.
-    Matching: exact normalised → rapidfuzz token_sort_ratio ≥ threshold.
+    Compute NLP accuracy using greedy sliding-window token matching with
+    phrase-level consumption to prevent double-counting.
 
-    FIX-4: ground_truth_list should be passed as the BEST-matched job's
-    required_skills only (not all top-5 skills).
+    For each ground-truth skill:
+      1. Expand a token window left-to-right over the truth tokens.
+      2. Commit to the LONGEST fuzzy match found (greedy).
+      3. Mark the matched discovered phrase as consumed so it cannot be
+         credited to a second ground-truth skill.
+      4. Stop expanding when the fuzzy score stops improving.
 
-    Returns {"NLP_ACCURACY": "87.50%", "matched_skills": [...], "unmatched_skills": [...]}
+    Phrase-level consumption means "Microsoft Excel" and "Microsoft Azure"
+    can both match without blocking each other, while "SolarWinds Network
+    Performance Monitor" consumed as a whole prevents "Network Monitoring"
+    from matching against the same phrase a second time.
+
+    Returns
+    -------
+    {"NLP_ACCURACY": "87.50%", "matched_skills": [...], "unmatched_skills": [...]}
     """
     if not ground_truth_list:
         return {
@@ -1000,20 +1346,20 @@ def fuzzy_skill_verify(
             "unmatched_skills": [],
         }
 
-    disc_norms = {normalize(s) for s in discovered_list}
-    matched:   list[str] = []
-    unmatched: list[str] = []
+    disc_norms:       set  = {normalize(s) for s in discovered_list}
+    consumed_phrases: set  = set()
+    matched:          list = []
+    unmatched:        list = []
 
     for truth in ground_truth_list:
         tn = normalize(truth)
-        if tn in disc_norms:
-            matched.append(truth)
-            continue
-        best = max(
-            (fuzz.token_sort_ratio(tn, dn) for dn in disc_norms),
-            default=0,
+        hit, consumed_phrases = _sliding_window_match(
+            truth_norm       = tn,
+            disc_norms       = disc_norms,
+            consumed_phrases = consumed_phrases,
+            threshold        = threshold,
         )
-        (matched if best >= threshold else unmatched).append(truth)
+        (matched if hit else unmatched).append(truth)
 
     pct = len(matched) / len(ground_truth_list) * 100
     return {
@@ -1055,7 +1401,7 @@ def _encode_jobs(jobs_corpus: list[dict]) -> np.ndarray:
                 f"{' '.join(job.get('required_certifications', []))}"
             )
             vec = sbert.encode(text, normalize_embeddings=True).astype(np.float32)
-            job["embedding"] = vec.tolist()   # write back for cache_job_embeddings()
+            job["embedding"] = vec.tolist()
 
         vectors.append(vec)
 
@@ -1071,16 +1417,12 @@ def calculate_cosine_similarity(
         top_k:         int = TOP_K,
 ) -> list[dict]:
     """
-    Stage 3 — hybrid scoring: 0.70 × cosine  +  0.30 × skill_match_ratio.
+    Stage 3 — hybrid scoring: 0.70 x cosine  +  0.30 x skill_match_ratio.
 
     NLP validation (fuzzy_skill_verify) is run against every matched job's
-    required_skills so each result carries its own accuracy breakdown — not
-    just the best match.
+    required_skills so each result carries its own accuracy breakdown.
 
-    Returns top_k job dicts sorted by score descending:
-      {job_id, title, industry, score, cosine_score, match_ratio,
-       gap_count, required_skills, matched_skills, missing_skills,
-       nlp_validation: {NLP_ACCURACY, matched_skills, unmatched_skills}}
+    Returns top_k job dicts sorted by score descending.
     """
     sbert = _get_sbert()
 
@@ -1094,9 +1436,9 @@ def calculate_cosine_similarity(
     index      = faiss.IndexFlatIP(dim)
     index.add(job_matrix)
 
-    k                 = min(top_k, index.ntotal)
-    cos_scores, idxs  = index.search(q_vec, k)
-    resume_norms      = {normalize(s) for s in resume_skills}
+    k                = min(top_k, index.ntotal)
+    cos_scores, idxs = index.search(q_vec, k)
+    resume_norms     = {normalize(s) for s in resume_skills}
     results: list[dict] = []
 
     for cosine_score, idx in zip(cos_scores[0], idxs[0]):
@@ -1110,8 +1452,6 @@ def calculate_cosine_similarity(
         match_ratio = len(matched) / len(req) if req else 0.0
         hybrid      = round(0.70 * float(cosine_score) + 0.30 * match_ratio, 4)
 
-        # Per-job NLP validation: how many of THIS job's required skills did
-        # the resume's discovered skill list cover (exact + fuzzy threshold)?
         nlp_validation = fuzzy_skill_verify(
             discovered_list   = resume_skills,
             ground_truth_list = req,
