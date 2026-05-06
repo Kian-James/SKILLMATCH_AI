@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Install CPU-only torch first — prevents pip from pulling the ~2GB GPU build
-# which would instantly blow past 512MB at install time and at runtime
 RUN pip install --no-cache-dir \
     torch==2.4.0+cpu \
     torchvision==0.19.0+cpu \
@@ -26,7 +25,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
-# Force CPU-only mode for torch and disable parallelism overhead
+# Pre-bake EasyOCR models into the image so they never download at runtime
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
+
+# Force CPU-only mode and disable parallelism overhead
 ENV CUDA_VISIBLE_DEVICES=""
 ENV OMP_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
