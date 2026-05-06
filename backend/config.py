@@ -27,6 +27,7 @@ MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
 
 # ── Firebase / Firestore ──────────────────────────────────────────────────────
 FIREBASE_CREDENTIALS_PATH: str    = os.getenv("FIREBASE_CREDENTIALS_PATH", "./firebase_service_account.json")
+FIREBASE_CREDENTIALS_JSON: str    = os.getenv("FIREBASE_CREDENTIALS_JSON", "")  # single-line JSON for Render
 FIRESTORE_JOBS_COLLECTION: str    = os.getenv("FIRESTORE_JOBS_COLLECTION",    "jobs")
 FIRESTORE_RESULTS_COLLECTION: str = os.getenv("FIRESTORE_RESULTS_COLLECTION", "resume_results")
 

@@ -7,7 +7,7 @@ Firestore client singleton.
 import logging
 import os
 
-from config import FIREBASE_CREDENTIALS_PATH
+from config import FIREBASE_CREDENTIALS_PATH, FIREBASE_CREDENTIALS_JSON
 
 log = logging.getLogger(__name__)
 
@@ -32,13 +32,23 @@ def get_db():
         raise RuntimeError("firebase-admin is not installed. Run: pip install firebase-admin")
 
     if not firebase_admin._apps:
-        if not FIREBASE_CREDENTIALS_PATH:
-            raise RuntimeError("FIREBASE_CREDENTIALS_PATH is not set in your .env file.")
-        if not os.path.isfile(FIREBASE_CREDENTIALS_PATH):
-            raise FileNotFoundError(f"Service account file not found: {FIREBASE_CREDENTIALS_PATH}")
-        cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
-        firebase_admin.initialize_app(cred)
-        log.info(f"[firestore] Initialised with: {FIREBASE_CREDENTIALS_PATH}")
+        if FIREBASE_CREDENTIALS_JSON:
+            # Prefer inline JSON string — set FIREBASE_CREDENTIALS_JSON in Render
+            # env vars as a single-line JSON, no secret file needed.
+            import json
+            cred = credentials.Certificate(json.loads(FIREBASE_CREDENTIALS_JSON))
+            firebase_admin.initialize_app(cred)
+            log.info("[firestore] Initialised from FIREBASE_CREDENTIALS_JSON env var.")
+        elif FIREBASE_CREDENTIALS_PATH and os.path.isfile(FIREBASE_CREDENTIALS_PATH):
+            cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+            firebase_admin.initialize_app(cred)
+            log.info(f"[firestore] Initialised from file: {FIREBASE_CREDENTIALS_PATH}")
+        else:
+            raise RuntimeError(
+                "Firebase credentials not found. Set either:\n"
+                "  FIREBASE_CREDENTIALS_JSON — single-line JSON string of serviceAccountKey\n"
+                "  FIREBASE_CREDENTIALS_PATH — path to serviceAccountKey.json file"
+            )
 
     _db = firestore.client()
     log.info("[firestore] Client ready.")
