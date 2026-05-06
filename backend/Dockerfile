@@ -15,8 +15,8 @@ WORKDIR /app
 # Install CPU-only torch first — prevents pip from pulling the ~2GB GPU build
 # which would instantly blow past 512MB at install time and at runtime
 RUN pip install --no-cache-dir \
-    torch==2.2.2+cpu \
-    torchvision==0.17.2+cpu \
+    torch==2.4.0+cpu \
+    torchvision==0.19.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining dependencies
