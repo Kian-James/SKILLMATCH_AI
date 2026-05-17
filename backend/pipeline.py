@@ -13,7 +13,7 @@ import logging
 
 from core.extraction  import extract_text
 from core.skills      import discover_skills_dynamically, extract_skills_section
-from core.certs       import extract_certificates, extract_cert_section
+from core.certs       import discover_certs_dynamically, extract_cert_section
 from core.scoring     import calculate_cosine_similarity
 from core.utils       import normalize
 from db               import load_analyzer_data, cache_job_embeddings, save_resume_result
@@ -61,9 +61,10 @@ def run_pipeline(temp_path: str, file_name: str) -> dict:
     )
 
     # Stage 2B — cert extraction
-    discovered_certificates = extract_certificates(
+    discovered_certificates = discover_certs_dynamically(
         resume_text = resume_text,
-        allowlist   = firestore_certs if firestore_certs else None,
+        jobs_corpus = jobs_corpus,
+        extra_certs = firestore_certs if firestore_certs else None,
     )
 
     # Stage 3 — hybrid scoring + per-job NLP validation

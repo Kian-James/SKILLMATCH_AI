@@ -3,9 +3,6 @@ core/certs.py
 =============
 Stage 2B — Certification extraction.
 
-Locates the CERTIFICATIONS section, calls the LLM, enforces a 10-word-per-item
-guard, and canonicalises against the allowlist when one is provided.
-
 Changes (v7):
   FIXED    Hallucinated certs no longer pass through.
 
@@ -20,6 +17,18 @@ Changes (v7):
            not a key in allow_norm, the item is not in the allowlist and is
            dropped. Items that canonicalize successfully (i.e. the cert was
            OCR-garbled but matched a real allowlist entry) are kept normally.
+
+Changes (v8):
+  CHANGED  Structure now mirrors skills.py exactly.
+
+           - extract_cert_section() returns the raw cert section text,
+             equivalent to extract_skills_section().
+           - discover_certs_dynamically() builds the corpus allowlist from
+             required_certifications, calls the LLM, canonicalises output,
+             runs direct_scan_section() to recover anything the LLM missed,
+             and falls back to fuzzy_scan() if both produce nothing —
+             identical fallback chain to discover_skills_dynamically().
+           - Regex keyword fallback removed.
 """
 
 from __future__ import annotations
@@ -32,8 +41,13 @@ from core.utils import (
     llm_extract_list,
     build_allow_norm_sorted,
     canonicalize,
+    direct_scan_section,
+    fuzzy_scan,
 )
-from core.ocr_correction import build_ocr_corrector
+from core.ocr_correction import (
+    build_ocr_corrector,
+    apply_ocr_corrections,
+)
 
 log = logging.getLogger(__name__)
 
@@ -42,9 +56,10 @@ _CERT_HEADING_RE = re.compile(
     r"professional\s+certifications?|credentials?|accreditations?)",
     re.I | re.M,
     )
-_NEXT_SECTION_RE = re.compile(
-    r"^\s*(experience|education|employment|projects?|awards?|publications?|"
-    r"references?|volunteer|languages?|interests?|activities|summary|objective)",
+_CERT_END_RE = re.compile(
+    r"^\s*(skills?|technical\s+skills?|experience|education|employment|"
+    r"projects?|awards?|publications?|references?|volunteer|languages?|"
+    r"interests?|activities|summary|objective)",
     re.I | re.M,
     )
 
@@ -61,37 +76,60 @@ _CERTS_SYSTEM = (
 
 
 def extract_cert_section(text: str) -> str:
-    """Return raw text of the certification section."""
+    """
+    Return the raw text of the certifications section.
+
+    Equivalent to extract_skills_section() in skills.py — locates the heading
+    via regex and slices until the next recognised section heading.
+    """
     m = _CERT_HEADING_RE.search(text)
     if not m:
         return ""
     rest  = text[m.end():]
-    end_m = _NEXT_SECTION_RE.search(rest)
+    end_m = _CERT_END_RE.search(rest)
     return (rest[: end_m.start()].strip() if end_m else rest.strip())
 
 
-def extract_certificates(
-        resume_text: str,
-        allowlist:   list[str] | None = None,
+def discover_certs_dynamically(
+        resume_text:  str,
+        jobs_corpus:  list[dict],
+        extra_certs:  list[str] | None = None,
 ) -> list[str]:
     """
     Stage 2B — certification extraction via Llama (HF Inference API).
 
-    When an allowlist is provided (derived from Firestore required_certifications),
-    only certs that canonicalise to a known allowlist entry are returned.
-    Hallucinated items that do not match anything in the allowlist are dropped.
+    Mirrors discover_skills_dynamically() in skills.py:
+
+    1. Build corpus allowlist from required_certifications across all jobs.
+    2. Build OcrCorrector from that allowlist.
+    3. Extract cert section text (returns empty if no section found).
+    4. Call LLM to get cert name candidates.
+    5. Canonicalise LLM output against allowlist; drop non-allowlist items.
+    6. direct_scan_section() to recover anything the LLM missed.
+    7. fuzzy_scan() fallback if both produce nothing.
 
     Returns deduplicated certification name strings.
     """
-    section = extract_cert_section(resume_text)
+    # ── 1. Build corpus allowlist ─────────────────────────────────────────────
+    allowlist: set[str] = set()
+    for job in jobs_corpus:
+        allowlist.update(job.get("required_certifications", []))
+    if extra_certs:
+        allowlist.update(extra_certs)
+    allowlist_list = sorted(allowlist)
+    allow_norm     = {normalize(a): a for a in allowlist_list}
+    sorted_pairs   = build_allow_norm_sorted(allowlist_list)
+    corrector      = build_ocr_corrector(allowlist_list)
 
-    # If no cert section exists, return early — do NOT fall back to full resume
-    # text. The LLM will hallucinate certs from skills/work experience otherwise
-    # (e.g. "AWS" extracted from the SKILLS section as a fake certification).
+    # ── 2. Extract cert section ───────────────────────────────────────────────
+    # Do NOT fall back to full resume text — the LLM will hallucinate certs
+    # from skills/work experience sections (e.g. "AWS" as a fake certification).
+    section = extract_cert_section(resume_text)
     if not section:
         log.info("[Certs] No certifications section found — returning empty.")
         return []
 
+    # ── 3. Call LLM ──────────────────────────────────────────────────────────
     user_prompt = (
         f"Extract every professional certification, license, and credential "
         f"from this resume section. "
@@ -102,64 +140,41 @@ def extract_certificates(
         f"Return ONLY a JSON array of certification name strings. No other text."
     )
 
-    raw     = llm_extract_list(_CERTS_SYSTEM, user_prompt, "CERTS")
-    guarded = [" ".join(c.split()[:10]) for c in raw if c.strip()]
+    raw = llm_extract_list(_CERTS_SYSTEM, user_prompt, "CERTS")
 
-    if allowlist:
-        allow_norm   = {normalize(a): a for a in allowlist}
-        sorted_pairs = build_allow_norm_sorted(allowlist)
-        corrector    = build_ocr_corrector(allowlist)
-        seen:   set[str]  = set()
-        result: list[str] = []
+    # ── 4. Canonicalise LLM output ────────────────────────────────────────────
+    seen:      set[str]  = set()
+    canonical: list[str] = []
 
-        for cert in guarded:
-            canon = canonicalize(
-                cert, allow_norm, threshold=75,
-                _sorted_pairs=sorted_pairs, corrector=corrector,
-            )
-            # Drop if canonicalize made no change AND the cert is not in the
-            # allowlist — this catches hallucinated items like "Employee of the
-            # Quarter" that have no real allowlist match.
-            if normalize(canon) == normalize(cert) and normalize(canon) not in allow_norm:
-                log.debug(f"[Certs] Dropped non-allowlist item: {cert!r}")
-                continue
-
-            n = normalize(canon)
-            if n and n not in seen:
-                seen.add(n)
-                result.append(canon)
-
-        guarded = result
-    else:
-        # No allowlist — just deduplicate, keep all LLM output
-        seen_n:  set[str]  = set()
-        deduped: list[str] = []
-        for c in guarded:
-            n = normalize(c)
-            if n not in seen_n:
-                seen_n.add(n)
-                deduped.append(c)
-        guarded = deduped
-
-    if not guarded:
-        log.info("[Certs] LLM produced nothing — regex fallback.")
-        cert_re = re.compile(
-            r"(?i)(certif\w+|licen[cs]\w+|aws|gcp|azure|pmp|cpa|cfa|"
-            r"ccna|comptia|cisco|oracle|google|microsoft|istqb|six\s+sigma)\b"
+    for cert in raw:
+        # Enforce 10-word guard before canonicalisation
+        cert      = " ".join(cert.split()[:10])
+        corrected = apply_ocr_corrections(cert, corrector)
+        canon     = canonicalize(
+            corrected, allow_norm, threshold=75,
+            _sorted_pairs=sorted_pairs, corrector=corrector,
         )
-        seen_fb: set[str] = set()
-        for line in section.splitlines():
-            line  = line.strip()
-            words = line.split()
-            if cert_re.search(line) and 1 <= len(words) <= 10:
-                n = normalize(line)
-                # Also apply allowlist check to regex fallback
-                if allowlist and n not in {normalize(a) for a in allowlist}:
-                    log.debug(f"[Certs/Fallback] Dropped non-allowlist item: {line!r}")
-                    continue
-                if n not in seen_fb:
-                    seen_fb.add(n)
-                    guarded.append(line)
+        if normalize(canon) == normalize(corrected) and normalize(canon) not in allow_norm:
+            log.debug(f"[Certs/LLM] Dropped non-allowlist item: {cert!r}")
+            continue
+        cn = normalize(canon)
+        if cn and cn not in seen:
+            seen.add(cn)
+            canonical.append(canon)
 
-    log.info(f"[Certs] {len(guarded)} certifications discovered.")
-    return guarded
+    # ── 5. Direct scan to recover anything LLM missed ────────────────────────
+    for hit in direct_scan_section(
+            section, sorted_pairs, threshold=82, corrector=corrector, allow_norm=allow_norm
+    ):
+        hn = normalize(hit)
+        if hn and hn not in seen:
+            seen.add(hn)
+            canonical.append(hit)
+
+    # ── 6. Fuzzy fallback if both produced nothing ────────────────────────────
+    if not canonical:
+        log.info("[Certs] LLM + direct scan produced nothing — fuzzy fallback.")
+        canonical = fuzzy_scan(section, allowlist_list)
+
+    log.info(f"[Certs] {len(canonical)} certifications discovered.")
+    return canonical

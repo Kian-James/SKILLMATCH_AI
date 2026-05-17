@@ -25,7 +25,7 @@ import re
 import unicodedata
 
 from core.skills     import discover_skills_dynamically, extract_skills_section
-from core.certs      import extract_certificates, extract_cert_section
+from core.certs      import discover_certs_dynamically, extract_cert_section
 from core.scoring    import calculate_cosine_similarity
 from core.utils      import normalize
 from db              import load_analyzer_data, cache_job_embeddings, save_resume_result
@@ -101,7 +101,7 @@ def run_scan_pipeline_full(raw_text: str, file_name: str) -> dict:
     skills_section_debug = extract_skills_section(
         resume_text,
         allowlist     = firestore_skills if firestore_skills else None,
-        is_native_pdf = is_native,          # triggers split_ocr_blob path
+        is_native_pdf = is_native,
     )
     cert_section_debug = extract_cert_section(resume_text)
 
@@ -114,9 +114,10 @@ def run_scan_pipeline_full(raw_text: str, file_name: str) -> dict:
     )
 
     # Stage 2B — cert extraction
-    discovered_certificates = extract_certificates(
+    discovered_certificates = discover_certs_dynamically(
         resume_text = resume_text,
-        allowlist   = firestore_certs if firestore_certs else None,
+        jobs_corpus = jobs_corpus,
+        extra_certs = firestore_certs if firestore_certs else None,
     )
 
     # Stage 3 — hybrid SBERT/FAISS scoring + per-job NLP validation
@@ -172,19 +173,23 @@ def run_scan_pipeline_targeted(raw_text: str, file_name: str, target_job: str) -
     """
     Targeted-analysis variant (/scan-target-career-analysis).
 
-    Runs all stages but restricts the final output to the one job that matches
-    target_job (exact title first, then substring), mirroring the logic in the
-    /target-career-analysis endpoint in main.py.
+    Runs all pipeline stages then resolves the target job directly from the
+    FULL corpus by title — not from top_5_matches which is score-gated.
+    This ensures aspirational jobs (low current score) are always found.
     """
-    # Run the full pipeline — we need all stages anyway
+    from core.validation import fuzzy_skill_verify
+
+    # Run the full pipeline for skill/cert extraction
     result = run_scan_pipeline_full(raw_text, file_name)
 
-    # Find the target job among all scored matches
-    all_matches: list[dict] = result["top_5_matches"]
-    target_lower = target_job.strip().lower()
+    # ── Resolve target job from full corpus ───────────────────────────────────
+    # load_analyzer_data is cached in memory after the first call so this is
+    # effectively free — no extra Firestore round-trip.
+    _, jobs_corpus_full, _ = load_analyzer_data()
 
-    exact     = [m for m in all_matches if m["title"].lower() == target_lower]
-    substring = [m for m in all_matches if target_lower in m["title"].lower()]
+    target_lower = target_job.strip().lower()
+    exact     = [j for j in jobs_corpus_full if j["title"].lower() == target_lower]
+    substring = [j for j in jobs_corpus_full if target_lower in j["title"].lower()]
     candidates = exact or substring
 
     if not candidates:
@@ -193,47 +198,45 @@ def run_scan_pipeline_targeted(raw_text: str, file_name: str, target_job: str) -
             "Check the title and try again."
         )
 
-    target_match: dict = max(candidates, key=lambda m: m["score"])
+    # Pick the title match with the most required skills (richest ground truth)
+    target_job_doc: dict = max(candidates, key=lambda j: len(j.get("required_skills", [])))
 
-    # Re-run NLP validation specifically against the target job's required skills
-    from core.validation import fuzzy_skill_verify
-
+    # ── NLP validation against the target job ─────────────────────────────────
+    req_skills = target_job_doc.get("required_skills", [])
     nlp = fuzzy_skill_verify(
         discovered_list   = result["discovered_skills"],
-        ground_truth_list = target_match["required_skills"],
+        ground_truth_list = req_skills,
     )
 
-    # Cert gap for the target job
-    from db import load_analyzer_data as _lad
-    _, jobs_corpus, _ = _lad()
-    job_doc    = next((j for j in jobs_corpus if j.get("id") == target_match.get("job_id")), {})
-    req_certs  = job_doc.get("required_certifications", [])
+    # ── Match ratio (no SBERT re-encode needed) ────────────────────────────────
+    resume_norms = {normalize(s) for s in result["discovered_skills"]}
+    matched_now  = [s for s in req_skills if normalize(s) in resume_norms]
+    match_ratio  = round(len(matched_now) / len(req_skills), 4) if req_skills else 0.0
+
+    # ── Cert gap ──────────────────────────────────────────────────────────────
+    req_certs  = target_job_doc.get("required_certifications", [])
     certs_norm = {normalize(c) for c in result["discovered_certs"]}
     matched_certs = [c for c in req_certs if normalize(c) in certs_norm]
     missing_certs = [c for c in req_certs if normalize(c) not in certs_norm]
 
     return {
-        # Scan meta
-        "resume_text":   result["resume_text"],
-        "ocr_quality":   result["ocr_quality"],
-        "text_source":   result["text_source"],
-        # Discovered
+        "resume_text":       result["resume_text"],
+        "ocr_quality":       result["ocr_quality"],
+        "text_source":       result["text_source"],
         "discovered_skills": result["discovered_skills"],
         "discovered_certs":  result["discovered_certs"],
-        # Target job
         "target_job": {
-            "job_id":   target_match.get("job_id", ""),
-            "title":    target_match.get("title",  ""),
-            "industry": target_match.get("industry", ""),
+            "job_id":   target_job_doc.get("id", ""),
+            "title":    target_job_doc.get("title", ""),
+            "industry": target_job_doc.get("industry", ""),
         },
-        # Gap analysis
         "skill_gap": {
-            "required_skills": target_match.get("required_skills", []),
+            "required_skills": req_skills,
             "matched_skills":  nlp["matched_skills"],
             "missing_skills":  nlp["unmatched_skills"],
             "nlp_accuracy":    nlp["NLP_ACCURACY"],
-            "match_ratio":     target_match.get("match_ratio", 0.0),
-            "hybrid_score":    target_match.get("score", 0.0),
+            "match_ratio":     match_ratio,
+            "hybrid_score":    match_ratio,  # no SBERT here; ratio-only score
         },
         "cert_gap": {
             "required_certs": req_certs,

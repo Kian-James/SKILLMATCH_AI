@@ -26,8 +26,9 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-from config   import HOST, PORT, HF_MODEL
-from pipeline import run_pipeline
+from config        import HOST, PORT, HF_MODEL
+from pipeline      import run_pipeline
+from scan_pipeline import run_scan_pipeline_full, run_scan_pipeline_targeted
 
 log = logging.getLogger(__name__)
 
@@ -160,18 +161,24 @@ async def target_career_analysis(
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    # ── 2. Find the target job in the corpus ─────────────────────────────────
-    # run_pipeline already loaded the corpus; re-use top_5_matches which
-    # contains every scored job (pipeline scores all jobs, not just 5).
-    # We match by title using case-insensitive substring search so that
-    # "data scientist" finds "Senior Data Scientist" etc.
-    all_matches: list[dict] = result["top_5_matches"]  # full ranked list
+
+    # ── 2. Find the target job in the full corpus ─────────────────────────────
+    # We search the FULL jobs corpus by title — NOT top_5_matches.
+    # top_5_matches is score-gated to TOP_K (default 5). A job the user
+    # aspires to but currently scores poorly on would never appear there.
+    # The point of this endpoint is to show the gap regardless of current
+    # score, so we resolve the title directly from the corpus.
+    from db       import load_analyzer_data as _load
+    from core.validation import fuzzy_skill_verify
+    from core.utils      import normalize
+
+    _, jobs_corpus_full, _ = _load()
 
     target_lower = target_job.strip().lower()
 
-    # Prefer an exact title match first, then fall back to substring.
-    exact     = [m for m in all_matches if m["title"].lower() == target_lower]
-    substring = [m for m in all_matches if target_lower in m["title"].lower()]
+    # Exact title match first, then substring fallback.
+    exact     = [j for j in jobs_corpus_full if j["title"].lower() == target_lower]
+    substring = [j for j in jobs_corpus_full if target_lower in j["title"].lower()]
     candidates = exact or substring
 
     if not candidates:
@@ -183,44 +190,50 @@ async def target_career_analysis(
             ),
         )
 
-    # Pick the highest-scoring candidate among those that match the title.
-    target_match: dict = max(candidates, key=lambda m: m["score"])
+    # Among all title matches, pick the one with the most required skills
+    # so the gap analysis uses the richest ground truth available.
+    target_job_doc: dict = max(candidates, key=lambda j: len(j.get("required_skills", [])))
 
     # ── 3. NLP validation against the target job ──────────────────────────────
-    from core.validation import fuzzy_skill_verify
-    from core.utils      import normalize
-
     nlp = fuzzy_skill_verify(
         discovered_list   = result["discovered_skills"],
-        ground_truth_list = target_match["required_skills"],
+        ground_truth_list = target_job_doc.get("required_skills", []),
     )
 
-    # ── 4. Cert gap for the target job ────────────────────────────────────────
+    # ── 4. Compute match ratio + hybrid score for this specific job ───────────
+    req_skills   = target_job_doc.get("required_skills", [])
+    resume_norms = {normalize(s) for s in result["discovered_skills"]}
+    matched_now  = [s for s in req_skills if normalize(s) in resume_norms]
+    match_ratio  = round(len(matched_now) / len(req_skills), 4) if req_skills else 0.0
+    # Hybrid score without SBERT (we don't re-encode here) — match_ratio only
+    hybrid_score = match_ratio
+
+    # ── 5. Cert gap for the target job ────────────────────────────────────────
     certs_norm    = {normalize(c) for c in result["discovered_certs"]}
-    req_certs     = target_match.get("required_certs", [])   # may be empty
+    req_certs     = target_job_doc.get("required_certifications", [])
     matched_certs = [c for c in req_certs if normalize(c) in certs_norm]
     missing_certs = [c for c in req_certs if normalize(c) not in certs_norm]
 
-    # ── 5. Assemble focused response ──────────────────────────────────────────
+    # ── 6. Assemble focused response ──────────────────────────────────────────
     return {
         "target_job": {
-            "job_id":   target_match["job_id"],
-            "title":    target_match["title"],
-            "industry": target_match.get("industry", ""),
+            "job_id":   target_job_doc.get("id", ""),
+            "title":    target_job_doc.get("title", ""),
+            "industry": target_job_doc.get("industry", ""),
         },
         "resume_skills": {
-            "discovered_skills":      result["discovered_skills"],
-            "discovered_certs":       result["discovered_certs"],
-            "total_skills_found":     len(result["discovered_skills"]),
-            "total_certs_found":      len(result["discovered_certs"]),
+            "discovered_skills":  result["discovered_skills"],
+            "discovered_certs":   result["discovered_certs"],
+            "total_skills_found": len(result["discovered_skills"]),
+            "total_certs_found":  len(result["discovered_certs"]),
         },
         "skill_gap_analysis": {
-            "required_skills":  target_match["required_skills"],
-            "matched_skills":   nlp["matched_skills"],
-            "missing_skills":   nlp["unmatched_skills"],
-            "nlp_accuracy":     nlp["NLP_ACCURACY"],
-            "match_ratio":      target_match["match_ratio"],
-            "hybrid_score":     target_match["score"],
+            "required_skills": req_skills,
+            "matched_skills":  nlp["matched_skills"],
+            "missing_skills":  nlp["unmatched_skills"],
+            "nlp_accuracy":    nlp["NLP_ACCURACY"],
+            "match_ratio":     match_ratio,
+            "hybrid_score":    hybrid_score,
         },
         "cert_gap_analysis": {
             "required_certs": req_certs,
@@ -229,6 +242,137 @@ async def target_career_analysis(
         },
         "text_acquisition": {
             "text_source": result["text_source"],
+            "ocr_quality": f"{result['ocr_quality']}%",
+            "char_count":  len(result["resume_text"]),
+        },
+    }
+
+
+@app.post("/scan-thesis-full-analysis")
+async def scan_thesis_full_analysis(
+        scanned_text: str  = Form(...),
+        file_name:    str  = Form(...),
+) -> dict:
+    """
+    Full pipeline analysis for a camera-scanned resume.
+
+    Accepts the raw OCR text extracted on-device by ML Kit (Flutter camera
+    scanner).  Stage 1 (PyMuPDF / EasyOCR) is skipped — the text is already
+    extracted.  Stages 2 → 4 (skill extraction, cert extraction, NLP
+    validation, FAISS scoring) run identically to /thesis-full-analysis.
+
+    Form fields
+    -----------
+    scanned_text : full plain-text output from the on-device OCR
+    file_name    : original filename / scan label used for Firestore storage
+    """
+    try:
+        result = run_scan_pipeline_full(scanned_text, file_name)
+    except Exception as exc:
+        log.exception("[API] Scan full-pipeline error")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if not result["top_5_matches"]:
+        raise HTTPException(status_code=500, detail="Scoring returned no results.")
+
+    # FAISS integrity self-check (same as /thesis-full-analysis)
+    from core.ocr_correction import get_sbert
+    _sbert     = get_sbert()
+    resume_vec = (
+        _sbert.encode(result["resume_text"], convert_to_tensor=False)
+        .reshape(1, -1)
+        .astype("float32")
+    )
+    pre_count = _integrity_index.ntotal
+    _integrity_index.add(resume_vec)
+    D, I = _integrity_index.search(resume_vec, 1)
+    faiss_integrity = 100.0 if I[0][0] == pre_count and D[0][0] < 0.0001 else 0.0
+
+    best = result["best"]
+
+    return {
+        "STAGE_1_TEXT_ACQUISITION": {
+            "text_source": result["text_source"],    # "camera_scan_mlkit"
+            "ocr_quality": f"{result['ocr_quality']}%",
+            "char_count":  len(result["resume_text"]),
+            "raw_text":    result["resume_text"],
+        },
+        "STAGE_2_SKILL_EXTRACTION": {
+            "llm_model":                 HF_MODEL,
+            "skills_section_rule_based": result["skills_section_debug"],
+            "discovered_skills":         result["discovered_skills"],
+        },
+        "STAGE_2B_CERT_EXTRACTION": {
+            "llm_model":               HF_MODEL,
+            "cert_section_rule_based": result["cert_section_debug"],
+            "discovered_certificates": result["discovered_certs"],
+        },
+        "STAGE_3_NLP_VALIDATION": {
+            "ground_truth_source": "best_matched_job_required_skills",
+            "ground_truth_count":  len(best["required_skills"]),
+            "nlp_accuracy":        result["nlp_accuracy"],
+            "matched_skills":      result["nlp_verification"]["matched_skills"],
+            "unmatched_skills":    result["nlp_verification"]["unmatched_skills"],
+            "Top_5_Career_Recommendations_NLP": [
+                {
+                    "rank":               rank + 1,
+                    "job_id":             m["job_id"],
+                    "title":              m["title"],
+                    "nlp_accuracy":       m["nlp_validation"]["NLP_ACCURACY"],
+                    "matched_skills":     m["nlp_validation"]["matched_skills"],
+                    "unmatched_skills":   m["nlp_validation"]["unmatched_skills"],
+                    "ground_truth_count": len(m["required_skills"]),
+                }
+                for rank, m in enumerate(result["top_5_matches"])
+            ],
+        },
+        "STAGE_4_FAISS_INTEGRITY": {
+            "score":       f"{faiss_integrity}%",
+            "index_total": _integrity_index.ntotal,
+        },
+    }
+
+
+@app.post("/scan-target-career-analysis")
+async def scan_target_career_analysis(
+        scanned_text: str = Form(...),
+        file_name:    str = Form(...),
+        target_job:   str = Form(...),
+) -> dict:
+    """
+    Targeted career analysis for a camera-scanned resume.
+
+    Same as /target-career-analysis but accepts plain-text from on-device
+    ML Kit OCR instead of a file upload.  All pipeline stages 2 → 4 run
+    identically; Stage 1 is replaced by the camera-scan text-quality check.
+
+    Form fields
+    -----------
+    scanned_text : full plain-text output from the on-device OCR
+    file_name    : original filename / scan label for Firestore
+    target_job   : exact or approximate job title to match against
+    """
+    try:
+        result = run_scan_pipeline_targeted(scanned_text, file_name, target_job)
+    except ValueError as exc:
+        # job not found in corpus
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        log.exception("[API] Scan targeted-pipeline error")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "target_job": result["target_job"],
+        "resume_skills": {
+            "discovered_skills":  result["discovered_skills"],
+            "discovered_certs":   result["discovered_certs"],
+            "total_skills_found": len(result["discovered_skills"]),
+            "total_certs_found":  len(result["discovered_certs"]),
+        },
+        "skill_gap_analysis": result["skill_gap"],
+        "cert_gap_analysis":  result["cert_gap"],
+        "text_acquisition": {
+            "text_source": result["text_source"],    # "camera_scan_mlkit"
             "ocr_quality": f"{result['ocr_quality']}%",
             "char_count":  len(result["resume_text"]),
         },
