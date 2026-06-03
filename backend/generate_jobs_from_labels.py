@@ -53,7 +53,7 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 BATCH_SIZE  = int(os.getenv("DESCRIPTION_BATCH_SIZE", "10"))  # jobs per LLM call
 
 HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
-HF_MODEL   = "meta-llama/Llama-3.1-8B-Instruct:cerebras"
+HF_MODEL   = "meta-llama/Llama-3.1-8B-Instruct"
 
 
 # ── Validate env ──────────────────────────────────────────────────────────────

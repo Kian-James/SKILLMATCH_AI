@@ -17,6 +17,8 @@ import faiss
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from dotenv import load_dotenv
+import logging
+logging.basicConfig(level=logging.INFO)
 
 # Ensure .env is loaded before config values are read
 load_dotenv()
@@ -114,7 +116,6 @@ async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
                     "matched_skills":     m["nlp_validation"]["matched_skills"],
                     "unmatched_skills":   m["nlp_validation"]["unmatched_skills"],
                     "ground_truth_count": len(m["required_skills"]),
-                    "fit_reason":         m.get("fit_reason", ""),
                 }
                 for rank, m in enumerate(result["top_5_matches"])
             ],
@@ -323,7 +324,6 @@ async def scan_thesis_full_analysis(
                     "matched_skills":     m["nlp_validation"]["matched_skills"],
                     "unmatched_skills":   m["nlp_validation"]["unmatched_skills"],
                     "ground_truth_count": len(m["required_skills"]),
-                    "fit_reason":         m.get("fit_reason", ""),
                 }
                 for rank, m in enumerate(result["top_5_matches"])
             ],

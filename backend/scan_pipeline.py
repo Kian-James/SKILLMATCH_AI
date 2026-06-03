@@ -25,7 +25,7 @@ import re
 import unicodedata
 
 from core.skills     import discover_skills_dynamically, extract_skills_section
-from core.certs      import discover_certs_dynamically, extract_cert_section
+from core.certs      import extract_certificates, extract_cert_section
 from core.scoring    import calculate_cosine_similarity
 from core.utils      import normalize
 from db              import load_analyzer_data, cache_job_embeddings, save_resume_result
@@ -101,7 +101,7 @@ def run_scan_pipeline_full(raw_text: str, file_name: str) -> dict:
     skills_section_debug = extract_skills_section(
         resume_text,
         allowlist     = firestore_skills if firestore_skills else None,
-        is_native_pdf = is_native,
+        is_native_pdf = is_native,          # triggers split_ocr_blob path
     )
     cert_section_debug = extract_cert_section(resume_text)
 
@@ -114,10 +114,9 @@ def run_scan_pipeline_full(raw_text: str, file_name: str) -> dict:
     )
 
     # Stage 2B — cert extraction
-    discovered_certificates = discover_certs_dynamically(
+    discovered_certificates = extract_certificates(
         resume_text = resume_text,
-        jobs_corpus = jobs_corpus,
-        extra_certs = firestore_certs if firestore_certs else None,
+        allowlist   = firestore_certs if firestore_certs else None,
     )
 
     # Stage 3 — hybrid SBERT/FAISS scoring + per-job NLP validation

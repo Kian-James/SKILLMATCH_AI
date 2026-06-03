@@ -6,6 +6,8 @@ python-multipart
 # AI & NLP
 # sentence-transformers downloads all-MiniLM-L6-v2 from Hugging Face Hub on first run
 sentence-transformers>=5.4.1
+spacy>=3.7.0
+# Run after install: python -m spacy download en_core_web_sm
 transformers<6.0.0
 faiss-cpu
 rapidfuzz
