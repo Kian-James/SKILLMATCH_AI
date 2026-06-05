@@ -41,48 +41,48 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyCKTsI3un0mY8asZ7_0agQsQzoVue4kKos',
-    appId: '1:771598992448:web:ab9a5e5ae4cf8cbd864ba5',
-    messagingSenderId: '771598992448',
-    projectId: 'skillmatch-ai-27c75',
-    authDomain: 'skillmatch-ai-27c75.firebaseapp.com',
-    storageBucket: 'skillmatch-ai-27c75.firebasestorage.app',
-    measurementId: 'G-KP8WXCEGV3',
+    apiKey: 'AIzaSyC2LAZRTYDI7gkg7BlxdyV3dWgJjh1uMfI',
+    appId: '1:807290065452:web:ab9a6c55a0f039adf83789',
+    messagingSenderId: '807290065452',
+    projectId: 'skillmatch-ai-2c8cd',
+    authDomain: 'skillmatch-ai-2c8cd.firebaseapp.com',
+    storageBucket: 'skillmatch-ai-2c8cd.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCBMO99XUTOx9eUo4QV-cwui8wC0FNB8_A',
-    appId: '1:771598992448:android:8f230354703adef5864ba5',
-    messagingSenderId: '771598992448',
-    projectId: 'skillmatch-ai-27c75',
-    storageBucket: 'skillmatch-ai-27c75.firebasestorage.app',
+    apiKey: 'AIzaSyATlVN0UbOB6a65kgq6ZoJVvKLnxJqCTyk',
+    appId: '1:807290065452:android:bc36ff01ab437329f83789',
+    messagingSenderId: '807290065452',
+    projectId: 'skillmatch-ai-2c8cd',
+    storageBucket: 'skillmatch-ai-2c8cd.firebasestorage.app',
   );
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyBy_HX9XXy5-dqel7MLkBtwI8LKEklDEiQ',
-    appId: '1:771598992448:ios:eb926ac6f1e1218d864ba5',
-    messagingSenderId: '771598992448',
-    projectId: 'skillmatch-ai-27c75',
-    storageBucket: 'skillmatch-ai-27c75.firebasestorage.app',
-    iosClientId: '771598992448-7q8tsaft0cep4ei84a2ctlvacg92g5l1.apps.googleusercontent.com',
+    apiKey: 'AIzaSyAB2jwXI_IziXIAKqt9HV07t1OawBJCFzc',
+    appId: '1:807290065452:ios:4d5523446a762ff5f83789',
+    messagingSenderId: '807290065452',
+    projectId: 'skillmatch-ai-2c8cd',
+    storageBucket: 'skillmatch-ai-2c8cd.firebasestorage.app',
+    androidClientId: '807290065452-bdrccq1nmgme6cn3ev5lu375i125b2v3.apps.googleusercontent.com',
+    iosClientId: '807290065452-609g3m5nunpcb3n70fh3tpon3so9v761.apps.googleusercontent.com',
     iosBundleId: 'com.example.skillmatchAi',
   );
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyBy_HX9XXy5-dqel7MLkBtwI8LKEklDEiQ',
-    appId: '1:771598992448:ios:eb926ac6f1e1218d864ba5',
-    messagingSenderId: '771598992448',
-    projectId: 'skillmatch-ai-27c75',
-    storageBucket: 'skillmatch-ai-27c75.firebasestorage.app',
-    iosClientId: '771598992448-7q8tsaft0cep4ei84a2ctlvacg92g5l1.apps.googleusercontent.com',
+    apiKey: 'AIzaSyAB2jwXI_IziXIAKqt9HV07t1OawBJCFzc',
+    appId: '1:807290065452:ios:4d5523446a762ff5f83789',
+    messagingSenderId: '807290065452',
+    projectId: 'skillmatch-ai-2c8cd',
+    storageBucket: 'skillmatch-ai-2c8cd.firebasestorage.app',
+    androidClientId: '807290065452-bdrccq1nmgme6cn3ev5lu375i125b2v3.apps.googleusercontent.com',
+    iosClientId: '807290065452-609g3m5nunpcb3n70fh3tpon3so9v761.apps.googleusercontent.com',
     iosBundleId: 'com.example.skillmatchAi',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyCKTsI3un0mY8asZ7_0agQsQzoVue4kKos',
-    appId: '1:771598992448:web:44784019a1559a9a864ba5',
-    messagingSenderId: '771598992448',
-    projectId: 'skillmatch-ai-27c75',
-    authDomain: 'skillmatch-ai-27c75.firebaseapp.com',
-    storageBucket: 'skillmatch-ai-27c75.firebasestorage.app',
-    measurementId: 'G-R3F2M5GRXK',
+    apiKey: 'AIzaSyC2LAZRTYDI7gkg7BlxdyV3dWgJjh1uMfI',
+    appId: '1:807290065452:web:7b22eb5549991045f83789',
+    messagingSenderId: '807290065452',
+    projectId: 'skillmatch-ai-2c8cd',
+    authDomain: 'skillmatch-ai-2c8cd.firebaseapp.com',
+    storageBucket: 'skillmatch-ai-2c8cd.firebasestorage.app',
   );
 }
