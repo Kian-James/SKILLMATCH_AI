@@ -6,7 +6,6 @@ venv/
 env/
 .venv/
 dist/
-build/
 *.egg-info/
 .pytest_cache/
 
