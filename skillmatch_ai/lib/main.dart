@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'firebase_options.dart';
 import 'models/models.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
@@ -18,7 +19,9 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   runApp(const ResumeAnalyzerApp());
 }
@@ -26,7 +29,6 @@ Future<void> main() async {
 class ResumeAnalyzerApp extends StatefulWidget {
   const ResumeAnalyzerApp({super.key});
 
-  // Allow child widgets to call ResumeAnalyzerApp.of(context).toggleTheme()
   static _ResumeAnalyzerAppState of(BuildContext context) =>
       context.findAncestorStateOfType<_ResumeAnalyzerAppState>()!;
 
