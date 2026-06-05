@@ -3,21 +3,23 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>771598992448-7q8tsaft0cep4ei84a2ctlvacg92g5l1.apps.googleusercontent.com</string>
+	<string>807290065452-609g3m5nunpcb3n70fh3tpon3so9v761.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.771598992448-7q8tsaft0cep4ei84a2ctlvacg92g5l1</string>
+	<string>com.googleusercontent.apps.807290065452-609g3m5nunpcb3n70fh3tpon3so9v761</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>807290065452-bdrccq1nmgme6cn3ev5lu375i125b2v3.apps.googleusercontent.com</string>
 	<key>API_KEY</key>
-	<string>AIzaSyBy_HX9XXy5-dqel7MLkBtwI8LKEklDEiQ</string>
+	<string>AIzaSyAB2jwXI_IziXIAKqt9HV07t1OawBJCFzc</string>
 	<key>GCM_SENDER_ID</key>
-	<string>771598992448</string>
+	<string>807290065452</string>
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
 	<string>com.example.skillmatchAi</string>
 	<key>PROJECT_ID</key>
-	<string>skillmatch-ai-27c75</string>
+	<string>skillmatch-ai-2c8cd</string>
 	<key>STORAGE_BUCKET</key>
-	<string>skillmatch-ai-27c75.firebasestorage.app</string>
+	<string>skillmatch-ai-2c8cd.firebasestorage.app</string>
 	<key>IS_ADS_ENABLED</key>
 	<false></false>
 	<key>IS_ANALYTICS_ENABLED</key>
@@ -29,6 +31,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:771598992448:ios:eb926ac6f1e1218d864ba5</string>
+	<string>1:807290065452:ios:4d5523446a762ff5f83789</string>
 </dict>
 </plist>
