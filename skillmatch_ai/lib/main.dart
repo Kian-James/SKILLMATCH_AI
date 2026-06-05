@@ -18,34 +18,47 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
-  // Place google-services.json in android/app/
-  // Place GoogleService-Info.plist in ios/Runner/
   await Firebase.initializeApp();
 
   runApp(const ResumeAnalyzerApp());
 }
 
-class ResumeAnalyzerApp extends StatelessWidget {
+class ResumeAnalyzerApp extends StatefulWidget {
   const ResumeAnalyzerApp({super.key});
+
+  // Allow child widgets to call ResumeAnalyzerApp.of(context).toggleTheme()
+  static _ResumeAnalyzerAppState of(BuildContext context) =>
+      context.findAncestorStateOfType<_ResumeAnalyzerAppState>()!;
+
+  @override
+  State<ResumeAnalyzerApp> createState() => _ResumeAnalyzerAppState();
+}
+
+class _ResumeAnalyzerAppState extends State<ResumeAnalyzerApp> {
+  ThemeMode _themeMode = ThemeMode.light;
+
+  void toggleTheme() {
+    setState(() {
+      _themeMode =
+          _themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+    });
+  }
+
+  bool get isDark => _themeMode == ThemeMode.dark;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Resume Analyzer',
+      title: 'SkillMatch AI',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.theme,
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: _themeMode,
       home: const _AuthGate(),
     );
   }
 }
 
-/// Listens to Firebase auth state.
-/// • Signed-in Firebase user  → HomeShell (using Firebase UID as user ID)
-/// • No Firebase session      → LoginScreen
-///
-/// Guest users are handled entirely inside LoginScreen — they never go through
-/// Firebase so this stream never fires for them; LoginScreen pushes directly
-/// to HomeShell with a guest ResumeUser.
 class _AuthGate extends StatelessWidget {
   const _AuthGate();
 
@@ -54,11 +67,11 @@ class _AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
-        // Waiting for Firebase to initialise
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
+          return Scaffold(
             body: Center(
-              child: CircularProgressIndicator(color: AppTheme.teal500),
+              child:
+                  CircularProgressIndicator(color: AppColors.of(context).brand),
             ),
           );
         }
@@ -66,12 +79,11 @@ class _AuthGate extends StatelessWidget {
         final firebaseUser = snap.data;
 
         if (firebaseUser != null) {
-          // Rebuild ResumeUser from the current Firebase user
           final user = ResumeUser.fromFirebase(
-            uid:         firebaseUser.uid,
+            uid: firebaseUser.uid,
             displayName: firebaseUser.displayName,
-            email:       firebaseUser.email,
-            photoUrl:    firebaseUser.photoURL,
+            email: firebaseUser.email,
+            photoUrl: firebaseUser.photoURL,
           );
           return HomeShell(user: user);
         }

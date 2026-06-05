@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
 import '../theme.dart';
 
 /// Glowing stat metric card
@@ -15,42 +16,37 @@ class StatCard extends StatelessWidget {
     super.key,
     required this.label,
     required this.value,
-    this.valueColor = AppTheme.textPrimary,
+    this.valueColor = AppTheme.teal500,
     required this.icon,
   });
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.navy800,
+        color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(color: c.cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: AppTheme.textTertiary, size: 18),
+          Icon(icon, color: c.textTertiary, size: 18),
           const SizedBox(height: 10),
-          Text(
-            value,
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 26,
-              fontWeight: FontWeight.w700,
-              color: valueColor,
-              height: 1,
-            ),
-          ),
+          Text(value,
+              style: GoogleFonts.spaceGrotesk(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w700,
+                  color: valueColor,
+                  height: 1)),
           const SizedBox(height: 4),
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              color: AppTheme.textTertiary,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          Text(label,
+              style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: c.textTertiary,
+                  fontWeight: FontWeight.w500)),
         ],
       ),
     );
@@ -102,11 +98,14 @@ class SkillChip extends StatelessWidget {
   final String label;
   final SkillChipType type;
 
-  const SkillChip({super.key, required this.label, this.type = SkillChipType.neutral});
+  const SkillChip(
+      {super.key, required this.label, this.type = SkillChipType.neutral});
 
   @override
   Widget build(BuildContext context) {
-    Color bg, border, text;
+    final c = AppColors.of(context);
+    final Color bg, border, text;
+
     switch (type) {
       case SkillChipType.matched:
         bg = AppTheme.green500.withOpacity(0.12);
@@ -119,9 +118,9 @@ class SkillChip extends StatelessWidget {
         text = AppTheme.red400;
         break;
       case SkillChipType.neutral:
-        bg = AppTheme.navy700;
-        border = AppTheme.cardBorder;
-        text = AppTheme.textSecondary;
+        bg = c.navy700;
+        border = c.cardBorder;
+        text = c.textSecondary;
         break;
     }
 
@@ -132,14 +131,9 @@ class SkillChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(7),
         border: Border.all(color: border, width: 0.8),
       ),
-      child: Text(
-        label,
-        style: GoogleFonts.inter(
-          fontSize: 12,
-          color: text,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
+      child: Text(label,
+          style: GoogleFonts.inter(
+              fontSize: 12, color: text, fontWeight: FontWeight.w500)),
     );
   }
 }
@@ -154,28 +148,28 @@ class LabeledDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return Row(
       children: [
-        Expanded(child: Container(height: 1, color: AppTheme.divider)),
+        Expanded(child: Container(height: 1, color: c.divider)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Text(
             label.toUpperCase(),
             style: GoogleFonts.inter(
-              fontSize: 10,
-              color: AppTheme.textTertiary,
-              letterSpacing: 1.2,
-              fontWeight: FontWeight.w600,
-            ),
+                fontSize: 10,
+                color: c.textTertiary,
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w600),
           ),
         ),
-        Expanded(child: Container(height: 1, color: AppTheme.divider)),
+        Expanded(child: Container(height: 1, color: c.divider)),
       ],
     );
   }
 }
 
-/// NLP accuracy ring indicator
+/// Match score ring indicator (replaces "NLP accuracy ring")
 class AccuracyRing extends StatelessWidget {
   final String accuracy; // e.g. "87.50%"
   final double size;
@@ -196,6 +190,7 @@ class AccuracyRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return SizedBox(
       width: size,
       height: size,
@@ -208,7 +203,7 @@ class AccuracyRing extends StatelessWidget {
             child: CircularProgressIndicator(
               value: _value,
               strokeWidth: 5,
-              backgroundColor: AppTheme.navy600,
+              backgroundColor: c.navy600,
               valueColor: AlwaysStoppedAnimation<Color>(_color),
               strokeCap: StrokeCap.round,
             ),
@@ -219,18 +214,13 @@ class AccuracyRing extends StatelessWidget {
               Text(
                 accuracy.replaceAll('%', ''),
                 style: GoogleFonts.spaceGrotesk(
-                  fontSize: size * 0.22,
-                  fontWeight: FontWeight.w700,
-                  color: _color,
-                ),
+                    fontSize: size * 0.22,
+                    fontWeight: FontWeight.w700,
+                    color: _color),
               ),
-              Text(
-                '%',
-                style: GoogleFonts.inter(
-                  fontSize: size * 0.12,
-                  color: AppTheme.textTertiary,
-                ),
-              ),
+              Text('%',
+                  style: GoogleFonts.inter(
+                      fontSize: size * 0.12, color: c.textTertiary)),
             ],
           ),
         ],
@@ -254,6 +244,7 @@ class AvatarCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       width: size,
@@ -263,13 +254,13 @@ class AvatarCircle extends StatelessWidget {
         gradient: LinearGradient(
           colors: isSelected
               ? [AppTheme.teal500, AppTheme.teal300]
-              : [AppTheme.navy600, AppTheme.navy500],
+              : [c.navy600, c.navy500],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         border: isSelected
-            ? Border.all(color: AppTheme.teal500, width: 2)
-            : Border.all(color: AppTheme.cardBorder),
+            ? Border.all(color: c.brand, width: 2)
+            : Border.all(color: c.cardBorder),
       ),
       child: Center(
         child: Text(
@@ -277,7 +268,7 @@ class AvatarCircle extends StatelessWidget {
           style: GoogleFonts.spaceGrotesk(
             fontSize: size * 0.35,
             fontWeight: FontWeight.w700,
-            color: isSelected ? AppTheme.navy900 : AppTheme.textSecondary,
+            color: isSelected ? AppTheme.navy900 : c.textSecondary,
           ),
         ),
       ),
@@ -318,6 +309,7 @@ class _ShimmerCardState extends State<ShimmerCard>
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return AnimatedBuilder(
       animation: _anim,
       builder: (_, __) {
@@ -333,11 +325,7 @@ class _ShimmerCardState extends State<ShimmerCard>
                 _anim.value.clamp(0.0, 1.0),
                 (_anim.value + 0.3).clamp(0.0, 1.0),
               ],
-              colors: const [
-                AppTheme.navy800,
-                AppTheme.navy600,
-                AppTheme.navy800,
-              ],
+              colors: [c.navy800, c.navy600, c.navy800],
             ),
           ),
         );
@@ -354,20 +342,18 @@ class TealBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: AppTheme.teal500.withOpacity(0.15),
+        color: c.brand.withOpacity(0.15),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: AppTheme.teal500.withOpacity(0.3)),
+        border: Border.all(color: c.brand.withOpacity(0.3)),
       ),
       child: Text(
         text,
         style: GoogleFonts.inter(
-          fontSize: 11,
-          color: AppTheme.teal400,
-          fontWeight: FontWeight.w600,
-        ),
+            fontSize: 11, color: c.brandSoft, fontWeight: FontWeight.w600),
       ),
     );
   }

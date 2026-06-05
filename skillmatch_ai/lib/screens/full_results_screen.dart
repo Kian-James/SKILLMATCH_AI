@@ -1,7 +1,4 @@
 // lib/screens/full_results_screen.dart
-// Displays /thesis-full-analysis (and /scan-thesis-full-analysis) results.
-// Shows all 4 pipeline stages: text acquisition, skill/cert extraction,
-// Top-5 NLP recommendations, and FAISS integrity.
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -25,6 +22,7 @@ class FullResultsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Full Analysis'),
@@ -44,41 +42,41 @@ class FullResultsScreen extends StatelessWidget {
             _buildScanMeta(context),
             const SizedBox(height: 20),
 
-            // ── Stage 1 ──────────────────────────────────────────────────
-            _stageHeader(context, '1', 'Text Acquisition'),
+            // ── Step 1: How we read the resume ───────────────────────────
+            _stepHeader(context, '1', 'Resume Reading'),
             const SizedBox(height: 12),
-            _buildStage1(context),
+            _buildStep1(context),
             const SizedBox(height: 24),
 
-            // ── Stage 2 — Skills ─────────────────────────────────────────
-            _stageHeader(context, '2', 'Skill Extraction'),
+            // ── Step 2: Skills found ──────────────────────────────────────
+            _stepHeader(context, '2', 'Skills Found'),
             const SizedBox(height: 12),
             _buildSkillChips(context),
             const SizedBox(height: 24),
 
-            // ── Stage 2B — Certs ─────────────────────────────────────────
+            // ── Step 2B: Certifications ───────────────────────────────────
             if (record.certCount > 0) ...[
-              _stageHeader(context, '2B', 'Certification Extraction'),
+              _stepHeader(context, '2B', 'Certifications'),
               const SizedBox(height: 12),
               _buildCertChips(context),
               const SizedBox(height: 24),
             ],
 
-            // ── Stage 3 — Top 5 NLP ──────────────────────────────────────
-            _stageHeader(context, '3', 'Top Career Recommendations'),
+            // ── Step 3: Career matches ────────────────────────────────────
+            _stepHeader(context, '3', 'Best Career Matches'),
             const SizedBox(height: 4),
             Text(
-              'Ranked by hybrid score (SBERT + skill match ratio)',
+              'Ranked by how well your skills align with each role',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 14),
             _buildTop5(context),
             const SizedBox(height: 24),
 
-            // ── Stage 4 — FAISS ──────────────────────────────────────────
-            _stageHeader(context, '4', 'FAISS Integrity Check'),
+            // ── Step 4: System check ──────────────────────────────────────
+            _stepHeader(context, '4', 'Analysis Quality Check'),
             const SizedBox(height: 12),
-            _buildFaiss(context),
+            _buildQualityCheck(context),
             const SizedBox(height: 32),
           ],
         ),
@@ -89,26 +87,27 @@ class FullResultsScreen extends StatelessWidget {
   // ── Scan meta header ──────────────────────────────────────────────────────
 
   Widget _buildScanMeta(BuildContext context) {
+    final c = AppColors.of(context);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.navy800,
+        color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.teal500.withOpacity(0.25)),
+        border: Border.all(color: c.brand.withOpacity(0.25)),
       ),
       child: Row(children: [
         Container(
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: AppTheme.teal500.withOpacity(0.1),
+            color: c.brand.withOpacity(0.1),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const Icon(Icons.grid_view_rounded,
-              color: AppTheme.teal500, size: 20),
+          child: Icon(Icons.grid_view_rounded, color: c.brand, size: 20),
         ),
         const SizedBox(width: 12),
-        Expanded(child: Column(
+        Expanded(
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(record.fileName,
@@ -117,65 +116,67 @@ class FullResultsScreen extends StatelessWidget {
             const SizedBox(height: 3),
             Text(
               DateFormat('MMM d, yyyy  hh:mm a').format(record.scannedAt),
-              style: GoogleFonts.inter(
-                  fontSize: 11, color: AppTheme.textTertiary),
+              style: GoogleFonts.inter(fontSize: 11, color: c.textTertiary),
             ),
           ],
         )),
-        // Upload mode badge
-        _modeBadge(record.uploadMode),
+        _modeBadge(context, record.uploadMode),
       ]),
     );
   }
 
-  Widget _modeBadge(String mode) {
+  Widget _modeBadge(BuildContext context, String mode) {
+    final c = AppColors.of(context);
     final label = switch (mode) {
-      'pdf'   => 'PDF',
+      'pdf' => 'PDF',
       'image' => 'Image',
-      'scan'  => 'Scan',
-      _       => mode.toUpperCase(),
+      'scan' => 'Camera',
+      _ => mode.toUpperCase(),
     };
     final icon = switch (mode) {
-      'pdf'   => Icons.picture_as_pdf_outlined,
+      'pdf' => Icons.picture_as_pdf_outlined,
       'image' => Icons.image_outlined,
-      'scan'  => Icons.document_scanner_outlined,
-      _       => Icons.file_present_outlined,
+      'scan' => Icons.document_scanner_outlined,
+      _ => Icons.file_present_outlined,
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: AppTheme.navy700,
+        color: c.navy700,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(color: c.cardBorder),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 13, color: AppTheme.textTertiary),
+        Icon(icon, size: 13, color: c.textTertiary),
         const SizedBox(width: 5),
-        Text(label, style: GoogleFonts.inter(
-            fontSize: 11, color: AppTheme.textTertiary,
-            fontWeight: FontWeight.w600)),
+        Text(label,
+            style: GoogleFonts.inter(
+                fontSize: 11,
+                color: c.textTertiary,
+                fontWeight: FontWeight.w600)),
       ]),
     );
   }
 
-  // ── Stage header ──────────────────────────────────────────────────────────
+  // ── Step header ──────────────────────────────────────────────────────────
 
-  Widget _stageHeader(BuildContext context, String number, String title) {
+  Widget _stepHeader(BuildContext context, String number, String title) {
+    final c = AppColors.of(context);
     return Row(children: [
       Container(
         width: 28,
         height: 28,
         decoration: BoxDecoration(
-          color: AppTheme.teal500.withOpacity(0.12),
+          color: c.brand.withOpacity(0.12),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.teal500.withOpacity(0.3)),
+          border: Border.all(color: c.brand.withOpacity(0.3)),
         ),
         child: Center(
           child: Text(number,
               style: GoogleFonts.spaceGrotesk(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  color: AppTheme.teal400)),
+                  color: c.brandSoft)),
         ),
       ),
       const SizedBox(width: 10),
@@ -183,87 +184,105 @@ class FullResultsScreen extends StatelessWidget {
     ]);
   }
 
-  // ── Stage 1 ───────────────────────────────────────────────────────────────
+  // ── Step 1: Resume reading ────────────────────────────────────────────────
 
-  Widget _buildStage1(BuildContext context) {
+  Widget _buildStep1(BuildContext context) {
+    final c = AppColors.of(context);
     final isCamera = record.uploadMode == 'scan';
+
+    // Human-friendly source label
+    final sourceLabel = switch (record.uploadMode) {
+      'pdf' => 'PDF file',
+      'image' => 'Image file',
+      'scan' => 'Camera scan',
+      _ => record.uploadMode,
+    };
+
+    // Human-friendly reading quality label
+    final qualityLabel = switch (record.uploadMode) {
+      'pdf' => 'High quality — text extracted directly',
+      'scan' => 'Good quality — text recognised from camera',
+      _ => 'Good quality — text recognised from image',
+    };
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.navy800,
+        color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(color: c.cardBorder),
       ),
       child: Column(children: [
-        _metaRow(context, 'Source',
-            isCamera ? 'Camera Scan (ML Kit)' : record.uploadMode.toUpperCase()),
-        const Divider(height: 16, color: AppTheme.divider),
-        _metaRow(context, 'Skills extracted', '${record.skillCount} skills  •  ${record.certCount} certs'),
-        const Divider(height: 16, color: AppTheme.divider),
-        // OCR quality bar
+        _metaRow(context, 'Source', sourceLabel),
+        Divider(height: 16, color: c.divider),
+        _metaRow(context, 'Found',
+            '${record.skillCount} skills  •  ${record.certCount} certificates'),
+        Divider(height: 16, color: c.divider),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('OCR Quality', style: Theme.of(context).textTheme.bodyMedium),
+          Text('Reading quality',
+              style: Theme.of(context).textTheme.bodyMedium),
           Text(
-            record.uploadMode == 'pdf' ? 'Native PDF' : 'EasyOCR',
+            qualityLabel,
             style: GoogleFonts.inter(
-                fontSize: 12,
-                color: AppTheme.teal400,
-                fontWeight: FontWeight.w500),
+                fontSize: 12, color: c.brandSoft, fontWeight: FontWeight.w500),
           ),
         ]),
       ]),
     );
   }
 
-  // ── Stage 2 — Skills ──────────────────────────────────────────────────────
+  // ── Step 2: Skills ────────────────────────────────────────────────────────
 
   Widget _buildSkillChips(BuildContext context) {
+    final c = AppColors.of(context);
     if (record.skills.isEmpty) {
-      return _emptyBox(context, 'No skills discovered');
+      return _emptyBox(context, 'No skills were found in your resume');
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        const Icon(Icons.psychology_outlined,
-            color: AppTheme.teal500, size: 15),
+        Icon(Icons.psychology_outlined, color: c.brand, size: 15),
         const SizedBox(width: 7),
-        Text('${record.skillCount} skills discovered',
-            style: GoogleFonts.inter(
-                fontSize: 12, color: AppTheme.textSecondary)),
+        Text('${record.skillCount} skills found',
+            style: GoogleFonts.inter(fontSize: 12, color: c.textSecondary)),
       ]),
       const SizedBox(height: 10),
-      Wrap(spacing: 7, runSpacing: 7,
+      Wrap(
+          spacing: 7,
+          runSpacing: 7,
           children: record.skills
               .map((s) => SkillChip(label: s, type: SkillChipType.neutral))
               .toList()),
     ]);
   }
 
-  // ── Stage 2B — Certs ──────────────────────────────────────────────────────
+  // ── Step 2B: Certs ────────────────────────────────────────────────────────
 
   Widget _buildCertChips(BuildContext context) {
+    final c = AppColors.of(context);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        const Icon(Icons.verified_outlined,
-            color: AppTheme.amber500, size: 15),
+        Icon(Icons.verified_outlined, color: AppTheme.amber500, size: 15),
         const SizedBox(width: 7),
         Text('${record.certCount} certifications found',
-            style: GoogleFonts.inter(
-                fontSize: 12, color: AppTheme.textSecondary)),
+            style: GoogleFonts.inter(fontSize: 12, color: c.textSecondary)),
       ]),
       const SizedBox(height: 10),
-      Wrap(spacing: 7, runSpacing: 7,
+      Wrap(
+          spacing: 7,
+          runSpacing: 7,
           children: record.certs
-              .map((c) => SkillChip(label: c, type: SkillChipType.neutral))
+              .map(
+                  (cert) => SkillChip(label: cert, type: SkillChipType.neutral))
               .toList()),
     ]);
   }
 
-  // ── Stage 3 — Top 5 ───────────────────────────────────────────────────────
+  // ── Step 3: Top 5 ─────────────────────────────────────────────────────────
 
   Widget _buildTop5(BuildContext context) {
     final matches = record.top5Matches;
     if (matches.isEmpty) {
-      return _emptyBox(context, 'No match data available');
+      return _emptyBox(context, 'No career matches available');
     }
     return Column(
       children: matches.asMap().entries.map((e) {
@@ -275,9 +294,10 @@ class FullResultsScreen extends StatelessWidget {
     );
   }
 
-  // ── Stage 4 — FAISS ───────────────────────────────────────────────────────
+  // ── Step 4: Quality check (was FAISS integrity) ───────────────────────────
 
-  Widget _buildFaiss(BuildContext context) {
+  Widget _buildQualityCheck(BuildContext context) {
+    final c = AppColors.of(context);
     final score = record.faissScore;
     final isPassing = score == '100.0%' || score == '100%';
     final color = isPassing ? AppTheme.green500 : AppTheme.red500;
@@ -285,10 +305,9 @@ class FullResultsScreen extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.navy800,
+        color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-            color: color.withOpacity(0.25)),
+        border: Border.all(color: color.withOpacity(0.25)),
       ),
       child: Row(children: [
         Container(
@@ -305,54 +324,57 @@ class FullResultsScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 16),
-        Expanded(child: Column(
+        Expanded(
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Integrity Score',
+            Text('Analysis complete',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
               isPassing
-                  ? 'Vector stored and retrieved correctly'
-                  : 'Integrity check failed — vector mismatch',
-              style: GoogleFonts.inter(
-                  fontSize: 12, color: AppTheme.textSecondary),
+                  ? 'Your results were stored and verified successfully'
+                  : 'Something went wrong saving your results — try again',
+              style: GoogleFonts.inter(fontSize: 12, color: c.textSecondary),
             ),
           ],
         )),
-        Text(score,
+        Text(isPassing ? '✓' : '!',
             style: GoogleFonts.spaceGrotesk(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: color)),
+                fontSize: 22, fontWeight: FontWeight.w700, color: color)),
       ]),
     );
   }
 
   // ── Shared helpers ────────────────────────────────────────────────────────
 
-  Widget _metaRow(BuildContext context, String key, String value) =>
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(key, style: Theme.of(context).textTheme.bodyMedium),
-        Text(value,
-            style: GoogleFonts.inter(
-                fontSize: 12,
-                color: AppTheme.textSecondary,
-                fontWeight: FontWeight.w500)),
-      ]);
+  Widget _metaRow(BuildContext context, String key, String value) {
+    final c = AppColors.of(context);
+    return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+      Text(key, style: Theme.of(context).textTheme.bodyMedium),
+      Text(value,
+          style: GoogleFonts.inter(
+              fontSize: 12,
+              color: c.textSecondary,
+              fontWeight: FontWeight.w500)),
+    ]);
+  }
 
-  Widget _emptyBox(BuildContext context, String msg) => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: AppTheme.navy800,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: AppTheme.cardBorder),
-    ),
-    child: Text(msg, style: Theme.of(context).textTheme.bodyMedium),
-  );
+  Widget _emptyBox(BuildContext context, String msg) {
+    final c = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: c.navy800,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: c.cardBorder),
+      ),
+      child: Text(msg, style: Theme.of(context).textTheme.bodyMedium),
+    );
+  }
 }
 
-// ── Top 5 expandable card ─────────────────────────────────────────────────────
+// ── Career match expandable card ──────────────────────────────────────────────
 
 class _Top5Card extends StatefulWidget {
   final Top5Match match;
@@ -373,8 +395,7 @@ class _Top5CardState extends State<_Top5Card>
   @override
   void initState() {
     super.initState();
-    // Auto-expand the #1 match
-    _expanded = widget.isTop;
+    _expanded = widget.isTop; // auto-expand the #1 match
     _ctrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 250));
     _expandAnim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
@@ -393,35 +414,28 @@ class _Top5CardState extends State<_Top5Card>
   }
 
   Color get _rankColor => switch (widget.match.rank) {
-    1 => AppTheme.teal500,
-    2 => AppTheme.green500,
-    3 => AppTheme.amber500,
-    _ => AppTheme.textTertiary,
-  };
-
-  Color get _accuracyColor {
-    final v = widget.match.accuracyValue;
-    if (v >= 75) return AppTheme.green500;
-    if (v >= 50) return AppTheme.amber500;
-    return AppTheme.red500;
-  }
+        1 => AppTheme.teal500,
+        2 => AppTheme.green500,
+        3 => AppTheme.amber500,
+        _ => AppTheme.textTertiary,
+      };
 
   @override
   Widget build(BuildContext context) {
     final m = widget.match;
+    final c = AppColors.of(context);
+
     return Container(
       decoration: BoxDecoration(
-        color: AppTheme.navy800,
+        color: c.navy800,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: widget.isTop
-              ? AppTheme.teal500.withOpacity(0.35)
-              : AppTheme.cardBorder,
+          color: widget.isTop ? c.brand.withOpacity(0.35) : c.cardBorder,
           width: widget.isTop ? 1.5 : 1,
         ),
       ),
       child: Column(children: [
-        // ── Header row ─────────────────────────────────────────────────
+        // ── Header row ────────────────────────────────────────────────
         GestureDetector(
           onTap: _toggle,
           behavior: HitTestBehavior.opaque,
@@ -446,22 +460,27 @@ class _Top5CardState extends State<_Top5Card>
               ),
               const SizedBox(width: 12),
 
-              // Title + ground truth count
-              Expanded(child: Column(
+              // Title + skill requirement count
+              Expanded(
+                  child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(m.title,
                       style: Theme.of(context).textTheme.titleMedium,
                       overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 2),
-                  Text('${m.groundTruthCount} required skills',
-                      style: GoogleFonts.inter(
-                          fontSize: 11, color: AppTheme.textTertiary)),
+                  Text(
+                    m.industry.isNotEmpty
+                        ? m.industry
+                        : '${m.groundTruthCount} skills required',
+                    style:
+                        GoogleFonts.inter(fontSize: 11, color: c.textTertiary),
+                  ),
                 ],
               )),
               const SizedBox(width: 10),
 
-              // Accuracy ring (small)
+              // Match score ring
               AccuracyRing(accuracy: m.nlpAccuracy, size: 48),
               const SizedBox(width: 8),
 
@@ -469,48 +488,46 @@ class _Top5CardState extends State<_Top5Card>
               AnimatedRotation(
                 turns: _expanded ? 0.5 : 0,
                 duration: const Duration(milliseconds: 250),
-                child: const Icon(Icons.keyboard_arrow_down_rounded,
-                    color: AppTheme.textTertiary, size: 20),
+                child: Icon(Icons.keyboard_arrow_down_rounded,
+                    color: c.textTertiary, size: 20),
               ),
             ]),
           ),
         ),
 
-        // ── Expanded body ───────────────────────────────────────────────
+        // ── Expanded body ──────────────────────────────────────────────
         SizeTransition(
           sizeFactor: _expandAnim,
           child: Column(children: [
-            Divider(height: 1, color: AppTheme.divider,
-                indent: 14, endIndent: 14),
+            Divider(height: 1, color: c.divider, indent: 14, endIndent: 14),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Fit Reason ────────────────────────────────────────
+                  // ── Why this role fits ────────────────────────────────
                   if (m.fitReason.isNotEmpty) ...[
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
-                        color: AppTheme.teal500.withOpacity(0.07),
+                        color: c.brand.withOpacity(0.07),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color: AppTheme.teal500.withOpacity(0.2)),
+                        border: Border.all(color: c.brand.withOpacity(0.2)),
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Icon(Icons.lightbulb_outline_rounded,
-                              color: AppTheme.teal400, size: 14),
+                              color: c.brandSoft, size: 14),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               m.fitReason,
                               style: GoogleFonts.inter(
                                 fontSize: 12,
-                                color: AppTheme.teal400,
+                                color: c.brandSoft,
                                 height: 1.5,
                               ),
                             ),
@@ -521,32 +538,38 @@ class _Top5CardState extends State<_Top5Card>
                     const SizedBox(height: 14),
                   ],
 
-                  // Matched
+                  // ── Skills you already have ───────────────────────────
                   if (m.matchedSkills.isNotEmpty) ...[
-                    _sectionLabel(context,
+                    _sectionLabel(
+                        context,
                         Icons.check_circle_outline_rounded,
                         AppTheme.green500,
-                        '${m.matchedSkills.length} Matched'),
+                        'Skills you already have (${m.matchedSkills.length})'),
                     const SizedBox(height: 8),
-                    Wrap(spacing: 6, runSpacing: 6,
+                    Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
                         children: m.matchedSkills
                             .map((s) => SkillChip(
-                            label: s, type: SkillChipType.matched))
+                                label: s, type: SkillChipType.matched))
                             .toList()),
                     const SizedBox(height: 14),
                   ],
 
-                  // Missing
+                  // ── Skills to develop ─────────────────────────────────
                   if (m.unmatchedSkills.isNotEmpty) ...[
-                    _sectionLabel(context,
+                    _sectionLabel(
+                        context,
                         Icons.radio_button_unchecked_rounded,
                         AppTheme.red500,
-                        '${m.unmatchedSkills.length} Missing'),
+                        'Skills to develop (${m.unmatchedSkills.length})'),
                     const SizedBox(height: 8),
-                    Wrap(spacing: 6, runSpacing: 6,
+                    Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
                         children: m.unmatchedSkills
                             .map((s) => SkillChip(
-                            label: s, type: SkillChipType.missing))
+                                label: s, type: SkillChipType.missing))
                             .toList()),
                   ],
                 ],
@@ -565,9 +588,7 @@ class _Top5CardState extends State<_Top5Card>
       const SizedBox(width: 6),
       Text(label,
           style: GoogleFonts.spaceGrotesk(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: color)),
+              fontSize: 12, fontWeight: FontWeight.w600, color: color)),
     ]);
   }
 }

@@ -112,10 +112,12 @@ async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
                     "rank":               rank + 1,
                     "job_id":             m["job_id"],
                     "title":              m["title"],
+                    "industry":           m.get("industry", ""),
                     "nlp_accuracy":       m["nlp_validation"]["NLP_ACCURACY"],
                     "matched_skills":     m["nlp_validation"]["matched_skills"],
                     "unmatched_skills":   m["nlp_validation"]["unmatched_skills"],
                     "ground_truth_count": len(m["required_skills"]),
+                    "fit_reason":         m.get("fit_reason", ""),
                 }
                 for rank, m in enumerate(result["top_5_matches"])
             ],
@@ -320,10 +322,12 @@ async def scan_thesis_full_analysis(
                     "rank":               rank + 1,
                     "job_id":             m["job_id"],
                     "title":              m["title"],
+                    "industry":           m.get("industry", ""),
                     "nlp_accuracy":       m["nlp_validation"]["NLP_ACCURACY"],
                     "matched_skills":     m["nlp_validation"]["matched_skills"],
                     "unmatched_skills":   m["nlp_validation"]["unmatched_skills"],
                     "ground_truth_count": len(m["required_skills"]),
+                    "fit_reason":         m.get("fit_reason", ""),
                 }
                 for rank, m in enumerate(result["top_5_matches"])
             ],

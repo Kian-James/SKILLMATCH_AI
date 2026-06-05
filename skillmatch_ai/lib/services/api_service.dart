@@ -15,11 +15,12 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+
 import '../models/models.dart';
 
 class ApiService {
   // ── Change this to your backend host ─────────────────────────────────────
-  static const String baseUrl = 'http://192.168.0.108:8000';
+  static const String baseUrl = 'http://192.168.0.215:8000';
   static const _timeout = Duration(minutes: 3);
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -65,8 +66,8 @@ class ApiService {
     final req = http.MultipartRequest(
         'POST', Uri.parse('$baseUrl/scan-target-career-analysis'));
     req.fields['scanned_text'] = scannedText;
-    req.fields['file_name']    = fileName;
-    req.fields['target_job']   = targetJob;
+    req.fields['file_name'] = fileName;
+    req.fields['target_job'] = targetJob;
     return _parseTarget(req);
   }
 
@@ -108,7 +109,7 @@ class ApiService {
     final req = http.MultipartRequest(
         'POST', Uri.parse('$baseUrl/scan-thesis-full-analysis'));
     req.fields['scanned_text'] = scannedText;
-    req.fields['file_name']    = fileName;
+    req.fields['file_name'] = fileName;
     return _parseFull(req);
   }
 
@@ -124,9 +125,8 @@ class ApiService {
   /// Build a multipart PDF file field from raw bytes.
   /// Ensures filename always ends in .pdf and MIME type is explicit.
   http.MultipartFile _pdfFile(List<int> bytes, String fileName) {
-    final safeName = fileName.toLowerCase().endsWith('.pdf')
-        ? fileName
-        : '$fileName.pdf';
+    final safeName =
+        fileName.toLowerCase().endsWith('.pdf') ? fileName : '$fileName.pdf';
     return http.MultipartFile.fromBytes(
       'file',
       bytes,
@@ -137,7 +137,7 @@ class ApiService {
 
   /// Build a multipart image file field from raw bytes.
   http.MultipartFile _imageFile(List<int> bytes, String fileName) {
-    final ext  = fileName.split('.').last.toLowerCase();
+    final ext = fileName.split('.').last.toLowerCase();
     final mime = ext == 'png' ? 'image/png' : 'image/jpeg';
     return http.MultipartFile.fromBytes(
       'file',
@@ -159,11 +159,11 @@ class ApiService {
 
   Future<Map<String, dynamic>> _send(http.MultipartRequest req) async {
     final streamed = await req.send().timeout(
-      _timeout,
-      onTimeout: () => throw Exception(
-          'Request timed out — the server may still be processing. Try again.'),
-    );
-    final res  = await http.Response.fromStream(streamed);
+          _timeout,
+          onTimeout: () => throw Exception(
+              'Request timed out — the server may still be processing. Try again.'),
+        );
+    final res = await http.Response.fromStream(streamed);
     final json = jsonDecode(res.body) as Map<String, dynamic>;
 
     if (res.statusCode == 200) return json;

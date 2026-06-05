@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../main.dart';
 import '../models/models.dart';
 import '../services/auth_service.dart';
 import '../theme.dart';
@@ -29,7 +30,6 @@ class _HomeShellState extends State<HomeShell> {
 
     if (!widget.user.isGuest) await _auth.signOut();
 
-    // For guest users just pop back to login — no Firebase session to clear.
     if (mounted) {
       Navigator.pushAndRemoveUntil(
         context,
@@ -40,28 +40,27 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Future<bool> _confirmSignOut() async {
+    final c = AppColors.of(context);
     return await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
-            backgroundColor: AppTheme.navy700,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+            backgroundColor: c.navy700,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Text('Sign out?',
                 style: GoogleFonts.spaceGrotesk(
-                    color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w600)),
+                    color: c.textPrimary, fontWeight: FontWeight.w600)),
             content: Text(
               widget.user.isGuest
                   ? 'Your guest session and scan history will be lost.'
                   : 'You\'ll be signed out of your account.',
-              style: GoogleFonts.inter(
-                  color: AppTheme.textSecondary, fontSize: 13),
+              style: GoogleFonts.inter(color: c.textSecondary, fontSize: 13),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 child: Text('Cancel',
-                    style: GoogleFonts.inter(color: AppTheme.textSecondary)),
+                    style: GoogleFonts.inter(color: c.textSecondary)),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -79,18 +78,20 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    final appState = ResumeAnalyzerApp.of(context);
+    final isDark = appState.isDark;
+
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: AppTheme.navy900,
+        backgroundColor: c.navy900,
         elevation: 0,
         scrolledUnderElevation: 0,
         leadingWidth: 0,
         titleSpacing: 20,
         title: Row(children: [
-          // Avatar
           AvatarCircle(initials: widget.user.avatarInitials, size: 34),
           const SizedBox(width: 10),
-          // Name + email/guest badge
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -99,12 +100,12 @@ class _HomeShellState extends State<HomeShell> {
                     style: GoogleFonts.spaceGrotesk(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary)),
+                        color: c.textPrimary)),
                 if (widget.user.isGuest)
                   Container(
                     margin: const EdgeInsets.only(top: 2),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(
                       color: AppTheme.amber500.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(4),
@@ -121,14 +122,30 @@ class _HomeShellState extends State<HomeShell> {
                 else if (widget.user.email.isNotEmpty)
                   Text(widget.user.email,
                       style: GoogleFonts.inter(
-                          fontSize: 11, color: AppTheme.textTertiary),
+                          fontSize: 11, color: c.textTertiary),
                       overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
         ]),
         actions: [
-          // Sign out / exit button
+          // ── Light / dark toggle ─────────────────────────────────────
+          IconButton(
+            onPressed: appState.toggleTheme,
+            tooltip: isDark ? 'Switch to light mode' : 'Switch to dark mode',
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              transitionBuilder: (child, anim) =>
+                  RotationTransition(turns: anim, child: child),
+              child: Icon(
+                isDark ? Icons.wb_sunny_outlined : Icons.nightlight_round,
+                key: ValueKey(isDark),
+                color: c.textTertiary,
+                size: 20,
+              ),
+            ),
+          ),
+          // ── Sign-out ────────────────────────────────────────────────
           IconButton(
             onPressed: _signOut,
             tooltip: widget.user.isGuest ? 'Exit guest session' : 'Sign out',
@@ -136,7 +153,7 @@ class _HomeShellState extends State<HomeShell> {
               widget.user.isGuest
                   ? Icons.exit_to_app_rounded
                   : Icons.logout_rounded,
-              color: AppTheme.textTertiary,
+              color: c.textTertiary,
               size: 20,
             ),
           ),
@@ -151,20 +168,19 @@ class _HomeShellState extends State<HomeShell> {
         ],
       ),
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.navy800,
-          border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+        decoration: BoxDecoration(
+          color: c.navy800,
+          border: Border(top: BorderSide(color: c.cardBorder)),
         ),
         child: SafeArea(
           child: Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _navItem(0, Icons.upload_file_outlined,
+                _navItem(context, 0, Icons.upload_file_outlined,
                     Icons.upload_file_rounded, 'Analyze'),
-                _navItem(1, Icons.timeline_outlined,
+                _navItem(context, 1, Icons.timeline_outlined,
                     Icons.timeline_rounded, 'History'),
               ],
             ),
@@ -174,33 +190,28 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  Widget _navItem(
-      int index, IconData icon, IconData activeIcon, String label) {
+  Widget _navItem(BuildContext context, int index, IconData icon,
+      IconData activeIcon, String label) {
     final active = _tab == index;
+    final c = AppColors.of(context);
     return GestureDetector(
       onTap: () => setState(() => _tab = index),
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
         decoration: BoxDecoration(
-          color: active
-              ? AppTheme.teal500.withOpacity(0.12)
-              : Colors.transparent,
+          color: active ? c.brand.withOpacity(0.12) : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(children: [
           Icon(active ? activeIcon : icon,
-              color: active ? AppTheme.teal500 : AppTheme.textTertiary,
-              size: 20),
+              color: active ? c.brand : c.textTertiary, size: 20),
           if (active) ...[
             const SizedBox(width: 7),
             Text(label,
                 style: GoogleFonts.spaceGrotesk(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.teal500)),
+                    fontSize: 13, fontWeight: FontWeight.w700, color: c.brand)),
           ],
         ]),
       ),

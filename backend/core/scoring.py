@@ -25,23 +25,25 @@ Typical score ranges with new formula:
 
 Recommended min_match_score threshold: 60  (was 50)
 
-Changes (LLM removal): removed call_llama from generate_fit_reason.
-  The LLM was used to write a personalised one-sentence fit reason but the
-  HF Inference API is no longer in use. generate_fit_reason now calls
-  _fit_reason_fallback directly — the rule-based generator that was already
-  the fallback path. The function signature and all callers are unchanged.
+fit_reason generation: generate_fit_reason calls the HF Inference API
+  (meta-llama/Llama-3.1-8B-Instruct via the HuggingFace router) to produce
+  a personalised 2-3 sentence description grounded in the candidate's actual
+  extracted skills. If the API call fails for any reason (timeout, quota,
+  missing token) it falls back to the rule-based _fit_reason_fallback so the
+  pipeline never errors out. Function signature is unchanged from before.
 """
 
 from __future__ import annotations
 
 import logging
+import requests
 
 import faiss
 import numpy as np
 from rapidfuzz import fuzz as _fuzz
 from tqdm import tqdm
 
-from config import TOP_K
+from config import TOP_K, HF_TOKEN, HF_API_URL, HF_MODEL
 from core.utils import normalize
 from core.validation import fuzzy_skill_verify
 from core.ocr_correction import get_sbert
@@ -155,36 +157,94 @@ def _build_query_text(resume_text: str, resume_skills: list[str],
 def _fit_reason_fallback(
         title:          str,
         matched_skills: list[str],
+        missing_skills: list[str],
         cosine_score:   float,
         match_ratio:    float,
         industry:       str,
 ) -> str:
-    """Rule-based fit reason generator."""
+    """Rule-based fit reason — used when the LLM call fails or HF_TOKEN is unset."""
     industry_suffix = f" in the {industry} industry" if industry else ""
     if matched_skills:
         showcase   = matched_skills[:3]
         skills_str = ", ".join(showcase)
         tail       = f" and {len(matched_skills) - 3} more" if len(matched_skills) > 3 else ""
+        gap_str    = (", ".join(missing_skills[:2]) + " among others") if missing_skills else ""
         if match_ratio >= 0.75:
-            return (
+            base = (
                 f"Strong fit{industry_suffix} — your resume covers {skills_str}{tail}, "
                 f"matching {round(match_ratio * 100)}% of what {title} requires."
             )
         elif match_ratio >= 0.45:
-            return (
+            base = (
                 f"Good alignment{industry_suffix} — skills like {skills_str}{tail} "
                 f"overlap well with the {title} role."
             )
         else:
-            return (
+            base = (
                 f"Partial match{industry_suffix} — your experience with {skills_str}{tail} "
                 f"is relevant to {title}, though more skills would help."
             )
+        if gap_str:
+            base += f" Consider developing {gap_str} to strengthen your candidacy."
+        return base
     if cosine_score >= 0.75:
         return f"Semantically strong match{industry_suffix} for {title}."
     elif cosine_score >= 0.5:
         return f"Moderate semantic fit{industry_suffix} with the {title} role."
     return f"{title} is an aspirational direction; targeted upskilling would improve your fit."
+
+
+def _call_llama_fit_reason(
+        title:           str,
+        matched_skills:  list[str],
+        missing_skills:  list[str],
+        resume_skills:   list[str],
+        job_description: str,
+        match_ratio:     float,
+        industry:        str,
+) -> str:
+    """
+    Call meta-llama/Llama-3.1-8B-Instruct via the HF Inference router to
+    generate a personalised fit reason grounded in the candidate's skills.
+
+    Raises on any network/API error so the caller can fall back gracefully.
+    """
+    industry_clause = f" in the {industry} industry" if industry else ""
+    matched_str     = ", ".join(matched_skills) if matched_skills else "none"
+    missing_str     = ", ".join(missing_skills[:5]) if missing_skills else "none"
+    all_skills_str  = ", ".join(resume_skills)
+
+    prompt = (
+        f"You are a career advisor writing a short job-fit summary for a resume screening app.\n\n"
+        f"Candidate skills: {all_skills_str}\n"
+        f"Target role: {title}{industry_clause}\n"
+        f"Skills matched: {matched_str}\n"
+        f"Skills missing: {missing_str}\n"
+        f"Match ratio: {round(match_ratio * 100)}%\n\n"
+        f"Write exactly 2-3 sentences explaining why this role fits (or doesn't fit) "
+        f"this candidate based specifically on their skills. "
+        f"Be direct, honest, and constructive. "
+        f"Do not use bullet points or headers. Plain prose only. "
+        f"Do not start with 'I' or 'The candidate'."
+    )
+
+    response = requests.post(
+        HF_API_URL,
+        headers={
+            "Authorization": f"Bearer {HF_TOKEN}",
+            "Content-Type":  "application/json",
+        },
+        json={
+            "model": HF_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 180,
+            "temperature": 0.5,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"].strip()
 
 
 def generate_fit_reason(
@@ -199,15 +259,32 @@ def generate_fit_reason(
         industry:        str = "",
 ) -> str:
     """
-    Return a single tailored sentence explaining why this job fits this resume.
+    Return a personalised 2-3 sentence description explaining why this job
+    fits this resume, grounded in the candidate's extracted skills.
 
-    Previously called the HF Inference LLM; now delegates directly to the
-    rule-based fallback since the LLM is no longer in use. Function signature
-    is unchanged so all callers (pipeline.py, scan_pipeline.py) require no edits.
+    Primary path  : meta-llama/Llama-3.1-8B-Instruct via HF Inference router.
+    Fallback path : rule-based _fit_reason_fallback (no external call).
+
+    Falls back automatically if HF_TOKEN is missing or the API errors.
     """
+    if HF_TOKEN:
+        try:
+            return _call_llama_fit_reason(
+                title           = title,
+                matched_skills  = matched_skills,
+                missing_skills  = missing_skills,
+                resume_skills   = resume_skills,
+                job_description = job_description,
+                match_ratio     = match_ratio,
+                industry        = industry,
+            )
+        except Exception as exc:
+            log.warning(f"[FitReason] LLM call failed ({exc}); using rule-based fallback.")
+
     return _fit_reason_fallback(
         title          = title,
         matched_skills = matched_skills,
+        missing_skills = missing_skills,
         cosine_score   = cosine_score,
         match_ratio    = match_ratio,
         industry       = industry,
