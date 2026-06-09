@@ -562,33 +562,59 @@ def _ocr_worker(file_path: str, out_file: str, layout_file: str) -> None:
 
 def _ocr_fallback(file_path: str, timeout: int = 120) -> str:
     """
-    Run OCR via the persistent worker process.
+    Run OCR in a spawned child process with a timeout.
 
-    v6 (memory fix): replaced per-request multiprocessing.spawn with a
-    persistent worker managed by core.ocr_worker_proc.  The old approach
-    spawned a *new* child process for every OCR request — on Linux, spawn
-    copies the parent's full address space before exec, so peak RAM was
-    parent_RAM + child_RAM simultaneously, which OOM-killed the 512 MB
-    Render instance.
-
-    The new approach starts ONE worker at app startup (before SBERT loads)
-    with a clean address space.  EasyOCR lives entirely in that worker;
-    the parent process never touches PyTorch or EasyOCR.
+    v5: extracts PyMuPDF layout rulings in the parent process and writes them
+    to a temp file that the OCR worker reads. This avoids re-importing fitz
+    inside the spawned process and keeps the worker lightweight.
     """
-    from core.ocr_worker_proc import get_ocr_manager
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        out_file = tmp.name
 
-    # Extract PyMuPDF layout rulings in the parent (fast, no torch involved).
-    pdf_layouts  = _extract_pdf_layout(file_path)
-    layout_json  = json.dumps(pdf_layouts)
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as lf:
+        layout_file = lf.name
+        # Extract PyMuPDF rulings in the parent (before spawning).
+        pdf_layouts = _extract_pdf_layout(file_path)
+        json.dump(pdf_layouts, lf)
+        log.debug("[OCR] Wrote %d page layout(s) to %s", len(pdf_layouts), layout_file)
 
-    manager = get_ocr_manager()
-    lines   = manager.send_request(file_path, layout_json, timeout=timeout)
+    try:
+        ctx = multiprocessing.get_context("spawn")
+        p   = ctx.Process(target=_ocr_worker, args=(file_path, out_file, layout_file))
+        p.start()
+        p.join(timeout)
 
-    if lines is None:
-        log.warning("[OCR] Worker returned no result for %s.", file_path)
-        return ""
+        if p.is_alive():
+            p.terminate()
+            p.join(5)
+            log.warning(
+                "[OCR] Worker timed out after %ds for %s — skipping OCR.",
+                timeout, file_path,
+            )
+            return ""
 
-    return _clean_text("\n\n".join(lines))
+        if p.exitcode != 0:
+            log.warning(
+                "[OCR] Worker exited with code %s for %s — "
+                "likely OMP deadlock / segfault, skipping OCR.",
+                p.exitcode, file_path,
+            )
+            return ""
+
+        if not os.path.exists(out_file) or os.path.getsize(out_file) == 0:
+            log.warning("[OCR] Worker produced no output for %s.", file_path)
+            return ""
+
+        with open(out_file, "r", encoding="utf-8") as f:
+            lines = json.load(f)
+        return _clean_text("\n\n".join(lines))
+
+    finally:
+        for path in (out_file, layout_file):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def _alnum_ratio(text: str) -> float:

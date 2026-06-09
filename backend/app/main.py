@@ -28,22 +28,11 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-from contextlib import asynccontextmanager
-
 from config        import HOST, PORT, HF_MODEL
 from pipeline      import run_pipeline
 from scan_pipeline import run_scan_pipeline_full, run_scan_pipeline_targeted
-from core.ocr_worker_proc import shutdown_ocr_worker
 
 log = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    log.info("[shutdown] Stopping OCR worker ...")
-    shutdown_ocr_worker()
-
 
 app = FastAPI(
     title="AI Resume Matching API",
@@ -51,7 +40,6 @@ app = FastAPI(
         "Pipeline: PyMuPDF → EasyOCR → "
         "Llama-3.1-8B (HF Inference API) → SBERT → FAISS → Firestore"
     ),
-    lifespan=lifespan,
 )
 
 # FAISS integrity index — 384 dims (all-MiniLM-L6-v2)
