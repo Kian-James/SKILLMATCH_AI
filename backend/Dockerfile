@@ -34,4 +34,4 @@ ENV OMP_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
 ENV KMP_DUPLICATE_LIB_OK=TRUE
 
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
