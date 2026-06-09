@@ -28,11 +28,28 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+from contextlib import asynccontextmanager
+
 from config        import HOST, PORT, HF_MODEL
 from pipeline      import run_pipeline
 from scan_pipeline import run_scan_pipeline_full, run_scan_pipeline_targeted
+from core.ocr_worker_proc import start_ocr_worker, shutdown_ocr_worker
 
 log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start OCR worker FIRST — before SBERT or any model loads into this
+    # process. Spawning now gives the child a clean address space so it only
+    # holds EasyOCR in its own RAM and never shares the parent heap.
+    log.info("[startup] Launching persistent OCR worker ...")
+    start_ocr_worker()
+    log.info("[startup] OCR worker ready.")
+    yield
+    log.info("[shutdown] Stopping OCR worker ...")
+    shutdown_ocr_worker()
+
 
 app = FastAPI(
     title="AI Resume Matching API",
@@ -40,6 +57,7 @@ app = FastAPI(
         "Pipeline: PyMuPDF → EasyOCR → "
         "Llama-3.1-8B (HF Inference API) → SBERT → FAISS → Firestore"
     ),
+    lifespan=lifespan,
 )
 
 # FAISS integrity index — 384 dims (all-MiniLM-L6-v2)
