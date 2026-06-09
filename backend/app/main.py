@@ -33,19 +33,13 @@ from contextlib import asynccontextmanager
 from config        import HOST, PORT, HF_MODEL
 from pipeline      import run_pipeline
 from scan_pipeline import run_scan_pipeline_full, run_scan_pipeline_targeted
-from core.ocr_worker_proc import start_ocr_worker, shutdown_ocr_worker
+from core.ocr_worker_proc import shutdown_ocr_worker
 
 log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start OCR worker FIRST — before SBERT or any model loads into this
-    # process. Spawning now gives the child a clean address space so it only
-    # holds EasyOCR in its own RAM and never shares the parent heap.
-    log.info("[startup] Launching persistent OCR worker ...")
-    start_ocr_worker()
-    log.info("[startup] OCR worker ready.")
     yield
     log.info("[shutdown] Stopping OCR worker ...")
     shutdown_ocr_worker()

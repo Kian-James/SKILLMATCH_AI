@@ -3,30 +3,15 @@ core/ocr_worker_proc.py
 =======================
 Persistent OCR worker process.
 
-Problem with the old approach
-------------------------------
-The old _ocr_fallback() used multiprocessing.spawn to create a *new* child
-process for every single OCR request. On Linux, spawn copies the entire parent
-address space before exec-ing. The parent already holds SBERT (~90 MB) +
-FastAPI + PyMuPDF in RAM. The child then loads EasyOCR + PyTorch on top of
-that copy. Peak RAM at the moment the child starts = parent RAM + child RAM,
-which easily blows through 512 MB.
-
-New approach
-------------
-Start ONE persistent worker process at app startup (before any models are
-loaded into the parent). The worker sits idle, owns EasyOCR entirely, and
-never shares RAM with the parent's models.
+The worker starts LAZILY on the first scanned-PDF request, not at app startup.
+This keeps boot RAM low — native PDFs never trigger the worker at all.
 
 Communication: two multiprocessing.Queues (request_q, response_q).
-  - Parent sends: (file_path, layout_json_str, request_id)
+  - Parent sends: (request_id, file_path, layout_json_str)
   - Worker sends: (request_id, lines_list | None, error_str | None)
 
-The worker is started with "spawn" so it begins with a clean address space —
-no copy of the parent's heap. It loads EasyOCR once and loops forever.
-
-If the worker dies (OOM, segfault), _send_ocr_request() detects the dead
-process and restarts it before retrying once.
+If the worker dies (OOM, segfault), send_request() detects it and restarts
+before retrying once automatically.
 """
 
 from __future__ import annotations
@@ -43,9 +28,8 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# ── Constants ────────────────────────────────────────────────────────────────
-_WORKER_TIMEOUT  = 120   # seconds to wait for OCR result
-_STARTUP_TIMEOUT = 60    # seconds to wait for worker ready signal
+_WORKER_TIMEOUT  = 120  # seconds to wait for OCR result
+_STARTUP_TIMEOUT = 60   # seconds to wait for worker ready signal
 
 
 # ── Worker entry point (runs in the child process) ───────────────────────────
@@ -56,19 +40,15 @@ def _worker_main(
     languages:  list[str],
 ) -> None:
     """
-    Child-process entry point.  Loads EasyOCR once, then loops processing
-    requests from request_q and writing results to response_q.
-
-    Imports are intentionally deferred to after the process starts so that
-    the parent process never touches these modules.
+    Child-process entry point. Loads EasyOCR once, then loops processing
+    requests. All heavy imports are deferred to here so the parent process
+    never touches EasyOCR or PyTorch.
     """
-    # Force single-threaded math libs *before* any import
     os.environ["OMP_NUM_THREADS"]      = "1"
     os.environ["MKL_NUM_THREADS"]      = "1"
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"]  = "1"
 
-    # Late imports — only in the child
     import torch
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
@@ -76,35 +56,29 @@ def _worker_main(
     import easyocr
     from pdf2image import convert_from_path
     import tempfile
-
-    # Import the column-sort helper from extraction — it has no heavy deps
-    # and we need it to replicate the reading-order logic.
     from core.extraction import _sort_boxes_reading_order
 
     log.info("[OCR-worker] Loading EasyOCR reader ...")
     reader = easyocr.Reader(languages, gpu=False)
-    log.info("[OCR-worker] EasyOCR ready. Signalling parent.")
+    log.info("[OCR-worker] EasyOCR ready.")
 
-    # Tell the parent we're alive and ready
+    # Signal parent that we're ready
     response_q.put(("__ready__", None, None))
 
     while True:
         try:
             item = request_q.get(timeout=5)
         except Exception:
-            # Timeout is fine — just loop and wait
             continue
 
         if item is None:
-            # Poison pill — graceful shutdown
-            log.info("[OCR-worker] Received shutdown signal.")
+            log.info("[OCR-worker] Shutdown signal received.")
             break
 
         req_id, file_path, layout_json = item
 
         try:
             pdf_layouts: list[dict] = json.loads(layout_json) if layout_json else []
-
             lines: list[str] = []
 
             if file_path.lower().endswith(".pdf"):
@@ -131,19 +105,9 @@ def _worker_main(
             response_q.put((req_id, None, str(exc)))
 
 
-# ── Persistent worker manager (lives in the parent process) ──────────────────
+# ── Persistent worker manager ─────────────────────────────────────────────────
 
 class _OcrWorkerManager:
-    """
-    Manages one persistent OCR worker child process.
-
-    Thread-safety: FastAPI runs request handlers in a thread pool, so
-    send_request() may be called concurrently.  We protect the queues and
-    process handle with a threading.Lock so only one request is in-flight
-    at a time (EasyOCR is single-threaded anyway — parallelism here buys
-    nothing and would require multiple workers).
-    """
-
     def __init__(self) -> None:
         import threading
         self._lock     = threading.Lock()
@@ -151,51 +115,42 @@ class _OcrWorkerManager:
         self._req_q:   Optional[multiprocessing.Queue]   = None
         self._res_q:   Optional[multiprocessing.Queue]   = None
         self._languages: list[str] = ["en"]
-        self._started  = False
 
     def start(self, languages: list[str] = ("en",)) -> None:
-        """
-        Spawn the worker.  Call this once at app startup, *before* loading
-        SBERT or any other large model into the parent process.
-        """
         self._languages = list(languages)
         self._spawn()
-        self._started = True
 
     def _spawn(self) -> None:
-        ctx        = multiprocessing.get_context("spawn")
-        self._req_q = ctx.Queue()
-        self._res_q = ctx.Queue()
-
+        ctx           = multiprocessing.get_context("spawn")
+        self._req_q   = ctx.Queue()
+        self._res_q   = ctx.Queue()
         self._process = ctx.Process(
-            target  = _worker_main,
-            args    = (self._req_q, self._res_q, self._languages),
-            daemon  = True,   # dies automatically when parent exits
-            name    = "ocr-worker",
+            target = _worker_main,
+            args   = (self._req_q, self._res_q, self._languages),
+            daemon = True,
+            name   = "ocr-worker",
         )
         self._process.start()
         log.info("[OCR-manager] Worker PID %d spawned.", self._process.pid)
 
-        # Wait for the ready signal
         deadline = time.monotonic() + _STARTUP_TIMEOUT
         while time.monotonic() < deadline:
             try:
                 item = self._res_q.get(timeout=2)
                 if item[0] == "__ready__":
-                    log.info("[OCR-manager] Worker signalled ready.")
+                    log.info("[OCR-manager] Worker ready.")
                     return
             except Exception:
                 pass
             if not self._process.is_alive():
                 raise RuntimeError(
-                    f"[OCR-manager] Worker process died during startup "
-                    f"(exit code {self._process.exitcode})."
+                    f"OCR worker died during startup (exit {self._process.exitcode})."
                 )
-        raise RuntimeError("[OCR-manager] Worker did not signal ready in time.")
+        raise RuntimeError("OCR worker did not signal ready in time.")
 
     def _ensure_alive(self) -> None:
         if self._process is None or not self._process.is_alive():
-            log.warning("[OCR-manager] Worker is dead — restarting ...")
+            log.warning("[OCR-manager] Worker dead — restarting ...")
             self._spawn()
 
     def send_request(
@@ -204,15 +159,8 @@ class _OcrWorkerManager:
         layout_json: str = "",
         timeout:     int = _WORKER_TIMEOUT,
     ) -> Optional[list[str]]:
-        """
-        Send an OCR request and block until the result arrives or timeout.
-
-        Returns the list of text lines, or None on failure.
-        Restarts the worker once if it has died.
-        """
         with self._lock:
             self._ensure_alive()
-
             req_id = str(uuid.uuid4())
             self._req_q.put((req_id, file_path, layout_json))
 
@@ -222,34 +170,22 @@ class _OcrWorkerManager:
                     remaining = deadline - time.monotonic()
                     item = self._res_q.get(timeout=min(remaining, 5))
                 except Exception:
-                    # Queue.get timed out — check if worker is still alive
                     if not self._process.is_alive():
-                        log.error(
-                            "[OCR-manager] Worker died while processing "
-                            "(exit %s) — restarting.", self._process.exitcode
-                        )
+                        log.error("[OCR-manager] Worker died mid-request — restarting.")
                         self._spawn()
-                        # Re-send after restart
                         self._req_q.put((req_id, file_path, layout_json))
-                        continue
                     continue
 
                 got_id, lines, error = item
                 if got_id != req_id:
-                    # Stale response from a previous request — discard
-                    log.debug("[OCR-manager] Discarding stale response for %s", got_id)
-                    continue
+                    continue  # stale response, discard
 
                 if error:
-                    log.error("[OCR-manager] Worker reported error: %s", error)
+                    log.error("[OCR-manager] Worker error: %s", error)
                     return None
-
                 return lines
 
-            log.warning(
-                "[OCR-manager] OCR timed out after %ds for %s", timeout, file_path
-            )
-            # Kill and restart the hung worker
+            log.warning("[OCR-manager] OCR timed out after %ds.", timeout)
             try:
                 self._process.terminate()
                 self._process.join(5)
@@ -261,7 +197,7 @@ class _OcrWorkerManager:
     def shutdown(self) -> None:
         if self._req_q is not None:
             try:
-                self._req_q.put(None)   # poison pill
+                self._req_q.put(None)
             except Exception:
                 pass
         if self._process is not None:
@@ -274,33 +210,23 @@ _manager: Optional[_OcrWorkerManager] = None
 
 
 def get_ocr_manager() -> _OcrWorkerManager:
+    """
+    Return the OCR worker, starting it lazily on the first OCR request.
+
+    EasyOCR + PyTorch only load when a scanned PDF actually arrives.
+    Native PDFs never trigger this, so startup RAM stays well under 512 MB.
+    """
     global _manager
     if _manager is None:
-        raise RuntimeError(
-            "OCR worker not started. Call start_ocr_worker() at app startup."
-        )
+        start_ocr_worker()
     return _manager
 
 
 def start_ocr_worker(languages: list[str] = None) -> None:
-    """
-    Spawn the persistent OCR worker.  Call this from the FastAPI lifespan
-    handler, BEFORE loading SBERT or any other model.
-
-    Example (app/main.py):
-
-        from contextlib import asynccontextmanager
-        from core.ocr_worker_proc import start_ocr_worker, shutdown_ocr_worker
-
-        @asynccontextmanager
-        async def lifespan(app: FastAPI):
-            start_ocr_worker()   # ← first, before SBERT loads
-            yield
-            shutdown_ocr_worker()
-
-        app = FastAPI(lifespan=lifespan, ...)
-    """
+    """Spawn the persistent OCR worker. Safe to call multiple times."""
     global _manager
+    if _manager is not None:
+        return  # already running
     from config import OCR_LANGUAGES
     langs = languages or OCR_LANGUAGES
     _manager = _OcrWorkerManager()
