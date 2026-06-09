@@ -6,16 +6,15 @@ python-multipart
 # AI & NLP
 # sentence-transformers downloads all-MiniLM-L6-v2 from Hugging Face Hub on first run
 sentence-transformers>=5.4.1
-spacy>=3.7.0
-# Run after install: python -m spacy download en_core_web_sm
-transformers<6.0.0
+# Pin transformers to a range compatible with torch 2.5.x.
+# transformers>=4.47 requires torch.float8_e8m0fnu which was added in torch 2.5.
+transformers>=4.47.0,<6.0.0
 faiss-cpu
 rapidfuzz
 
 # Document Processing & OCR
 PyMuPDF>=1.27.2
 easyocr>=1.7.2
-# pdf2image requires poppler installed on your OS (see README for install instructions)
 pdf2image
 
 # Data Science & Math

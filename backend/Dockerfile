@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install CPU-only torch first — prevents pip from pulling the ~2GB GPU build
+# Install CPU-only torch 2.5.1 — has float8_e8m0fnu which transformers>=4.47 needs.
+# Must install before requirements.txt so pip doesn't pull the 2GB GPU build.
 RUN pip install --no-cache-dir \
-    torch==2.4.0+cpu \
-    torchvision==0.19.0+cpu \
+    torch==2.5.1+cpu \
+    torchvision==0.20.1+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining dependencies
@@ -34,4 +35,6 @@ ENV OMP_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
 ENV KMP_DUPLICATE_LIB_OK=TRUE
 
+# workers=1 — each worker spawns its own OCR child process.
+# Two workers = two EasyOCR processes = instant OOM on 512 MB.
 CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
