@@ -1,13 +1,21 @@
 // lib/screens/camera_scan_screen.dart
-// Mode 3: live camera scan → ML Kit OCR → extracted text preview
+// Mode 3: live camera scan → returns captured image file for backend OCR.
+//
+// v40: removed on-device ML Kit OCR. Scan mode now matches the EasyOCR-only
+// backend pipeline (core/extraction.py) — the captured photo is sent to the
+// same endpoint as Image mode (analyzeFullResumeImage / analyzeTargetCareerImage)
+// so it goes through extract_text() -> EasyOCR -> _sort_boxes_reading_order()
+// with proper column-split detection, instead of bypassing it with raw
+// on-device MLKit text.
+//
+// Restricted to a single page — multi-page scan is no longer supported here
+// (use PDF mode for multi-page documents).
 
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import '../theme.dart';
-import '../widgets/common_widgets.dart';
 
 class CameraScanScreen extends StatefulWidget {
   const CameraScanScreen({super.key});
@@ -22,15 +30,9 @@ class _CameraScanScreenState extends State<CameraScanScreen>
   List<CameraDescription> _cameras = [];
   bool _isInitialized = false;
   bool _isCapturing = false;
-  bool _isProcessing = false;
 
-  // Multi-page scanning
-  final List<File> _capturedPages = [];
-  final List<String> _extractedTexts = [];
-  String _previewText = '';
+  File? _capturedFile;
   String? _error;
-
-  final _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
   @override
   void initState() {
@@ -43,7 +45,6 @@ class _CameraScanScreenState extends State<CameraScanScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ctrl?.dispose();
-    _textRecognizer.close();
     super.dispose();
   }
 
@@ -84,62 +85,40 @@ class _CameraScanScreenState extends State<CameraScanScreen>
     }
   }
 
-  Future<void> _captureAndOcr() async {
+  Future<void> _capture() async {
     if (_ctrl == null || !_ctrl!.value.isInitialized || _isCapturing) return;
 
     setState(() {
       _isCapturing = true;
-      _isProcessing = true;
       _error = null;
     });
 
     try {
-      // Capture
       final xFile = await _ctrl!.takePicture();
-      final file = File(xFile.path);
-      _capturedPages.add(file);
-
-      // Run ML Kit OCR
-      final inputImage = InputImage.fromFile(file);
-      final recognized = await _textRecognizer.processImage(inputImage);
-
-      final pageText = recognized.blocks
-          .map((b) => b.lines.map((l) => l.text).join('\n'))
-          .join('\n\n');
-
-      _extractedTexts.add(pageText);
-
-      // Merge all pages
-      _previewText = _extractedTexts.join('\n\n--- Page break ---\n\n');
-
-      setState(() {});
-    } catch (e) {
-      setState(() => _error = 'OCR failed: $e');
-    } finally {
       setState(() {
-        _isCapturing = false;
-        _isProcessing = false;
+        _capturedFile = File(xFile.path);
       });
+    } catch (e) {
+      setState(() => _error = 'Capture failed: $e');
+    } finally {
+      setState(() => _isCapturing = false);
     }
   }
 
-  void _removePage(int index) {
-    setState(() {
-      _capturedPages.removeAt(index);
-      _extractedTexts.removeAt(index);
-      _previewText = _extractedTexts.join('\n\n--- Page break ---\n\n');
-    });
+  void _retake() {
+    setState(() => _capturedFile = null);
   }
 
   void _confirmAndReturn() {
-    if (_extractedTexts.isEmpty) {
-      setState(() => _error = 'Scan at least one page first.');
+    if (_capturedFile == null) {
+      setState(() => _error = 'Capture a page first.');
       return;
     }
+    // Returns the captured image file. upload_screen sends this through the
+    // same image-analysis API call used by Image mode (analyzeFullResumeImage /
+    // analyzeTargetCareerImage), which routes through extract_text() -> EasyOCR.
     Navigator.pop(context, {
-      'text': _previewText,
-      'page_count': _capturedPages.length,
-      'files': _capturedPages,
+      'file': _capturedFile,
     });
   }
 
@@ -150,17 +129,17 @@ class _CameraScanScreenState extends State<CameraScanScreen>
       appBar: AppBar(
         backgroundColor: Colors.black,
         title: Text(
-          'Scan Resume  •  ${_capturedPages.length} page${_capturedPages.length != 1 ? 's' : ''}',
+          'Scan Resume',
           style: GoogleFonts.spaceGrotesk(
               color: Colors.white, fontWeight: FontWeight.w600),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          if (_capturedPages.isNotEmpty)
+          if (_capturedFile != null)
             TextButton(
               onPressed: _confirmAndReturn,
               child: Text(
-                'Use (${_capturedPages.length})',
+                'Use photo',
                 style: GoogleFonts.spaceGrotesk(
                     color: AppTheme.teal500, fontWeight: FontWeight.w700),
               ),
@@ -169,39 +148,24 @@ class _CameraScanScreenState extends State<CameraScanScreen>
       ),
       body: Column(
         children: [
-          // Camera viewfinder
+          // Camera viewfinder / preview
           Expanded(
             flex: 3,
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (_isInitialized && _ctrl != null)
+                if (_capturedFile != null)
+                  Image.file(_capturedFile!, fit: BoxFit.cover)
+                else if (_isInitialized && _ctrl != null)
                   _buildViewfinder()
                 else if (_error != null)
                   _buildCameraError()
                 else
-                  const Center(child: CircularProgressIndicator(color: AppTheme.teal500)),
+                  const Center(
+                      child: CircularProgressIndicator(color: AppTheme.teal500)),
 
-                // Scan overlay frame
-                if (_isInitialized) _buildScanFrame(),
-
-                // Processing overlay
-                if (_isProcessing)
-                  Container(
-                    color: Colors.black54,
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const CircularProgressIndicator(color: AppTheme.teal500),
-                          const SizedBox(height: 16),
-                          Text('Extracting text…',
-                              style: GoogleFonts.inter(
-                                  color: Colors.white, fontSize: 14)),
-                        ],
-                      ),
-                    ),
-                  ),
+                // Scan overlay frame (only while framing the shot)
+                if (_isInitialized && _capturedFile == null) _buildScanFrame(),
               ],
             ),
           ),
@@ -213,88 +177,85 @@ class _CameraScanScreenState extends State<CameraScanScreen>
             child: Column(
               children: [
                 if (_error != null) _buildError(),
-
-                // Page thumbnails
-                if (_capturedPages.isNotEmpty) ...[
-                  _buildPageThumbnails(),
-                  const SizedBox(height: 12),
-                ],
-
-                // Capture row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // OCR text preview
-                    _circleButton(
-                      icon: Icons.text_snippet_outlined,
-                      color: _extractedTexts.isEmpty
-                          ? Colors.grey
-                          : AppTheme.amber500,
-                      label: 'Preview',
-                      onTap: _extractedTexts.isEmpty
-                          ? null
-                          : () => _showTextPreview(context),
-                    ),
-
-                    // Capture button
-                    GestureDetector(
-                      onTap: _isCapturing ? null : _captureAndOcr,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: 72,
-                        height: 72,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: AppTheme.teal500,
-                              width: _isCapturing ? 3 : 4),
-                          color: _isCapturing
-                              ? AppTheme.teal500.withOpacity(0.2)
-                              : Colors.transparent,
-                        ),
-                        child: Center(
-                          child: Container(
-                            width: 54,
-                            height: 54,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: AppTheme.teal500,
-                            ),
-                            child: _isCapturing
-                                ? const Padding(
-                                    padding: EdgeInsets.all(16),
-                                    child: CircularProgressIndicator(
-                                        color: AppTheme.navy900, strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.camera_alt_rounded,
-                                    color: AppTheme.navy900, size: 24),
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    // Confirm / done
-                    _circleButton(
-                      icon: Icons.check_rounded,
-                      color: _capturedPages.isEmpty
-                          ? Colors.grey
-                          : AppTheme.green500,
-                      label: 'Done',
-                      onTap: _capturedPages.isEmpty ? null : _confirmAndReturn,
-                    ),
-                  ],
-                ),
+                if (_capturedFile != null)
+                  _buildRetakeRow()
+                else
+                  _buildCaptureRow(),
                 const SizedBox(height: 6),
                 Text(
-                  'Tap shutter to scan each page  •  Scan multiple pages',
-                  style: GoogleFonts.inter(
-                      fontSize: 11, color: Colors.grey[600]),
+                  _capturedFile != null
+                      ? 'Looks good? Tap "Use photo" to continue.'
+                      : 'Tap shutter to capture the resume page',
+                  style:
+                      GoogleFonts.inter(fontSize: 11, color: Colors.grey[600]),
                 ),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildCaptureRow() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        GestureDetector(
+          onTap: _isCapturing ? null : _capture,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: AppTheme.teal500, width: _isCapturing ? 3 : 4),
+              color: _isCapturing
+                  ? AppTheme.teal500.withOpacity(0.2)
+                  : Colors.transparent,
+            ),
+            child: Center(
+              child: Container(
+                width: 54,
+                height: 54,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppTheme.teal500,
+                ),
+                child: _isCapturing
+                    ? const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator(
+                            color: AppTheme.navy900, strokeWidth: 2),
+                      )
+                    : const Icon(Icons.camera_alt_rounded,
+                        color: AppTheme.navy900, size: 24),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRetakeRow() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _circleButton(
+          icon: Icons.refresh_rounded,
+          color: AppTheme.amber500,
+          label: 'Retake',
+          onTap: _retake,
+        ),
+        _circleButton(
+          icon: Icons.check_rounded,
+          color: AppTheme.green500,
+          label: 'Use photo',
+          onTap: _confirmAndReturn,
+        ),
+      ],
     );
   }
 
@@ -325,7 +286,6 @@ class _CameraScanScreenState extends State<CameraScanScreen>
         ),
         child: Stack(
           children: [
-            // Corner accents
             _corner(Alignment.topLeft),
             _corner(Alignment.topRight),
             _corner(Alignment.bottomLeft),
@@ -352,59 +312,6 @@ class _CameraScanScreenState extends State<CameraScanScreen>
             left: isLeft ? const BorderSide(color: AppTheme.teal500, width: 3) : BorderSide.none,
             right: !isLeft ? const BorderSide(color: AppTheme.teal500, width: 3) : BorderSide.none,
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPageThumbnails() {
-    return SizedBox(
-      height: 64,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: _capturedPages.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) => Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                _capturedPages[i],
-                width: 46,
-                height: 64,
-                fit: BoxFit.cover,
-              ),
-            ),
-            Positioned(
-              top: 2,
-              right: 2,
-              child: GestureDetector(
-                onTap: () => _removePage(i),
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: const BoxDecoration(
-                    color: AppTheme.red500,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.close, size: 10, color: Colors.white),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: 2,
-              left: 2,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text('${i + 1}',
-                    style: const TextStyle(color: Colors.white, fontSize: 9)),
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -463,65 +370,6 @@ class _CameraScanScreenState extends State<CameraScanScreen>
           Text(label,
               style: GoogleFonts.inter(fontSize: 10, color: Colors.grey[500])),
         ],
-      ),
-    );
-  }
-
-  void _showTextPreview(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppTheme.navy800,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.65,
-        maxChildSize: 0.92,
-        minChildSize: 0.35,
-        expand: false,
-        builder: (_, scrollCtrl) => Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.navy500,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-              child: Row(
-                children: [
-                  Text('Extracted Text',
-                      style: GoogleFonts.spaceGrotesk(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16)),
-                  const Spacer(),
-                  TealBadge(text: '${_capturedPages.length} page${_capturedPages.length != 1 ? 's' : ''}'),
-                ],
-              ),
-            ),
-            const Divider(color: AppTheme.divider),
-            Expanded(
-              child: SingleChildScrollView(
-                controller: scrollCtrl,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                child: Text(
-                  _previewText.isEmpty ? 'No text extracted yet.' : _previewText,
-                  style: GoogleFonts.jetBrainsMono(
-                    fontSize: 12,
-                    color: AppTheme.textSecondary,
-                    height: 1.7,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

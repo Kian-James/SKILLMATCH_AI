@@ -1,5 +1,12 @@
 // lib/screens/upload_screen.dart
 // Analysis mode: Targeted | Full  ×  File mode: PDF | Image | Scan
+//
+// v40: Scan mode no longer does on-device ML Kit OCR. It now captures a
+// single photo via CameraScanScreen and sends it through the SAME image
+// API calls as Image mode (analyzeTargetCareerImage / analyzeFullResumeImage),
+// so it goes through core/extraction.py -> EasyOCR -> _sort_boxes_reading_order()
+// like every other input. Multi-page scan is no longer supported (use PDF mode
+// for multi-page documents).
 
 import 'dart:io';
 
@@ -54,9 +61,10 @@ class _UploadScreenState extends State<UploadScreen>
 
   PlatformFile? _pickedPdf;
   XFile? _pickedImage;
-  String? _scannedText;
-  int _scannedPageCount = 0;
-  List<File> _scannedFiles = [];
+
+  // v40: single captured page from CameraScanScreen, sent through the same
+  // image-analysis API path as Image mode.
+  File? _scannedFile;
 
   bool _isAnalyzing = false;
   String _statusMessage = '';
@@ -164,7 +172,7 @@ class _UploadScreenState extends State<UploadScreen>
           targetKey: _keyPdfTab,
           title: 'Upload as PDF',
           body:
-              'Tap this tab to upload your resume as a PDF file. This gives the most accurate results since we read the text directly — no guessing needed.',
+              'Tap this tab to upload your resume as a PDF file. We\'ll run OCR on it automatically.',
         ),
         TutorialStep(
           targetKey: _keyImageTab,
@@ -176,13 +184,13 @@ class _UploadScreenState extends State<UploadScreen>
           targetKey: _keyScanTab,
           title: 'Scan with your camera',
           body:
-              'Point your camera at a printed resume and scan it page by page. Great if you only have a physical copy.',
+              'Point your camera at a printed resume and capture one page. Great if you only have a physical copy.',
         ),
         TutorialStep(
           targetKey: _keyDropZone,
           title: 'Your resume goes here',
           body:
-              'After choosing a file type above, tap this area to pick or scan your resume. You\'ll see a preview once it\'s loaded.',
+              'After choosing a file type above, tap this area to pick or capture your resume. You\'ll see a preview once it\'s loaded.',
         ),
         TutorialStep(
           targetKey: _keyTargetField,
@@ -239,9 +247,7 @@ class _UploadScreenState extends State<UploadScreen>
         context, MaterialPageRoute(builder: (_) => const CameraScanScreen()));
     if (result != null && mounted) {
       setState(() {
-        _scannedText = result['text'] as String?;
-        _scannedPageCount = result['page_count'] as int? ?? 0;
-        _scannedFiles = List<File>.from(result['files'] ?? []);
+        _scannedFile = result['file'] as File?;
         _error = null;
       });
     }
@@ -252,19 +258,19 @@ class _UploadScreenState extends State<UploadScreen>
   bool get _hasPayload => switch (_fileMode) {
         FileMode.pdf => _pickedPdf != null,
         FileMode.image => _pickedImage != null,
-        FileMode.scan => (_scannedText ?? '').isNotEmpty,
+        FileMode.scan => _scannedFile != null,
       };
 
   String get _fileName => switch (_fileMode) {
         FileMode.pdf => _pickedPdf?.name ?? 'resume.pdf',
         FileMode.image => _pickedImage?.name ?? 'resume.jpg',
-        FileMode.scan => 'scan_${DateTime.now().millisecondsSinceEpoch}.txt',
+        FileMode.scan => 'scan_${DateTime.now().millisecondsSinceEpoch}.jpg',
       };
 
   String get _missingMsg => switch (_fileMode) {
         FileMode.pdf => 'Please pick a PDF resume first.',
         FileMode.image => 'Please pick an image of your resume.',
-        FileMode.scan => 'Please scan at least one page first.',
+        FileMode.scan => 'Please capture a photo of your resume first.',
       };
 
   // ── Analysis ──────────────────────────────────────────────────────────────
@@ -327,9 +333,11 @@ class _UploadScreenState extends State<UploadScreen>
               fileName: fileName,
               targetJob: targetJob);
         case FileMode.scan:
-          setState(() => _statusMessage = 'Sending scanned text…');
-          return _api.analyzeTargetCareerScanned(
-              scannedText: _scannedText!,
+          // v40: scanned photo goes through the same image-analysis path
+          // as Image mode (extract_text() -> EasyOCR backend).
+          setState(() => _statusMessage = 'Uploading scan for analysis…');
+          return _api.analyzeTargetCareerImage(
+              imagePath: _scannedFile!.path,
               fileName: fileName,
               targetJob: targetJob);
       }
@@ -382,10 +390,12 @@ class _UploadScreenState extends State<UploadScreen>
           return _api.analyzeFullResumeImage(
               imagePath: _pickedImage!.path, fileName: fileName);
         case FileMode.scan:
+          // v40: scanned photo goes through the same image-analysis path
+          // as Image mode (extract_text() -> EasyOCR backend).
           setState(
-              () => _statusMessage = 'Sending scanned text for full analysis…');
-          return _api.analyzeFullResumeScanned(
-              scannedText: _scannedText!, fileName: fileName);
+              () => _statusMessage = 'Uploading scan for full analysis…');
+          return _api.analyzeFullResumeImage(
+              imagePath: _scannedFile!.path, fileName: fileName);
       }
     });
 
@@ -819,49 +829,72 @@ class _UploadScreenState extends State<UploadScreen>
     ]);
   }
 
+  // ── Scan zone (v40: single captured photo, image-API path) ────────────────
+
   Widget _scanZone() {
-    final has = _scannedPageCount > 0;
+    final has = _scannedFile != null;
     return GestureDetector(
       key: const ValueKey('scan'),
       onTap: _isAnalyzing ? null : _openScanner,
-      child: _shell(
-          has,
-          has
-              ? _scanPreview()
-              : _prompt(Icons.document_scanner_outlined, 'Tap to open camera',
-                  'Scan pages one by one')),
+      child: has
+          ? _scanPreview()
+          : _shell(
+              false,
+              _prompt(Icons.document_scanner_outlined, 'Tap to open camera',
+                  'Capture one page of your resume')),
     );
   }
 
   Widget _scanPreview() {
     final c = AppColors.of(context);
-    return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      if (_scannedFiles.isNotEmpty)
-        SizedBox(
-          height: 72,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            shrinkWrap: true,
-            itemCount: _scannedFiles.length.clamp(0, 5),
-            separatorBuilder: (_, __) => const SizedBox(width: 6),
-            itemBuilder: (_, i) => ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.file(_scannedFiles[i],
-                    width: 50, height: 72, fit: BoxFit.cover)),
-          ),
+    return Stack(children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Image.file(_scannedFile!,
+            width: double.infinity, height: 190, fit: BoxFit.cover),
+      ),
+      Positioned.fill(
+          child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.transparent, c.navy900.withOpacity(0.78)]),
         ),
-      const SizedBox(height: 10),
-      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.check_circle_rounded, color: c.brand, size: 16),
-        const SizedBox(width: 6),
-        Text(
-            '$_scannedPageCount page${_scannedPageCount != 1 ? 's' : ''} scanned',
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 14, fontWeight: FontWeight.w600, color: c.brandSoft)),
-      ]),
-      const SizedBox(height: 4),
-      Text('Tap to re-scan',
-          style: GoogleFonts.inter(fontSize: 12, color: c.textTertiary)),
+      )),
+      Positioned(
+          bottom: 12,
+          left: 14,
+          right: 14,
+          child: Row(children: [
+            Expanded(
+                child: Row(children: [
+              Icon(Icons.check_circle_rounded, color: c.brand, size: 16),
+              const SizedBox(width: 6),
+              Text('Page captured',
+                  style: GoogleFonts.spaceGrotesk(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white)),
+            ])),
+            GestureDetector(
+              onTap: _openScanner,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                    color: c.brand, borderRadius: BorderRadius.circular(6)),
+                child: Text('Retake',
+                    style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? AppTheme.navy900
+                            : Colors.white,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ])),
     ]);
   }
 
