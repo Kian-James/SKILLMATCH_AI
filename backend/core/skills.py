@@ -1650,23 +1650,6 @@ def discover_skills_dynamically(
 
     log.info(f"[Skills] After SBERT pass: {len(canonical)} skills matched.")
 
-    # ── 5. Direct scan — mop up anything SBERT missed ────────────────────────
-    for hit in direct_scan_section(
-            section, sorted_pairs, threshold=82, corrector=corrector, allow_norm=allow_norm
-    ):
-        adjusted_threshold = _effective_threshold(hit, base_threshold=82)
-        canon     = canonicalize(
-            hit, allow_norm, threshold=adjusted_threshold,
-            _sorted_pairs=sorted_pairs, corrector=corrector,
-        )
-        dedup_key = canon.lower().strip()
-        if dedup_key and dedup_key not in seen:
-            seen.add(dedup_key)
-            canonical.append(canon)
-            log.debug(f"[Skills/DirectScan] Mopped up after SBERT: '{hit}' -> '{canon}'")
-
-    log.info(f"[Skills] After direct scan mop-up: {len(canonical)} skills total.")
-
     # ── 6. Safety net — fuzzy fallback if both passes found nothing ───────────
     if not canonical:
         log.info("[Skills] Direct scan + SBERT produced nothing — fuzzy fallback.")
