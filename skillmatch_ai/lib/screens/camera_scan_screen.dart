@@ -10,11 +10,24 @@
 //
 // Restricted to a single page — multi-page scan is no longer supported here
 // (use PDF mode for multi-page documents).
+//
+// v41: some devices/CameraController configs produce a malformed
+// "sequential JPEG" with an invalid SOS marker (cv2 throws
+// "Invalid SOS parameters for sequential JPEG" / resize assertion on the
+// backend). After capture, we now decode the raw bytes with the `image`
+// package and re-encode as a clean, full baseline JPEG (quality 100,
+// non-progressive) before handing the file back — this guarantees the
+// backend always receives a standard JPEG regardless of what the device
+// camera HAL produced. EXIF orientation is respected during decode so the
+// re-encoded image is right-side-up.
 
 import 'dart:io';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image/image.dart' as img;
+
 import '../theme.dart';
 
 class CameraScanScreen extends StatefulWidget {
@@ -85,6 +98,35 @@ class _CameraScanScreenState extends State<CameraScanScreen>
     }
   }
 
+  // ── Capture + re-encode to a clean, full baseline JPEG ─────────────────
+  //
+  // v41: CameraController.takePicture() can produce a JPEG with a malformed
+  // SOS segment on some devices ("Invalid SOS parameters for sequential
+  // JPEG"), which crashes cv2.imread() on the backend. We decode the raw
+  // bytes here (respecting EXIF orientation) and re-encode as a standard,
+  // non-progressive, full-quality JPEG so the backend always receives a
+  // file it can read.
+  Future<File> _reencodeAsCleanJpeg(XFile xFile) async {
+    final rawBytes = await xFile.readAsBytes();
+
+    // decodeImage auto-detects format and applies EXIF orientation.
+    final decoded = img.decodeImage(rawBytes);
+    if (decoded == null) {
+      // Fallback: if decoding somehow fails, just use the original file
+      // as-is rather than losing the capture entirely.
+      return File(xFile.path);
+    }
+
+    // encodeJpg always produces a standard baseline (non-progressive) JPEG.
+    final cleanBytes = img.encodeJpg(decoded, quality: 100);
+
+    final outPath =
+        '${xFile.path}_clean_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final outFile = File(outPath);
+    await outFile.writeAsBytes(cleanBytes, flush: true);
+    return outFile;
+  }
+
   Future<void> _capture() async {
     if (_ctrl == null || !_ctrl!.value.isInitialized || _isCapturing) return;
 
@@ -95,8 +137,9 @@ class _CameraScanScreenState extends State<CameraScanScreen>
 
     try {
       final xFile = await _ctrl!.takePicture();
+      final cleanFile = await _reencodeAsCleanJpeg(xFile);
       setState(() {
-        _capturedFile = File(xFile.path);
+        _capturedFile = cleanFile;
       });
     } catch (e) {
       setState(() => _error = 'Capture failed: $e');
@@ -162,7 +205,8 @@ class _CameraScanScreenState extends State<CameraScanScreen>
                   _buildCameraError()
                 else
                   const Center(
-                      child: CircularProgressIndicator(color: AppTheme.teal500)),
+                      child:
+                          CircularProgressIndicator(color: AppTheme.teal500)),
 
                 // Scan overlay frame (only while framing the shot)
                 if (_isInitialized && _capturedFile == null) _buildScanFrame(),
@@ -282,7 +326,8 @@ class _CameraScanScreenState extends State<CameraScanScreen>
         height: MediaQuery.of(context).size.height * 0.42,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppTheme.teal500.withOpacity(0.8), width: 2),
+          border:
+              Border.all(color: AppTheme.teal500.withOpacity(0.8), width: 2),
         ),
         child: Stack(
           children: [
@@ -297,8 +342,10 @@ class _CameraScanScreenState extends State<CameraScanScreen>
   }
 
   Widget _corner(Alignment alignment) {
-    final isTop = alignment == Alignment.topLeft || alignment == Alignment.topRight;
-    final isLeft = alignment == Alignment.topLeft || alignment == Alignment.bottomLeft;
+    final isTop =
+        alignment == Alignment.topLeft || alignment == Alignment.topRight;
+    final isLeft =
+        alignment == Alignment.topLeft || alignment == Alignment.bottomLeft;
 
     return Align(
       alignment: alignment,
@@ -307,10 +354,18 @@ class _CameraScanScreenState extends State<CameraScanScreen>
         height: 24,
         decoration: BoxDecoration(
           border: Border(
-            top: isTop ? const BorderSide(color: AppTheme.teal500, width: 3) : BorderSide.none,
-            bottom: !isTop ? const BorderSide(color: AppTheme.teal500, width: 3) : BorderSide.none,
-            left: isLeft ? const BorderSide(color: AppTheme.teal500, width: 3) : BorderSide.none,
-            right: !isLeft ? const BorderSide(color: AppTheme.teal500, width: 3) : BorderSide.none,
+            top: isTop
+                ? const BorderSide(color: AppTheme.teal500, width: 3)
+                : BorderSide.none,
+            bottom: !isTop
+                ? const BorderSide(color: AppTheme.teal500, width: 3)
+                : BorderSide.none,
+            left: isLeft
+                ? const BorderSide(color: AppTheme.teal500, width: 3)
+                : BorderSide.none,
+            right: !isLeft
+                ? const BorderSide(color: AppTheme.teal500, width: 3)
+                : BorderSide.none,
           ),
         ),
       ),
@@ -336,7 +391,8 @@ class _CameraScanScreenState extends State<CameraScanScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.camera_outlined, color: AppTheme.textTertiary, size: 48),
+          const Icon(Icons.camera_outlined,
+              color: AppTheme.textTertiary, size: 48),
           const SizedBox(height: 12),
           Text(_error ?? 'Camera unavailable',
               style: GoogleFonts.inter(color: AppTheme.textSecondary),

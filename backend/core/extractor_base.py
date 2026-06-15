@@ -516,6 +516,44 @@ def _reunite_double_nl_parens(raw_block: str) -> str:
 # Section text extraction
 # ---------------------------------------------------------------------------
 
+_NAME_RE  = re.compile(r'^[A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ\s\-]{2,49}$')
+_TITLE_RE = re.compile(r'^[A-Za-záéíóúñü][A-Za-záéíóúñü0-9\s\-\(\)\/]{4,79}$')
+
+
+def _clip_at_name_banner(block: str) -> str:
+    """
+    Trim a raw section block at the first ALL-CAPS full name line that is
+    immediately followed by a job-title line, e.g.:
+
+        NERISSA TOLENTINO
+        Technical Support Engineer (Tier 2)
+
+    This prevents bleed-through from the next candidate's header when
+    multiple resumes are concatenated or a layout places the next name
+    inside the skills block.
+    """
+    lines = block.splitlines()
+    clipped: list[str] = []
+    for idx, line in enumerate(lines):
+        s = line.strip()
+        if not s:
+            clipped.append(line)
+            continue
+        if (_NAME_RE.match(s) and s.isupper()
+                and 2 <= len(s.split()) <= 4
+                and not any(ch.isdigit() for ch in s)):
+            # Look ahead for a job-title line
+            next_stripped = [l.strip() for l in lines[idx + 1:] if l.strip()]
+            if next_stripped and _TITLE_RE.match(next_stripped[0]):
+                log.debug(
+                    f"[ExtractSection] Stopped at name+title banner: "
+                    f"{s!r} / {next_stripped[0]!r}"
+                )
+                break
+        clipped.append(line)
+    return "\n".join(clipped).strip()
+
+
 def extract_section(text: str, config: SectionConfig) -> str:
     """Locate heading, slice to the next section boundary, return raw block text."""
     m = config.heading_re.search(text)
@@ -523,7 +561,8 @@ def extract_section(text: str, config: SectionConfig) -> str:
         return ""
     rest  = text[m.end():]
     end_m = config.end_re.search(rest)
-    return rest[: end_m.start()].strip() if end_m else rest.strip()
+    block = rest[: end_m.start()].strip() if end_m else rest.strip()
+    return _clip_at_name_banner(block)
 
 
 # ---------------------------------------------------------------------------
@@ -584,33 +623,14 @@ def _parse_section_to_entries(
         return []
 
     # ── OCR correction pass ──────────────────────────────────────────────────
-    # Apply token-level correction before any splitting or matching so garbled
-    # tokens like "UlKit" -> "UIKit", "SAP2OOO" -> "SAP2000", "QAIQC" -> "QA/QC"
-    # are fixed while the original line context is still intact.
-    # Skipped for native PDFs (text is clean) and when no corrector was provided.
     if not is_native_pdf and corrector is not None:
         kept_lines = [apply_ocr_corrections(line, corrector) for line in kept_lines]
         log.debug(f"[{config.label}] OCR correction applied to {len(kept_lines)} lines.")
     # ────────────────────────────────────────────────────────────────────────
 
-    # ---------------------------------------------------------------------------
-    # Two-column OCR deinterleave:
-    # EasyOCR reads two-column skill layouts left-col then right-col, producing
-    # double-newlines between every cell. When the raw block contains \n\n:
-    #   1. Reunite any paren split across chunks FIRST (e.g. "MERN Stack
-    #      (MongoDB, Expressjs," + "Node js)" -> one chunk) before splitting.
-    #   2. Split the reunited block on \n\n to get one candidate per paragraph.
-    #   3. Within each paragraph, split on commas only — guarded by _protect_parens
-    #      so inner commas like "(MongoDB, Expressjs, Node js)" are preserved.
-    #   4. Run the full repair + expansion pipeline on the flat candidate list.
-    # Single-column resumes without \n\n are unaffected.
-    # ---------------------------------------------------------------------------
     if "\n\n" in block:
         print(f"\n[{config.label}] Double-newline layout detected — using two-column deinterleave path.")
 
-        # Re-apply OCR correction to the raw block for the \n\n path too,
-        # since kept_lines above was built from block.splitlines() which
-        # strips the double-newlines that paragraph-split needs.
         corrected_block = block
         if not is_native_pdf and corrector is not None:
             corrected_block_lines = [
@@ -626,7 +646,6 @@ def _parse_section_to_entries(
             para = para.strip().strip(",").strip()
             if not para:
                 continue
-            # Protect inner parens before comma-splitting each paragraph.
             protected_para, pmap_para = _protect_parens(para)
             for sub in re.split(r"\s*,\s*", protected_para):
                 sub = _restore_parens(sub.strip(), pmap_para).strip().strip(",").strip()
@@ -637,7 +656,6 @@ def _parse_section_to_entries(
         for i, p in enumerate(paragraphs):
             print(f"  [{i}] {p!r}")
 
-        # Filter through the same guards as the main kept_lines loop.
         double_nl_lines: list[str] = []
         for p in paragraphs:
             if double_nl_lines and _CONTACT_LINE_RE.search(p):
@@ -658,17 +676,12 @@ def _parse_section_to_entries(
         if double_nl_lines:
             double_nl_lines = _merge_split_lines(double_nl_lines, allowlist)
             double_nl_lines = _rejoin_open_parens(double_nl_lines)
-            # Run expand_ampersand FIRST while parens are still intact so
-            # "Communication (written & verbal)" keeps its parens as a guard
-            # against splitting the & inside them. Only bare & outside parens
-            # will be split at this stage.
             entries_out: list[str] = [_strip_subheader(ln, allowlist) for ln in double_nl_lines if ln.strip()]
             entries_out = _expand_ampersand(entries_out, allowlist)
             print(f"\n[{config.label}] After expand_ampersand (pre-paren):")
             for i, e in enumerate(entries_out):
                 print(f"  [{i}] {e!r}")
 
-            # Now expand parentheticals — ampersand inside parens is safe.
             expanded: list[str] = []
             for ln in entries_out:
                 for sub in _expand_parentheticals([ln], allowlist):
@@ -698,9 +711,6 @@ def _parse_section_to_entries(
     if "," in joined_block:
         protected, pmap = _protect_parens(joined_block)
         stopped = False
-        # Split on both commas AND newlines so that skills separated by either
-        # delimiter are treated identically (e.g. "React,\nNode.js\nFlutter"
-        # produces three entries, not one).
         for part in re.split(r"\s*,\s*|\s*\n\s*", protected):
             if stopped:
                 break
@@ -803,6 +813,110 @@ def _sbert_match(
 
 
 # ---------------------------------------------------------------------------
+# Section text -> entries (used when pre-extracted section_text is provided)
+# ---------------------------------------------------------------------------
+
+def _section_text_to_entries(section_text: str, allowlist: list[str]) -> list[str]:
+    """
+    Convert an already-extracted, already-OCR-corrected section text string
+    into a flat list of candidate entries for SBERT matching.
+
+    This is the fast path used when skills.py / certs.py pass in their
+    rule-based section text directly, bypassing _parse_section_to_entries
+    and its re-extraction from raw resume text (which would see garbled OCR).
+
+    Reuses the same delimiter logic and compound expansion as the main path.
+    """
+    lines = [l.strip() for l in section_text.splitlines() if l.strip()]
+    if not lines:
+        return []
+
+    # ── Name + job-title banner guard ───────────────────────────────────────
+    # Some resume layouts bleed into the next candidate's header block, e.g.:
+    #   "NERISSA TOLENTINO"
+    #   "Technical Support Engineer (Tier 2)"
+    # Stop as soon as we see a line that looks like an ALL-CAPS full name
+    # immediately followed by a job-title line.
+    # ALL-CAPS words only, 2–4 tokens, no digits → name line.
+    # Next non-empty line is a job title if it is mixed case, 2–6 words,
+    # no digits, and scores low against the allowlist (not itself a skill).
+    clipped: list[str] = []
+    for idx, line in enumerate(lines):
+        # ALL-CAPS full name (2–4 words, no digits)
+        if (_NAME_RE.match(line) and line.isupper()
+                and 2 <= len(line.split()) <= 4
+                and not any(ch.isdigit() for ch in line)):
+            next_lines = [l for l in lines[idx + 1:] if l.strip()]
+            if next_lines and _TITLE_RE.match(next_lines[0]):
+                next_score = _fuzzy_score(next_lines[0], allowlist) if allowlist else 0
+                if next_score < 60:
+                    log.debug(
+                        f"[SectionText] Stopped at name+title banner: "
+                        f"{line!r} / {next_lines[0]!r}"
+                    )
+                    break
+        # Single-line banner guard (existing helper)
+        if clipped and _is_banner_line(line, allowlist):
+            log.debug(f"[SectionText] Stopped at banner line: {line!r}")
+            break
+        clipped.append(line)
+
+    lines = clipped
+    if not lines:
+        return []
+    # ────────────────────────────────────────────────────────────────────────
+
+    lines = _merge_split_lines(lines, allowlist)
+    lines = _rejoin_open_parens(lines)
+    joined = "\n".join(lines)
+
+    entries: list[str] = []
+
+    if "," in joined:
+        protected, pmap = _protect_parens(joined)
+        for part in re.split(r"\s*,\s*|\s*\n\s*", protected):
+            part = _restore_parens(part.strip(), pmap)
+            part = _strip_subheader(part, allowlist)
+            if not part:
+                continue
+            if len(re.sub(r'\([^)]*\)', '', part).strip().split()) > 6:
+                break
+            entries.extend(_expand_parentheticals([part], allowlist))
+
+    elif ";" in joined:
+        for line in lines:
+            for part in re.split(r"\s*[;\n]\s*", _strip_subheader(line, allowlist)):
+                if part.strip():
+                    entries.append(part.strip())
+
+    elif "|" in joined:
+        for line in lines:
+            for part in re.split(r"\s*[|\n]\s*", _strip_subheader(line, allowlist)):
+                if part.strip():
+                    entries.append(part.strip())
+
+    elif _BULLET_RE.search(joined):
+        for line in lines:
+            clean = re.sub(r"^\s*[\u2022\-\*\u25e6\u25aa]\s*|\s*\d+\.\s+",
+                           "", _strip_subheader(line, allowlist)).strip()
+            if clean:
+                entries.append(clean)
+
+    elif len(lines) > 1:
+        entries = [_strip_subheader(l, allowlist).strip() for l in lines if l.strip()]
+
+    else:
+        entries = _split_ocr_blob(lines[0], allowlist) if allowlist else [lines[0]]
+
+    entries = _expand_ampersand(entries, allowlist)
+    entries = _restore_ocr_slash(entries, allowlist)
+    entries = _expand_slash(entries, allowlist)
+
+    log.debug(f"[SectionText] {len(entries)} entries from pre-extracted section text.")
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # Main public entry point
 # ---------------------------------------------------------------------------
 
@@ -812,6 +926,7 @@ def discover_items_dynamically(
         config:        SectionConfig,
         extra_items:   list[str] | None = None,
         is_native_pdf: bool = False,
+        section_text:  str | None = None,
 ) -> list[str]:
     """
     Full extraction pipeline shared by skills and certs.
@@ -819,11 +934,14 @@ def discover_items_dynamically(
     Steps:
       1. Build allowlist from jobs_corpus[config.corpus_key].
       2. Build OcrCorrector once from the allowlist (reused across both paths).
-      3. Parse section into candidate entries (regex + OCR correction + delimiter splitting).
-      4. Expand compounds (ampersand, slash, parentheticals).
-      5. SBERT pass — semantic matching (cosine >= 0.80).
-      6. Fuzzy fallback — if SBERT found nothing.
-      7. Drop parenthetical fragment duplicates.
+      3. Parse section into candidate entries.
+         - Fast path: section_text is provided (already extracted + OCR-corrected
+           by the caller) — use _section_text_to_entries directly.
+         - Slow path: re-extract from raw resume_text via _parse_section_to_entries
+           (fallback when no pre-extracted text is available).
+      4. SBERT pass — semantic matching (cosine >= 0.80).
+      5. Fuzzy fallback — if SBERT found nothing.
+      6. Drop parenthetical fragment duplicates.
     """
     # 1. Build allowlist
     allowlist: set[str] = set()
@@ -835,30 +953,46 @@ def discover_items_dynamically(
 
     # 2. Build OcrCorrector once (FAISS index over allowlist embeddings).
     #    Skipped for native PDFs — their text is already clean.
+    #    Also skipped for the section_text fast path since that text is
+    #    already corrected upstream.
     corrector = None
-    if not is_native_pdf and allowlist_list:
+    if not is_native_pdf and not section_text and allowlist_list:
         log.info(f"[{config.label}] Building OcrCorrector from {len(allowlist_list)} allowlist entries...")
         corrector = build_ocr_corrector(allowlist_list)
         log.info(f"[{config.label}] OcrCorrector ready.")
 
     # 3. Parse section into candidate entries
-    entries = _parse_section_to_entries(
-        resume_text,
-        config,
-        allowlist_list,
-        is_native_pdf,
-        corrector=corrector,
-    )
-    if not entries:
-        entries = [e.strip() for e in resume_text[:3000].split(",") if e.strip()]
+    if section_text is not None:
+        # Fast path: caller already extracted + OCR-corrected the section text.
+        # If section_text is empty the section simply doesn't exist in this resume
+        # (e.g. no cert section) — skip the emergency fallback entirely.
+        if section_text:
+            log.info(f"[{config.label}] Using pre-extracted section text ({len(section_text)} chars).")
+            entries = _section_text_to_entries(section_text, allowlist_list)
+        else:
+            log.info(f"[{config.label}] No {config.label.lower()} section found — skipping.")
+            entries = []
+    else:
+        # Slow path: re-extract from raw resume text.
+        entries = _parse_section_to_entries(
+            resume_text,
+            config,
+            allowlist_list,
+            is_native_pdf,
+            corrector=corrector,
+        )
+        # Emergency fallback only on the slow path — section heading may have been
+        # missed entirely, so scan the first 3000 chars as a last resort.
+        if not entries:
+            log.info(f"[{config.label}] Section not found — emergency comma-split fallback.")
+            entries = [e.strip() for e in resume_text[:3000].split(",") if e.strip()]
 
-    # 4. Expand compounds
-    entries = _expand_ampersand(entries, allowlist_list)
-    entries = _restore_ocr_slash(entries, allowlist_list)
-    entries = _expand_slash(entries, allowlist_list)
-    entries = _expand_parentheticals(entries, allowlist_list)
+    if entries:
+        log.info(f"[{config.label}] Final entries going into SBERT ({len(entries)} total):")
+        for i, e in enumerate(entries):
+            log.info(f"  [{i}] {e!r}")
 
-    # 5. SBERT pass
+    # 4. SBERT pass
     seen:      set[str]  = set()
     canonical: list[str] = []
 
@@ -870,12 +1004,12 @@ def discover_items_dynamically(
 
     log.info(f"[{config.label}] After SBERT: {len(canonical)} matched.")
 
-    # 6. Fuzzy fallback
+    # 5. Fuzzy fallback
     if not canonical:
         log.info(f"[{config.label}] SBERT found nothing — fuzzy fallback.")
         canonical = fuzzy_scan(", ".join(entries), allowlist_list)
 
-    # 7. Drop parenthetical split fragments
+    # 6. Drop parenthetical split fragments
     canonical = [s for s in canonical if not _is_subsumed(s, canonical)]
 
     log.info(f"[{config.label}] {len(canonical)} items discovered.")

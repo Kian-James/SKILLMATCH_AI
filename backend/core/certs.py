@@ -47,10 +47,12 @@ def extract_certificates(
         is_native_pdf: bool = False,
 ) -> list[str]:
     """Stage 2B — return deduplicated, canonicalised certification names."""
+    section_text = extract_cert_section(resume_text)
     return discover_items_dynamically(
         resume_text=resume_text,
         jobs_corpus=jobs_corpus,
         config=CERT_CONFIG,
         extra_items=extra_certs,
         is_native_pdf=is_native_pdf,
+        section_text=section_text,
     )
