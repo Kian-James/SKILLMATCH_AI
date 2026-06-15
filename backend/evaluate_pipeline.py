@@ -104,8 +104,8 @@ _PIPELINE_LOGGERS = [
 ]
 
 SCRIPT_DIR            = Path(__file__).parent
-LABELS_PATH           = SCRIPT_DIR / "labels.json"
-DEFAULT_RESUMES_DIR   = SCRIPT_DIR / "resumes"
+LABELS_PATH           = SCRIPT_DIR / "labels-2.json"
+DEFAULT_RESUMES_DIR   = SCRIPT_DIR / "resumes-images"
 DEFAULT_CHARTS_DIR    = SCRIPT_DIR / "eval_charts"
 TITLE_MATCH_THRESHOLD = 0.70
 

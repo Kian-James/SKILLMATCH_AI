@@ -43,16 +43,9 @@ def run_pipeline(temp_path: str, file_name: str) -> dict:
     resume_text, ocr_quality, is_native = extract_text(temp_path)
     text_source = "native_pdf" if is_native else "ocr"
 
-    # Debug: rule-based section slices (captured before LLM runs).
-    # Pass firestore_skills as the allowlist so that single-line OCR blobs
-    # are segmented by split_ocr_blob and the debug field shows a proper
-    # comma-separated skill list instead of one unsplit blob string.
-    skills_section_debug = extract_skills_section(
-        resume_text,
-        allowlist     = firestore_skills if firestore_skills else None,
-        is_native_pdf = is_native,
-    )
-    cert_section_debug = extract_cert_section(resume_text)
+    # Debug: rule-based section slices (captured before discovery runs).
+    skills_section_debug = extract_skills_section(resume_text)
+    cert_section_debug   = extract_cert_section(resume_text)
 
     # Stage 2 — skill extraction
     discovered_skills = discover_skills_dynamically(
@@ -64,8 +57,10 @@ def run_pipeline(temp_path: str, file_name: str) -> dict:
 
     # Stage 2B — cert extraction
     discovered_certificates = extract_certificates(
-        resume_text = resume_text,
-        allowlist   = firestore_certs if firestore_certs else None,
+        resume_text   = resume_text,
+        jobs_corpus   = jobs_corpus,
+        extra_certs   = firestore_certs if firestore_certs else None,
+        is_native_pdf = is_native,
     )
 
     # Stage 3 — hybrid scoring + per-job NLP validation

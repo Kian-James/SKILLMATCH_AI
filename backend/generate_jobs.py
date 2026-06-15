@@ -1,68 +1,106 @@
 """
 generate_jobs.py
 ────────────────
-Generates job listings via Llama 3.1 8B (Cerebras / HF Inference Provider),
-encodes each job with SBERT (all-MiniLM-L6-v2), and stores both the job data
-and its embedding vector in Firestore.
+Generates job listings via Zephyr-7B-Beta (HF Inference / featherless-ai),
+encodes each job with SBERT (all-MiniLM-L6-v2), and writes everything to
+Firestore.
 
 Batch strategy:
-  - 100 jobs total, 10 per batch (10 batches)
-  - Batches alternate: Batch 1 = Computing, Batch 2 = Engineering, ...
-  - If a job title already exists in Firestore, its required_skills and
-    required_certifications are MERGED (union of old + new, capped at 10 skills
-    / 6 certs), and the embedding is re-generated.
+  - JOB_COUNT jobs total, BATCH_SIZE per LLM call
+  - Batches alternate industry: Computing → Engineering → Computing → …
+  - If a title already exists in Firestore its required_skills and
+    required_certifications are MERGED (LLM output takes priority over stored
+    data), and the embedding is re-generated from the merged profile.
 
 Uniqueness strategy:
-  1. Every already-used title is sent in the avoid list every batch.
+  1. Avoid-list sent to the LLM contains only the most recent 60 titles so the
+     prompt never overflows Zephyr's context window.
   2. Fuzzy duplicate detection via Jaccard token overlap (threshold 0.75).
   3. Titles must contain at least one tech/stack keyword.
-
-Cert strategy:
-  - The LLM picks 1–3 real, role-appropriate certifications per job title.
-  - Certs are validated: must be a non-empty list of 1–3 strings, each ≤ 10
-    words. Items that look like generic noise (< 3 chars, all digits) are
-    dropped.
-  - Merged docs re-generate their embedding using the combined cert + skill
-    profile so certs.py's allowlist match stays accurate.
 
 Usage:
     python generate_jobs.py
 
-Requirements in .env:
+Required .env variables:
     HF_TOKEN                   – Hugging Face API token
-    FIREBASE_CREDENTIALS_PATH  – path to your serviceAccountKey.json
+    FIREBASE_CREDENTIALS_PATH  – path to serviceAccountKey.json
     FIRESTORE_JOBS_COLLECTION  – Firestore collection name (default: jobs)
+
+Optional .env variables:
+    MAX_RETRIES                – retries per batch            (default: 3)
+    JOB_COUNT                  – total jobs to generate       (default: 100)
+    BATCH_SIZE                 – jobs per LLM call            (default: 10)
+    AVOID_LIST_LIMIT           – max titles in avoid block    (default: 60)
 """
 
-import os
-import sys
+from __future__ import annotations
+
 import json
+import os
 import re
+import sys
 import time
+from typing import Optional
+
 import requests
 import torch
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 
-# ── Load .env ────────────────────────────────────────────────────────────────
+# ── Environment ───────────────────────────────────────────────────────────────
+
 load_dotenv()
 
-HF_TOKEN                  = os.getenv("HF_TOKEN")
-FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
+HF_TOKEN                  = os.getenv("HF_TOKEN", "")
+FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
 FIRESTORE_JOBS_COLLECTION = os.getenv("FIRESTORE_JOBS_COLLECTION", "jobs")
+MAX_RETRIES               = int(os.getenv("MAX_RETRIES", "3"))
+JOB_COUNT                 = int(os.getenv("JOB_COUNT", "100"))
+BATCH_SIZE                = int(os.getenv("BATCH_SIZE", "10"))
+AVOID_LIST_LIMIT          = int(os.getenv("AVOID_LIST_LIMIT", "60"))
 
-JOB_COUNT   = 100
-BATCH_SIZE  = 10
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-
-HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
-HF_MODEL   = "meta-llama/Llama-3.1-8B-Instruct"
-
-# Batch 1 → Computing, Batch 2 → Engineering, alternating
+HF_API_URL     = "https://router.huggingface.co/v1/chat/completions"
+HF_MODEL       = "HuggingFaceH4/zephyr-7b-beta:featherless-ai"
 INDUSTRY_ORDER = ["Computing", "Engineering"]
 
-# ── Style examples ────────────────────────────────────────────────────────────
-STYLE_EXAMPLES = {
+# ── Pre-flight checks ─────────────────────────────────────────────────────────
+
+def _abort_if_invalid() -> None:
+    errors: list[str] = []
+    if not HF_TOKEN:
+        errors.append("HF_TOKEN is not set.")
+    if not FIREBASE_CREDENTIALS_PATH:
+        errors.append("FIREBASE_CREDENTIALS_PATH is not set.")
+    elif not os.path.exists(FIREBASE_CREDENTIALS_PATH):
+        errors.append(f"Credentials file not found: {FIREBASE_CREDENTIALS_PATH}")
+    if errors:
+        for e in errors:
+            print(f"[ERROR] {e}")
+        sys.exit(1)
+
+_abort_if_invalid()
+
+# ── SBERT ─────────────────────────────────────────────────────────────────────
+
+print("[INFO] Loading SBERT model …")
+_device = "cuda" if torch.cuda.is_available() else "cpu"
+sbert   = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=_device)
+print(f"[INFO] SBERT ready on {_device.upper()}.\n")
+
+# ── Firestore ─────────────────────────────────────────────────────────────────
+
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
+
+# ── Style / cert examples ─────────────────────────────────────────────────────
+
+STYLE_EXAMPLES: dict[str, list[str]] = {
     "Engineering": [
         "Embedded C Firmware Engineer",
         "FPGA Design Engineer",
@@ -89,11 +127,7 @@ STYLE_EXAMPLES = {
     ],
 }
 
-# ── Cert examples (style guide for the LLM, not an exhaustive allowlist) ─────
-# These show the naming convention the LLM should follow. The actual allowlist
-# that certs.py uses at runtime is the union of all required_certifications
-# stored across job documents in Firestore.
-CERT_EXAMPLES = {
+CERT_EXAMPLES: dict[str, list[str]] = {
     "Computing": [
         "AWS Certified Solutions Architect – Associate",
         "Google Professional Cloud Architect",
@@ -120,8 +154,9 @@ CERT_EXAMPLES = {
     ],
 }
 
-# ── Tech keywords ─────────────────────────────────────────────────────────────
-TECH_KEYWORDS = {
+# ── Tech keyword set ──────────────────────────────────────────────────────────
+
+TECH_KEYWORDS: set[str] = {
     "python", "go", "golang", "java", "rust", "c++", "ruby", "swift", "kotlin",
     "typescript", "javascript", "scala", "elixir", "haskell", "r", "matlab",
     "fortran", "cobol", "perl", "lua", "dart", "solidity",
@@ -146,206 +181,175 @@ TECH_KEYWORDS = {
     "fiber optic", "voip", "antenna", "signal processing",
 }
 
-# ── Validate env ──────────────────────────────────────────────────────────────
-errors = []
-if not HF_TOKEN:
-    errors.append("HF_TOKEN is not set.")
-if not FIREBASE_CREDENTIALS_PATH:
-    errors.append("FIREBASE_CREDENTIALS_PATH is not set.")
-elif not os.path.exists(FIREBASE_CREDENTIALS_PATH):
-    errors.append(f"Credentials file not found: {FIREBASE_CREDENTIALS_PATH}")
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
-if errors:
-    for e in errors:
-        print(f"[ERROR] {e}")
-    sys.exit(1)
-
-# ── SBERT model ───────────────────────────────────────────────────────────────
-print("[INFO] Loading SBERT model (sentence-transformers/all-MiniLM-L6-v2) …")
-device = "cuda" if torch.cuda.is_available() else "cpu"
-sbert  = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
-print(f"[INFO] SBERT ready on {device.upper()}.\n")
-
-# ── Firebase init ─────────────────────────────────────────────────────────────
-import firebase_admin
-from firebase_admin import credentials, firestore
-
-if not firebase_admin._apps:
-    cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
-    firebase_admin.initialize_app(cred)
-
-db = firestore.client()
-
-
-# ── Firestore helpers ─────────────────────────────────────────────────────────
-
-def title_to_doc_id(title: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-
-
-def get_existing_docs() -> dict:
-    docs = db.collection(FIRESTORE_JOBS_COLLECTION).stream()
-    return {doc.id: doc.to_dict() for doc in docs}
-
-
-def get_existing_titles(existing_docs: dict) -> list:
-    return [v.get("title", "") for v in existing_docs.values()]
-
-
-# ── Skill / cert merging ──────────────────────────────────────────────────────
-
-def merge_list(old: list, new: list, cap: int) -> list:
-    """
-    Merge two lists, preserving order and removing case-insensitive duplicates.
-    Old items come first; new unique items are appended. Result is capped at
-    `cap` entries.
-    """
+def _dedup(items: list[str], cap: Optional[int] = None) -> list[str]:
+    """Case-insensitive dedup preserving first-seen order, with an optional cap."""
     seen:   set[str]  = set()
-    merged: list[str] = []
-    for item in old + new:
+    result: list[str] = []
+    for item in items:
         key = item.strip().lower()
         if key and key not in seen:
             seen.add(key)
-            merged.append(item.strip())
-        if len(merged) >= cap:
+            result.append(item.strip())
+        if cap is not None and len(result) >= cap:
             break
-    return merged
+    return result
 
 
-# Back-compat aliases used throughout the rest of the file
-def merge_skills(old: list, new: list, cap: int = 10) -> list:
-    return merge_list(old, new, cap)
+def _title_to_doc_id(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
 
 
-def merge_certs(old: list, new: list, cap: int = 6) -> list:
-    return merge_list(old, new, cap)
-
-
-# ── Duplicate detection ───────────────────────────────────────────────────────
-
-def _tokenize(title: str) -> set:
+def _tokenize(title: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", title.lower()))
 
 
-def is_duplicate(new_title: str, existing_titles: list, threshold: float = 0.75) -> bool:
+def _is_duplicate(new_title: str, existing_titles: list[str],
+                  threshold: float = 0.75) -> bool:
     new_tokens = _tokenize(new_title)
     if not new_tokens:
         return True
     for existing in existing_titles:
-        existing_tokens = _tokenize(existing)
-        if not existing_tokens:
+        ex_tokens = _tokenize(existing)
+        if not ex_tokens:
             continue
-        intersection = new_tokens & existing_tokens
-        union        = new_tokens | existing_tokens
-        if len(intersection) / len(union) >= threshold:
+        union = new_tokens | ex_tokens
+        if len(new_tokens & ex_tokens) / len(union) >= threshold:
             return True
     return False
 
 
-def has_tech_keyword(title: str) -> bool:
+def _has_tech_keyword(title: str) -> bool:
     title_lower = title.lower()
     return any(kw in title_lower for kw in TECH_KEYWORDS)
 
 
-# ── Cert item validation ──────────────────────────────────────────────────────
-
 def _is_valid_cert(item: str) -> bool:
-    """
-    Cheap noise guard on a single cert string.
-    Mirrors the 10-word guard in certs.py plus a minimum-length check so
-    obviously bad values (empty, single digits, stray punctuation) are dropped
-    before they ever reach Firestore.
-    """
     item = item.strip()
-    if not item:
+    if not item or len(item) < 3:
         return False
-    # Too short to be a real cert name
-    if len(item) < 3:
-        return False
-    # All digits / punctuation — not a cert name
     if re.fullmatch(r"[\d\W]+", item):
         return False
-    # certs.py drops anything > 10 words, so we match that ceiling here
     if len(item.split()) > 10:
         return False
     return True
 
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+def merge_skills(new: list[str], old: list[str], cap: int = 10) -> list[str]:
+    """
+    LLM-fresh skills (new) take priority; stored skills fill the remainder.
+    No hard cap by default — store everything unique, caller can pass cap.
+    """
+    return _dedup(new + old, cap=cap if cap else None)
 
-SYSTEM_PROMPT = """You are a job listing generator. Output ONLY a valid JSON array — no markdown, no code fences, no explanation.
+
+def merge_certs(new: list[str], old: list[str], cap: int = 6) -> list[str]:
+    """LLM-fresh certs take priority; stored certs fill up to cap."""
+    return _dedup(new + old, cap=cap)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Firestore
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_existing_docs() -> dict[str, dict]:
+    return {doc.id: doc.to_dict() for doc in db.collection(FIRESTORE_JOBS_COLLECTION).stream()}
+
+
+def get_existing_titles(existing_docs: dict[str, dict]) -> list[str]:
+    return [v.get("title", "") for v in existing_docs.values()]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = """You are a job listing generator. Output ONLY a valid JSON array — no markdown, no code fences, no explanation.
 
 Each element must match this schema exactly:
 {"title":"...","industry":"Engineering","description":"...","required_skills":["skill1","skill2","skill3","skill4","skill5"],"required_certifications":["Cert Name 1","Cert Name 2"]}
 
 Hard rules:
 - "industry" must be exactly "Engineering" or "Computing" — nothing else
-- "required_skills" must be exactly 5 specific technologies, tools, or frameworks that match the title
-- "required_certifications" must be a list of 1 to 3 real, widely-recognised certifications that are directly relevant to the job title. Use the full official name (e.g. "AWS Certified Solutions Architect – Associate", not just "AWS cert"). Do NOT invent certifications.
+- "required_skills" must be a list of 5 specific technologies, tools, or frameworks relevant to the title
+- "required_certifications" must be a list of 1 to 3 real, widely-recognised certifications directly relevant to the title. Use the full official name. Do NOT invent certifications.
 - "title" must always include the primary technology or stack (e.g. "Python Backend Engineer", "FPGA Design Engineer")
 - Every title must be completely unique — no variations of the same role
 - "description" must be 1-2 short sentences with no special characters or newlines
 - No trailing commas. No extra fields. No comments. Pure JSON only."""
 
 
-def build_prompt(batch_size: int, all_existing_titles: list, industry: str) -> str:
-    style_examples = ", ".join(STYLE_EXAMPLES[industry])
-    cert_examples  = ", ".join(CERT_EXAMPLES[industry])
+def build_prompt(batch_size: int, all_existing_titles: list[str], industry: str) -> str:
+    style  = ", ".join(STYLE_EXAMPLES[industry])
+    certs  = ", ".join(CERT_EXAMPLES[industry])
 
-    avoid_block = ""
-    if all_existing_titles:
-        avoid_block = (
-                f"\n\nDo NOT generate any of these titles or anything similar to them:\n"
-                + "\n".join(f"- {t}" for t in all_existing_titles)
-        )
+    # Cap the avoid list to the most recent AVOID_LIST_LIMIT titles so the
+    # prompt never overflows Zephyr's context window.
+    avoid_titles = all_existing_titles[-AVOID_LIST_LIMIT:]
+    avoid_block  = (
+            "\n\nDo NOT generate any of these titles or anything similar:\n"
+            + "\n".join(f"- {t}" for t in avoid_titles)
+    ) if avoid_titles else ""
 
     return (
         f"Generate EXACTLY {batch_size} UNIQUE job listings for the {industry} industry.\n\n"
-        f"Title format (use as style guide only — do not copy these):\n{style_examples}\n\n"
-        f"Certification style guide (use as examples of naming convention and relevance — "
-        f"do not copy these verbatim, pick certs that fit each specific job title):\n{cert_examples}\n\n"
+        f"Title format (style guide only — do not copy verbatim):\n{style}\n\n"
+        f"Certification style guide (naming convention examples — pick certs that fit each role):\n{certs}\n\n"
         f"Requirements:\n"
         f"- Every title must include the specific technology, tool, or stack\n"
         f"- Every title must be different from every other title in this batch\n"
-        f"- Think of niche, specialised, or emerging roles — not just common ones\n"
-        f"- Set 'industry' to exactly \"{industry}\" for every object\n"
-        f"- required_certifications: 1–3 real certifications directly relevant to the job title"
+        f"- Prefer niche, specialised, or emerging roles over common ones\n"
+        f'- Set "industry" to exactly "{industry}" for every object\n'
+        f"- required_certifications: 1–3 real certifications directly relevant to each title"
         f"{avoid_block}\n\n"
         f"Return ONLY a JSON array with exactly {batch_size} objects. No other text."
     )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM call
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── LLM call ──────────────────────────────────────────────────────────────────
+def _call_zephyr(prompt: str) -> str:
+    resp = requests.post(
+        HF_API_URL,
+        headers={
+            "Authorization": f"Bearer {HF_TOKEN}",
+            "Content-Type":  "application/json",
+        },
+        json={
+            "model": HF_MODEL,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user",   "content": prompt},
+            ],
+            "max_tokens": 3000,
+            "temperature": 0.7,
+            "stream": False,
+        },
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
-def call_llama(prompt: str) -> str:
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": HF_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": prompt},
-        ],
-        "max_tokens": 1800,   # slightly higher to accommodate cert strings
-        "temperature": 0.7,
-        "stream": False,
-    }
+# ─────────────────────────────────────────────────────────────────────────────
+# JSON extraction
+# ─────────────────────────────────────────────────────────────────────────────
 
-    response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=120)
+def _extract_objects_from_text(text: str) -> list[dict]:
+    """
+    Walk `text` tracking brace depth and collect every balanced {...} block.
 
-    if response.status_code != 200:
-        raise RuntimeError(f"API returned {response.status_code}: {response.text}")
+    Splitting on '"title"' (the original approach) is unreliable because the
+    word 'title' can appear inside description strings, causing splits mid-object.
+    Brace-depth tracking is safer and handles truncated arrays correctly.
+    """
+    objects: list[dict] = []
+    depth  = 0
+    start  = None
 
-    return response.json()["choices"][0]["message"]["content"].strip()
-
-
-# ── Parser ────────────────────────────────────────────────────────────────────
-
-def _repair_truncated_json(raw: str) -> list:
-    objects, depth, start = [], 0, None
-    for i, ch in enumerate(raw):
+    for i, ch in enumerate(text):
         if ch == "{":
             if depth == 0:
                 start = i
@@ -353,99 +357,156 @@ def _repair_truncated_json(raw: str) -> list:
         elif ch == "}":
             depth -= 1
             if depth == 0 and start is not None:
+                candidate = text[start : i + 1]
                 try:
-                    objects.append(json.loads(raw[start:i + 1]))
+                    obj = json.loads(candidate)
+                    if isinstance(obj, dict):
+                        objects.append(obj)
                 except json.JSONDecodeError:
-                    pass
+                    # Try one cheap repair: remove a trailing comma inside the object
+                    repaired = re.sub(r",(\s*[}\]])", r"\1", candidate)
+                    try:
+                        obj = json.loads(repaired)
+                        if isinstance(obj, dict):
+                            objects.append(obj)
+                    except json.JSONDecodeError:
+                        pass
                 start = None
+
     return objects
 
 
-def parse_jobs(raw: str, batch_size: int, expected_industry: str,
-               all_existing_titles: list) -> list:
-    cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+def _clean_llm_output(raw: str) -> str:
+    """Strip Zephyr chat-template tokens and markdown fences."""
+    text = re.sub(r"<\|[a-zA-Z_]+\|>", "", raw)          # <|assistant|> etc.
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    return text.strip().strip("`").strip()
 
-    start = cleaned.find("[")
-    end   = cleaned.rfind("]") + 1
 
-    if start != -1 and end > start:
+def _normalise_industry(value: str) -> Optional[str]:
+    """
+    Accept minor casing / spacing variants Zephyr sometimes emits.
+    Returns the canonical string or None if unrecognisable.
+    """
+    v = value.strip().lower()
+    if v == "computing":
+        return "Computing"
+    if v == "engineering":
+        return "Engineering"
+    return None
+
+
+def parse_jobs(
+        raw: str,
+        batch_size: int,
+        expected_industry: str,
+        all_existing_titles: list[str],
+) -> list[dict]:
+    """
+    Parse the LLM response and return validated job dicts.
+
+    Extraction order:
+      1. Try full JSON array parse on the cleaned text.
+      2. Fall back to brace-depth object scanner (handles truncated arrays).
+    """
+    cleaned = _clean_llm_output(raw)
+
+    # Repair a common Zephyr failure: bare industry value instead of key/value
+    # e.g.  "title": "...",\n    "Computing",\n    "description": ...
+    cleaned = re.sub(
+        r',\s*"(Engineering|Computing)"\s*,',
+        r', "industry": "\1",',
+        cleaned,
+    )
+
+    # ── Attempt 1: full array parse ───────────────────────────────────────────
+    jobs_raw: list[dict] = []
+    array_start = cleaned.find("[")
+    array_end   = cleaned.rfind("]")          # -1 if absent
+
+    if array_start != -1 and array_end > array_start:
         try:
-            jobs_raw = json.loads(cleaned[start:end])
+            jobs_raw = json.loads(cleaned[array_start : array_end + 1])
         except json.JSONDecodeError:
-            print("  [WARN] Array parse failed — using object scanner …")
-            jobs_raw = _repair_truncated_json(cleaned)
-    else:
-        print("  [WARN] No JSON array found — using object scanner …")
-        jobs_raw = _repair_truncated_json(cleaned)
+            pass  # fall through to scanner
+
+    # ── Attempt 2: object scanner ─────────────────────────────────────────────
+    if not jobs_raw:
+        print("  [WARN] Full array parse failed — using brace-depth scanner …")
+        jobs_raw = _extract_objects_from_text(cleaned)
 
     if not jobs_raw:
-        raise ValueError("No parseable job objects found in model output.")
+        print("  [DEBUG] Raw LLM output (first 2000 chars):")
+        print(raw[:2000])
+        raise ValueError("No parseable job objects found in LLM output.")
 
-    validated       = []
-    seen_this_batch = []
+    # ── Validate each record ──────────────────────────────────────────────────
+    validated:       list[dict] = []
+    seen_this_batch: list[str]  = []
 
     for i, job in enumerate(jobs_raw):
-        # ── Required field check ──────────────────────────────────────────────
+        if not isinstance(job, dict):
+            continue
+
+        # Required fields
         missing = [k for k in ("title", "industry", "description",
                                "required_skills", "required_certifications")
                    if k not in job]
         if missing:
-            print(f"  [WARN] Job {i+1} missing {missing} — skipping.")
+            print(f"  [WARN] Record {i+1} missing {missing} — skipping.")
             continue
 
-        # ── Industry validation ───────────────────────────────────────────────
-        raw_industry = job["industry"].strip()
-        if raw_industry not in ("Engineering", "Computing"):
-            print(f"  [WARN] '{job['title']}' invalid industry '{raw_industry}' — skipping.")
+        # Industry: accept minor casing differences, reject wrong industry
+        industry = _normalise_industry(str(job["industry"]))
+        if industry is None:
+            print(f"  [WARN] '{job.get('title', '?')}' unrecognised industry "
+                  f"'{job['industry']}' — skipping.")
             continue
-        if raw_industry != expected_industry:
-            print(f"  [WARN] '{job['title']}' is '{raw_industry}', expected '{expected_industry}' — skipping.")
-            continue
-
-        # ── Title validation ──────────────────────────────────────────────────
-        title = job["title"].strip()
-
-        if not has_tech_keyword(title):
-            print(f"  [WARN] '{title}' has no tech keyword — too generic, skipping.")
+        if industry != expected_industry:
+            print(f"  [WARN] '{job.get('title', '?')}' is '{industry}', "
+                  f"expected '{expected_industry}' — skipping.")
             continue
 
-        if is_duplicate(title, seen_this_batch):
-            print(f"  [WARN] '{title}' is a near-duplicate within this batch — skipping.")
+        # Title
+        title = str(job["title"]).strip()
+        if not _has_tech_keyword(title):
+            print(f"  [WARN] '{title}' has no tech keyword — skipping.")
+            continue
+        if _is_duplicate(title, seen_this_batch):
+            print(f"  [WARN] '{title}' is near-duplicate within batch — skipping.")
             continue
 
-        # ── Skills validation ─────────────────────────────────────────────────
+        # Skills: must be a list; accept 4 or 5 (trim to 5 if longer)
         skills = job["required_skills"]
         if not isinstance(skills, list):
-            print(f"  [WARN] '{title}' has non-list skills — skipping.")
+            print(f"  [WARN] '{title}' skills is not a list — skipping.")
             continue
+        skills = [str(s).strip() for s in skills if str(s).strip()]
         if len(skills) > 5:
             skills = skills[:5]
-        elif len(skills) < 5:
-            print(f"  [WARN] '{title}' has {len(skills)} skills (need 5) — skipping.")
+        if len(skills) < 4:
+            # Fewer than 4 is too sparse to be useful
+            print(f"  [WARN] '{title}' has only {len(skills)} skill(s) — skipping.")
             continue
 
-        # ── Certifications validation ─────────────────────────────────────────
+        # Certifications
         raw_certs = job["required_certifications"]
         if not isinstance(raw_certs, list):
-            print(f"  [WARN] '{title}' required_certifications is not a list — skipping.")
+            print(f"  [WARN] '{title}' certifications is not a list — skipping.")
             continue
-
-        # Filter noise items; keep 1–3 valid entries
         clean_certs = [c for c in (str(c).strip() for c in raw_certs) if _is_valid_cert(c)]
-        clean_certs = clean_certs[:3]   # hard cap at 3
-
+        clean_certs = clean_certs[:3]
         if not clean_certs:
-            print(f"  [WARN] '{title}' has no valid certifications after filtering — skipping.")
+            print(f"  [WARN] '{title}' has no valid certifications — skipping.")
             continue
 
-        # ── Build validated record ────────────────────────────────────────────
-        description = job["description"].replace("\n", " ").replace("\r", "").strip()
+        description = str(job["description"]).replace("\n", " ").replace("\r", "").strip()
 
         validated.append({
             "title":                   title,
-            "industry":                raw_industry,
+            "industry":                industry,
             "description":             description,
-            "required_skills":         [str(s).strip() for s in skills],
+            "required_skills":         skills,
             "required_certifications": clean_certs,
         })
         seen_this_batch.append(title)
@@ -455,95 +516,103 @@ def parse_jobs(raw: str, batch_size: int, expected_industry: str,
 
     return validated
 
-
-# ── Embedding ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Embedding
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _build_profile(job: dict) -> str:
     """
     Build the SBERT input string for a job.
-    Certifications are appended so that resume cert matches influence
-    the embedding similarity score used in pipeline.py's scoring stage.
+
+    Skills are joined with ', ' (not spaces and definitely not repeated 3×)
+    so SBERT sees them as distinct phrases rather than one fused token.
     """
-    certs_str = " ".join(job.get("required_certifications", []))
+    skills = ", ".join(job["required_skills"])
+    certs  = ", ".join(job.get("required_certifications", []))
     return (
-        f"Job: {job['title']}. Industry: {job['industry']}. "
-        f"Core Skills: {' '.join(job['required_skills'] * 3)}. "
-        f"Certifications: {certs_str}. "
-        f"Desc: {job['description']}"
+        f"Job title: {job['title']}. "
+        f"Industry: {job['industry']}. "
+        f"Required skills: {skills}. "
+        f"Certifications: {certs}. "
+        f"Description: {job.get('description', '')}"
     )
 
 
-def embed_jobs(jobs: list) -> list:
+def embed_jobs(jobs: list[dict]) -> list[dict]:
     profiles = [_build_profile(j) for j in jobs]
-    print(f"  [EMBED] Encoding {len(jobs)} job(s) with SBERT …")
+    print(f"  [EMBED] Encoding {len(jobs)} job(s) …")
     vecs = sbert.encode(profiles, convert_to_numpy=True, show_progress_bar=False)
     for job, vec in zip(jobs, vecs):
         job["embedding"] = vec.astype(float).tolist()
     return jobs
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Firestore seed
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── Seeder (with merge logic) ─────────────────────────────────────────────────
-
-def seed_jobs(jobs: list, existing_docs: dict) -> tuple[int, int]:
+def seed_jobs(jobs: list[dict], existing_docs: dict[str, dict]) -> tuple[int, int]:
     """
     Write each job to Firestore.
-      - NEW job      → full document set
-      - EXISTING job → merge required_skills (cap 10) and
-                       required_certifications (cap 6), refresh description
-                       and embedding.
+      NEW     → full document write
+      EXISTING→ LLM output takes priority; stored data fills the remainder.
+                Description and embedding are always refreshed.
 
     Returns (new_count, merged_count).
     """
-    collection_ref = db.collection(FIRESTORE_JOBS_COLLECTION)
-    new_count    = 0
-    merged_count = 0
+    col     = db.collection(FIRESTORE_JOBS_COLLECTION)
+    new_c   = 0
+    merged_c = 0
 
     for job in jobs:
-        doc_id   = title_to_doc_id(job["title"])
+        doc_id   = _title_to_doc_id(job["title"])
         existing = existing_docs.get(doc_id)
 
         if existing is None:
-            # ── Brand-new job ─────────────────────────────────────────────────
-            collection_ref.document(doc_id).set(job)
+            col.document(doc_id).set(job)
             existing_docs[doc_id] = job
-            new_count += 1
-            certs_summary = ", ".join(job["required_certifications"])
+            new_c += 1
             print(f"  ✓ NEW     [{job['industry']}] {job['title']}")
-            print(f"            certs: {certs_summary}")
+            print(f"            certs: {', '.join(job['required_certifications'])}")
+
         else:
-            # ── Merge into existing job ───────────────────────────────────────
             old_skills = existing.get("required_skills", [])
             old_certs  = existing.get("required_certifications", [])
 
-            merged_skills = merge_skills(old_skills, job["required_skills"])
-            merged_certs  = merge_certs(old_certs,   job["required_certifications"])
+            # LLM-fresh data goes first so it takes priority in the dedup pass
+            merged_skills = merge_skills(job["required_skills"], old_skills)
+            merged_certs  = merge_certs(job["required_certifications"], old_certs)
 
-            merged_job = {
+            merged_job: dict = {
                 **existing,
+                "title":                   job["title"],
+                "industry":                job["industry"],
+                "description":             job["description"],
                 "required_skills":         merged_skills,
                 "required_certifications": merged_certs,
-                "description":             job["description"],
             }
 
-            # Re-encode with the merged profile so the vector stays accurate
-            profile = _build_profile(merged_job)
-            vec = sbert.encode([profile], convert_to_numpy=True, show_progress_bar=False)[0]
+            vec = sbert.encode(
+                [_build_profile(merged_job)],
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )[0]
             merged_job["embedding"] = vec.astype(float).tolist()
 
-            collection_ref.document(doc_id).set(merged_job)
+            col.document(doc_id).set(merged_job)
             existing_docs[doc_id] = merged_job
-            merged_count += 1
+            merged_c += 1
 
-            skills_added = len(merged_skills) - len(old_skills)
-            certs_added  = len(merged_certs)  - len(old_certs)
-            print(f"  ↻ MERGED  [{job['industry']}] {job['title']}")
-            print(f"            skills: {len(old_skills)} → {len(merged_skills)} (+{skills_added})  "
-                  f"certs: {len(old_certs)} → {len(merged_certs)} (+{certs_added})")
+            print(
+                f"  ↻ MERGED  [{job['industry']}] {job['title']}  "
+                f"(skills {len(old_skills)}→{len(merged_skills)}, "
+                f"certs {len(old_certs)}→{len(merged_certs)})"
+            )
 
-    return new_count, merged_count
+    return new_c, merged_c
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     INDUSTRY_TARGET = JOB_COUNT // 2
@@ -552,86 +621,88 @@ if __name__ == "__main__":
     print("[INFO] Checking existing Firestore jobs …")
     existing_docs   = get_existing_docs()
     existing_titles = get_existing_titles(existing_docs)
-    print(f"[INFO] {len(existing_titles)} existing jobs found.\n")
+    print(f"[INFO] {len(existing_titles)} existing job(s) found.\n")
 
-    print(f"[INFO] Plan: {JOB_COUNT} jobs  |  {BATCH_SIZE}/batch  |  {TOTAL_BATCHES} batches")
-    print(f"[INFO] Order: Batch 1=Computing, Batch 2=Engineering, alternating …")
-    print(f"[INFO] LLM  : {HF_MODEL}")
-    print(f"[INFO] Embed: sentence-transformers/all-MiniLM-L6-v2")
-    print(f"[INFO] Store: Firestore / {FIRESTORE_JOBS_COLLECTION}\n")
+    print(f"[INFO] Plan    : {JOB_COUNT} jobs | {BATCH_SIZE}/batch | {TOTAL_BATCHES} batch(es)")
+    print(f"[INFO] Order   : Batch 1=Computing, Batch 2=Engineering, alternating")
+    print(f"[INFO] Avoid   : last {AVOID_LIST_LIMIT} titles sent per prompt")
+    print(f"[INFO] LLM     : {HF_MODEL}")
+    print(f"[INFO] Embed   : sentence-transformers/all-MiniLM-L6-v2")
+    print(f"[INFO] Store   : Firestore / {FIRESTORE_JOBS_COLLECTION}\n")
 
-    industry_counts  = {"Engineering": 0, "Computing": 0}
-    industry_targets = {"Engineering": INDUSTRY_TARGET, "Computing": INDUSTRY_TARGET}
+    industry_counts:  dict[str, int] = {"Engineering": 0, "Computing": 0}
+    industry_targets: dict[str, int] = {"Engineering": INDUSTRY_TARGET,
+                                        "Computing":   INDUSTRY_TARGET}
 
     total_new    = 0
     total_merged = 0
-    all_jobs     = []
+    all_jobs:    list[dict] = []
 
     for batch_num in range(1, TOTAL_BATCHES + 1):
         industry = INDUSTRY_ORDER[(batch_num - 1) % 2]
 
+        # If this industry's quota is full, try the other one
         if industry_counts[industry] >= industry_targets[industry]:
             other = "Engineering" if industry == "Computing" else "Computing"
             if industry_counts[other] >= industry_targets[other]:
-                print(f"[INFO] Both industry quotas met — stopping early.")
+                print("[INFO] Both industry quotas met — stopping early.")
                 break
             industry = other
 
         remaining    = industry_targets[industry] - industry_counts[industry]
         current_size = min(BATCH_SIZE, remaining)
 
-        print(f"{'─'*60}")
+        print(f"{'─' * 60}")
         print(f"[BATCH {batch_num:02d}/{TOTAL_BATCHES}]  {industry}  "
               f"— requesting {current_size} job(s)  "
               f"(quota: {industry_counts[industry]}/{industry_targets[industry]})")
 
-        jobs = []
+        batch_jobs: list[dict] = []
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 prompt     = build_prompt(current_size, existing_titles, industry)
-                raw_output = call_llama(prompt)
-                jobs       = parse_jobs(raw_output, current_size, industry,
+                raw_output = _call_zephyr(prompt)
+                batch_jobs = parse_jobs(raw_output, current_size, industry,
                                         existing_titles)
-                if jobs:
+                if batch_jobs:
                     break
-                print(f"  [RETRY {attempt}/{MAX_RETRIES}] 0 valid jobs returned — retrying …")
-            except (ValueError, json.JSONDecodeError, RuntimeError) as exc:
-                print(f"  [RETRY {attempt}/{MAX_RETRIES}] Error: {exc}")
+                print(f"  [RETRY {attempt}/{MAX_RETRIES}] 0 valid jobs — retrying …")
+            except (ValueError, RuntimeError) as exc:
+                print(f"  [RETRY {attempt}/{MAX_RETRIES}] {exc}")
                 if attempt < MAX_RETRIES:
                     time.sleep(2 ** attempt)
                 else:
-                    print(f"  [SKIP] Batch {batch_num} failed after {MAX_RETRIES} attempts.")
+                    print(f"  [SKIP] Batch {batch_num} failed after {MAX_RETRIES} attempt(s).")
 
-        if not jobs:
+        if not batch_jobs:
             continue
 
-        jobs = embed_jobs(jobs)
-        n, m = seed_jobs(jobs, existing_docs)
+        batch_jobs = embed_jobs(batch_jobs)
+        n, m       = seed_jobs(batch_jobs, existing_docs)
 
-        total_new    += n
-        total_merged += m
-
+        total_new              += n
+        total_merged           += m
         industry_counts[industry] += n
-        all_jobs.extend(jobs)
+        all_jobs.extend(batch_jobs)
+        existing_titles.extend(j["title"] for j in batch_jobs)
 
-        existing_titles.extend([j["title"] for j in jobs])
-
-        time.sleep(1)
+        time.sleep(1)   # polite rate-limit pause
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    # Collect all unique certs now stored in Firestore for the summary line
-    all_stored_certs: set[str] = set()
-    for doc in existing_docs.values():
-        for c in doc.get("required_certifications", []):
-            all_stored_certs.add(c)
+    all_stored_certs: set[str] = {
+        c
+        for doc in existing_docs.values()
+        for c in doc.get("required_certifications", [])
+    }
 
-    print(f"\n{'═'*60}")
-    print(f"[DONE]  Jobs processed        : {len(all_jobs)}")
-    print(f"[DONE]  New documents         : {total_new}")
-    print(f"[DONE]  Merged documents      : {total_merged}")
-    print(f"[DONE]  Engineering new       : {industry_counts['Engineering']}")
-    print(f"[DONE]  Computing new         : {industry_counts['Computing']}")
-    print(f"[DONE]  Total in Firestore    : {len(existing_docs)}")
-    print(f"[DONE]  Unique certs stored   : {len(all_stored_certs)}")
-    print(f"[DONE]  Collection            : {FIRESTORE_JOBS_COLLECTION}")
-    print(f"[DONE]  Model                 : {HF_MODEL}")
+    print(f"\n{'═' * 55}")
+    print(f"  Jobs processed       : {len(all_jobs)}")
+    print(f"  New documents        : {total_new}")
+    print(f"  Merged documents     : {total_merged}")
+    print(f"  Engineering new      : {industry_counts['Engineering']}")
+    print(f"  Computing new        : {industry_counts['Computing']}")
+    print(f"  Total in Firestore   : {len(existing_docs)}")
+    print(f"  Unique certs stored  : {len(all_stored_certs)}")
+    print(f"  Collection           : {FIRESTORE_JOBS_COLLECTION}")
+    print(f"  Model                : {HF_MODEL}")
+    print(f"{'═' * 55}")
