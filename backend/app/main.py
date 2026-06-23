@@ -7,6 +7,20 @@ All analysis logic lives in pipeline.py. This file handles:
   - File upload / temp file lifecycle
   - FAISS integrity self-check
   - Response assembly
+
+Current pipeline (see pipeline.py for the full breakdown)
+-----------------------------------------------------------
+Stage 1 — text acquisition: plain parsing (PyMuPDF / EasyOCR). No AI matching.
+Stage 2 — skills + certs discovery: candidate phrases are semantically matched
+           against the job corpus allowlist (SBERT cosine similarity, >=0.80)
+           inside core.skills / core.certs.
+Stage 3 — job matching: discovered skills AND certs are compared against
+           every job's requirements via SBERT cosine similarity (core.scoring,
+           core.validation). No string-fuzzy matching (rapidfuzz) is used
+           anywhere in this pipeline anymore — it's all embedding-based.
+Stage 4 — FAISS integrity self-check (this file): a sanity check that the
+           FAISS index round-trips the resume's own embedding correctly. Not
+           part of the analysis itself.
 """
 
 import os
@@ -17,7 +31,7 @@ import faiss
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from dotenv import load_dotenv
-import logging
+
 logging.basicConfig(level=logging.INFO)
 
 # Ensure .env is loaded before config values are read
@@ -36,8 +50,9 @@ log = logging.getLogger(__name__)
 app = FastAPI(
     title="AI Resume Matching API",
     description=(
-        "Pipeline: PyMuPDF → EasyOCR → "
-        "Llama-3.1-8B (HF Inference API) → SBERT → FAISS → Firestore"
+        "Pipeline: PyMuPDF / EasyOCR (text) -> Llama-3.1-8B (HF Inference API, "
+        "fit-reason generation only) -> SBERT semantic matching (skills + certs "
+        "discovery AND job matching) -> FAISS (similarity search) -> Firestore"
     ),
 )
 
@@ -92,31 +107,46 @@ async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
         },
         "STAGE_2_SKILL_EXTRACTION": {
             "llm_model":                 HF_MODEL,
+            "matching":                  "SBERT semantic (cosine >= 0.80)",
             "skills_section_rule_based": result["skills_section_debug"],
             "discovered_skills":         result["discovered_skills"],
         },
-        "STAGE_2B_CERT_EXTRACTION": {
+        "STAGE_2_CERT_EXTRACTION": {
             "llm_model":               HF_MODEL,
+            "matching":                "SBERT semantic (cosine >= 0.80)",
             "cert_section_rule_based": result["cert_section_debug"],
             "discovered_certificates": result["discovered_certs"],
         },
-        "STAGE_3_NLP_VALIDATION": {
-            "ground_truth_source": "best_matched_job_required_skills",
-            "ground_truth_count":  len(best["required_skills"]),
-            "nlp_accuracy":        result["nlp_accuracy"],
-            "matched_skills":      result["nlp_verification"]["matched_skills"],
-            "unmatched_skills":    result["nlp_verification"]["unmatched_skills"],
+        "STAGE_3_JOB_MATCHING": {
+            "matching_method":     "SBERT semantic cosine similarity (skills and certs)",
+            "ground_truth_source": "best_matched_job_required_skills_and_certifications",
+            "skills": {
+                "ground_truth_count": len(best["required_skills"]),
+                "nlp_accuracy":       result["nlp_accuracy"],
+                "matched_skills":     result["nlp_verification"]["matched_skills"],
+                "unmatched_skills":   result["nlp_verification"]["unmatched_skills"],
+            },
+            "certifications": {
+                "ground_truth_count": len(best["required_certifications"]),
+                "nlp_accuracy":       result["nlp_accuracy_certs"],
+                "matched_certs":      result["matched_certs"],
+                "missing_certs":      result["missing_certs"],
+            },
             "Top_5_Career_Recommendations_NLP": [
                 {
-                    "rank":               rank + 1,
-                    "job_id":             m["job_id"],
-                    "title":              m["title"],
-                    "industry":           m.get("industry", ""),
-                    "nlp_accuracy":       m["nlp_validation"]["NLP_ACCURACY"],
-                    "matched_skills":     m["nlp_validation"]["matched_skills"],
-                    "unmatched_skills":   m["nlp_validation"]["unmatched_skills"],
-                    "ground_truth_count": len(m["required_skills"]),
-                    "fit_reason":         m.get("fit_reason", ""),
+                    "rank":                    rank + 1,
+                    "job_id":                  m["job_id"],
+                    "title":                   m["title"],
+                    "industry":                m.get("industry", ""),
+                    "nlp_accuracy":            m["nlp_validation"]["NLP_ACCURACY"],
+                    "matched_skills":          m["nlp_validation"]["matched_skills"],
+                    "unmatched_skills":        m["nlp_validation"]["unmatched_skills"],
+                    "ground_truth_count":      len(m["required_skills"]),
+                    "cert_nlp_accuracy":       m["nlp_validation_certs"]["NLP_ACCURACY"],
+                    "matched_certs":           m["matched_certs"],
+                    "missing_certs":           m["missing_certs"],
+                    "cert_ground_truth_count": len(m["required_certifications"]),
+                    "fit_reason":              m.get("fit_reason", ""),
                 }
                 for rank, m in enumerate(result["top_5_matches"])
             ],
@@ -143,9 +173,15 @@ async def target_career_analysis(
 
     The endpoint runs the standard extraction pipeline, then looks up the
     requested job in the Firestore corpus and returns a focused report:
-      - which of the job's required skills the candidate already has
-      - which skills are still missing
+      - which of the job's required skills AND certifications the candidate
+        already has, vs. what's missing
     No top-5 ranking is produced — only the one targeted job is evaluated.
+
+    Skill and cert matching here uses the same SBERT semantic matching
+    (core.validation.fuzzy_skill_verify) as the main scoring pipeline —
+    this used to be a separate exact-string comparison and has been brought
+    in line so a candidate isn't penalised here for wording a skill/cert
+    differently than the job posting does.
     """
 
     # ── 1. Save upload to a temp file ────────────────────────────────────────
@@ -171,9 +207,8 @@ async def target_career_analysis(
     # aspires to but currently scores poorly on would never appear there.
     # The point of this endpoint is to show the gap regardless of current
     # score, so we resolve the title directly from the corpus.
-    from db       import load_analyzer_data as _load
-    from core.validation import fuzzy_skill_verify
-    from core.utils      import normalize
+    from db               import load_analyzer_data as _load
+    from core.validation  import fuzzy_skill_verify
 
     _, jobs_corpus_full, _ = _load()
 
@@ -197,27 +232,28 @@ async def target_career_analysis(
     # so the gap analysis uses the richest ground truth available.
     target_job_doc: dict = max(candidates, key=lambda j: len(j.get("required_skills", [])))
 
-    # ── 3. NLP validation against the target job ──────────────────────────────
+    # ── 3. Semantic skill validation against the target job ───────────────────
+    req_skills = target_job_doc.get("required_skills", [])
     nlp = fuzzy_skill_verify(
         discovered_list   = result["discovered_skills"],
-        ground_truth_list = target_job_doc.get("required_skills", []),
+        ground_truth_list = req_skills,
     )
-
-    # ── 4. Compute match ratio + hybrid score for this specific job ───────────
-    req_skills   = target_job_doc.get("required_skills", [])
-    resume_norms = {normalize(s) for s in result["discovered_skills"]}
-    matched_now  = [s for s in req_skills if normalize(s) in resume_norms]
-    match_ratio  = round(len(matched_now) / len(req_skills), 4) if req_skills else 0.0
-    # Hybrid score without SBERT (we don't re-encode here) — match_ratio only
+    match_ratio  = round(len(nlp["matched_skills"]) / len(req_skills), 4) if req_skills else 0.0
+    # Hybrid score without SBERT job-similarity re-encoding (we don't re-run
+    # the job-corpus cosine pass for an arbitrary target here) — match_ratio
+    # only, but match_ratio itself is now semantic, not exact-string.
     hybrid_score = match_ratio
 
-    # ── 5. Cert gap for the target job ────────────────────────────────────────
-    certs_norm    = {normalize(c) for c in result["discovered_certs"]}
-    req_certs     = target_job_doc.get("required_certifications", [])
-    matched_certs = [c for c in req_certs if normalize(c) in certs_norm]
-    missing_certs = [c for c in req_certs if normalize(c) not in certs_norm]
+    # ── 4. Semantic cert validation against the target job ────────────────────
+    req_certs = target_job_doc.get("required_certifications", [])
+    cert_nlp  = fuzzy_skill_verify(
+        discovered_list   = result["discovered_certs"],
+        ground_truth_list = req_certs,
+    )
+    matched_certs = cert_nlp["matched_skills"]
+    missing_certs = cert_nlp["unmatched_skills"]
 
-    # ── 6. Assemble focused response ──────────────────────────────────────────
+    # ── 5. Assemble focused response ──────────────────────────────────────────
     return {
         "target_job": {
             "job_id":   target_job_doc.get("id", ""),
@@ -242,6 +278,7 @@ async def target_career_analysis(
             "required_certs": req_certs,
             "matched_certs":  matched_certs,
             "missing_certs":  missing_certs,
+            "nlp_accuracy":   cert_nlp["NLP_ACCURACY"],
         },
         "text_acquisition": {
             "text_source": result["text_source"],

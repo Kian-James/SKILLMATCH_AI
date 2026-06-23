@@ -30,8 +30,9 @@ Required .env variables:
     LABELS_PATH                – path to labels.json  (default: labels.json)
 
 Optional .env variables:
-    MAX_RETRIES                – LLM call retries per batch  (default: 3)
-    DESCRIPTION_BATCH_SIZE     – jobs per LLM call           (default: 4)
+    HF_MODEL                   – HF router model id (default: HuggingFaceH4/zephyr-7b-beta:featherless-ai)
+    MAX_RETRIES                – LLM call retries per batch  (default: 5)
+    DESCRIPTION_BATCH_SIZE      – jobs per LLM call           (default: 4)
     MAX_CERTS                  – cap on stored certifications (default: 5)
 """
 
@@ -57,12 +58,20 @@ HF_TOKEN                  = os.getenv("HF_TOKEN", "")
 FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
 FIRESTORE_JOBS_COLLECTION = os.getenv("FIRESTORE_JOBS_COLLECTION", "jobs")
 LABELS_PATH               = os.getenv("LABELS_PATH", "labels.json")
-MAX_RETRIES               = int(os.getenv("MAX_RETRIES", "3"))
+MAX_RETRIES               = int(os.getenv("MAX_RETRIES", "5"))
 BATCH_SIZE                = int(os.getenv("DESCRIPTION_BATCH_SIZE", "4"))
 MAX_CERTS                 = int(os.getenv("MAX_CERTS", "5"))
 
 HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
-HF_MODEL   = "HuggingFaceH4/zephyr-7b-beta:featherless-ai"
+# Locked to Zephyr-7B-Beta on featherless-ai per requirement. This model is
+# small and, on shared/cheap inference, prone to drifting into fabricated
+# "continuation" turns (mimicking its own fine-tuning dataset) instead of
+# answering the actual prompt — especially with no concrete example to
+# anchor on. We compensate for this with a few-shot example (see
+# _FEWSHOT_USER / _FEWSHOT_ASSISTANT below), low temperature, explicit stop
+# sequences, escalating-strictness retries, and title-match validation,
+# rather than by changing model.
+HF_MODEL   = os.getenv("HF_MODEL", "HuggingFaceH4/zephyr-7b-beta:featherless-ai")
 
 # ── Pre-flight checks ─────────────────────────────────────────────────────────
 
@@ -205,24 +214,111 @@ def load_labels(path: str) -> list[dict]:
 # output, but the featherless-ai router sometimes ignores or strips it, leading
 # to the seed text being embedded in the response body.  Instead we instruct
 # the model explicitly in the system prompt and validate the output ourselves.
+#
+# WHY A `stop` SEQUENCE?
+# Without an explicit stop list, Zephyr/Mistral-style models will sometimes
+# run straight past the end of their own turn and keep "talking" — generating
+# fake follow-up user/assistant turns (you'll see literal "[/INST]",
+# "<|user|>", etc. leak into the raw text) and even hallucinating an entirely
+# different job title partway through. Passing the chat-template's own
+# turn-boundary tokens as stop sequences forces the model to halt right after
+# it finishes the JSON object we actually asked for.
+#
+# WHY A FEW-SHOT EXAMPLE?
+# Zephyr-7B-Beta is small, and on shared/cheap inference (featherless-ai) it
+# periodically ignores the actual prompt and instead "continues" as if it
+# were generating one of its own fine-tuning examples — fabricating a brand
+# new unrelated user question (e.g. a hallucinated "<<USER>> ... Full Stack
+# Developer ..." block) rather than answering. Giving the model one concrete,
+# fully-worked example turn (a fake prior job → fake prior JSON answer)
+# anchors it to the actual pattern we want and measurably reduces this
+# drift. This is different from "assistant seeding" (priming a partial
+# assistant message) which the router handles unreliably — a full extra
+# user/assistant turn pair is a normal, well-supported part of any chat
+# payload.
+#
+# WHY ESCALATING STRICTNESS ON RETRY?
+# If the model still drifts on attempt 1, simply repeating the same prompt
+# verbatim tends to reproduce the same drift. Each retry appends an
+# increasingly blunt reminder to the user turn, which in practice is enough
+# to pull the model back onto the JSON-only pattern.
+#
+# WHY VALIDATE THE RETURNED TITLE?
+# Even with a stop sequence, a flaky inference backend can occasionally
+# return a well-formed JSON object that answers about the WRONG job. We
+# verify `obj["title"]` matches the job we asked about before accepting the
+# description — a mismatch is treated as a failed attempt and retried.
 
 _SYSTEM_PROMPT = (
     "You are a concise technical writer. "
     "When given a job title, industry, and a list of required skills, "
     "you respond with ONLY a single valid JSON object and nothing else. "
     "The object must have exactly two keys: \"title\" and \"description\". "
+    "The \"title\" value must be copied exactly as given. "
     "\"description\" must be 1–2 sentences summarising what a professional "
-    "in that role does. No markdown, no code fences, no extra text."
+    "in that role does. No markdown, no code fences, no extra text, "
+    "and do not generate any additional examples or follow-up turns."
 )
 
+# One fully-worked example turn, used as a few-shot anchor (see comment
+# above). The example job is deliberately something NOT present in
+# labels.json so it can never be mistaken for a real title-match collision.
+_FEWSHOT_USER = (
+    "Respond with ONLY a single valid JSON object — no markdown, no "
+    "extra text, no additional examples — with exactly two keys: "
+    "\"title\" and \"description\". Copy the title exactly as given "
+    "below. \"description\" must be 1–2 sentences summarising what a "
+    "professional in that role does.\n\n"
+    "Title: Example Quality Assurance Lead\n"
+    "Industry: Computing\n"
+    "Key skills: Test planning, manual testing, defect tracking\n\n"
+    "Return the JSON object now."
+)
+_FEWSHOT_ASSISTANT = (
+    '{"title": "Example Quality Assurance Lead", '
+    '"description": "Plans and oversees software testing efforts, tracks '
+    'defects, and ensures releases meet quality standards before launch."}'
+)
 
-def _build_single_prompt(job: dict) -> str:
+# Stop sequences covering common chat-template turn markers (Zephyr/Mistral,
+# Llama-2/<<SYS>> style, and generic OpenAI-ish routers). The goal is simply
+# to cut the model off the instant it tries to open a new turn instead of
+# letting it run on into hallucinated follow-up content.
+_STOP_SEQUENCES = [
+    "</s>", "[/INST]", "<<USER>>", "<<SYS>>",
+    "<|user|>", "<|system|>", "<|assistant|>", "<|im_end|>",
+]
+
+# Reminder text appended on retries, escalating in bluntness each time.
+_RETRY_REMINDERS = [
+    "",  # attempt 1 — no extra reminder
+    "\n\nReminder: output ONLY the JSON object. Nothing before or after it.",
+    "\n\nIMPORTANT: Your previous response did not follow instructions. "
+    "Your entire reply must be exactly one JSON object, starting with '{' "
+    "and ending with '}'. Do not invent a different job, do not ask a "
+    "question, do not add commentary.",
+    "\n\nFINAL ATTEMPT: Reply with nothing but this exact shape (fill in "
+    "the values): {\"title\": \"...\", \"description\": \"...\"}",
+]
+
+
+def _build_single_prompt(job: dict, attempt: int = 1) -> str:
     skills_preview = ", ".join(job["required_skills"][:6]) or "N/A"
+    # The core instructions are repeated here (in addition to the system
+    # message) because some routers/providers handle the "system" role
+    # inconsistently — folding the requirements into the user turn as well
+    # makes the request more robust across providers.
+    reminder = _RETRY_REMINDERS[min(attempt - 1, len(_RETRY_REMINDERS) - 1)]
     return (
+        f"Respond with ONLY a single valid JSON object — no markdown, no "
+        f"extra text, no additional examples — with exactly two keys: "
+        f"\"title\" and \"description\". Copy the title exactly as given "
+        f"below. \"description\" must be 1–2 sentences summarising what a "
+        f"professional in that role does.\n\n"
         f"Title: {job['title']}\n"
         f"Industry: {job['industry']}\n"
         f"Key skills: {skills_preview}\n\n"
-        f"Return a JSON object with keys \"title\" and \"description\"."
+        f"Return the JSON object now.{reminder}"
     )
 
 
@@ -231,12 +327,15 @@ def _call_zephyr(user_content: str) -> str:
     payload = {
         "model": HF_MODEL,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": user_content},
+            {"role": "system",    "content": _SYSTEM_PROMPT},
+            {"role": "user",      "content": _FEWSHOT_USER},
+            {"role": "assistant", "content": _FEWSHOT_ASSISTANT},
+            {"role": "user",      "content": user_content},
         ],
-        "max_tokens": 200,
-        "temperature": 0.2,
+        "max_tokens": 150,
+        "temperature": 0.1,
         "stream": False,
+        "stop": _STOP_SEQUENCES,
     }
     resp = requests.post(
         HF_API_URL,
@@ -260,10 +359,13 @@ def _extract_json_object(text: str) -> dict:
     # Strip markdown fences if present
     text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE).strip().strip("`").strip()
 
-    # Find the outermost {...}
+    # Fast-fail: if the response doesn't even contain a brace near the
+    # start, the model has drifted into free-form text (e.g. a fabricated
+    # "<<USER>> ..." turn) rather than answering — no point scanning deep
+    # into a long ramble looking for a stray '{' that isn't really our answer.
     start = text.find("{")
-    if start == -1:
-        raise ValueError(f"No JSON object found in: {text!r}")
+    if start == -1 or start > 20:
+        raise ValueError(f"No JSON object found near start of: {text!r}")
 
     depth = 0
     for i, ch in enumerate(text[start:], start):
@@ -284,16 +386,28 @@ def _extract_json_object(text: str) -> dict:
 def _generate_description_for_job(job: dict) -> str:
     """
     Call Zephyr once for a single job and return the description string.
-    Retries up to MAX_RETRIES times with exponential back-off.
+    Retries up to MAX_RETRIES times with exponential back-off, escalating
+    the strictness of the reminder text on each retry.
     Falls back to a template string if all retries are exhausted.
     """
-    prompt = _build_single_prompt(job)
+    expected_title = job["title"].strip().lower()
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            raw  = _call_zephyr(prompt)
+            prompt = _build_single_prompt(job, attempt=attempt)
+            raw    = _call_zephyr(prompt)
             print(f"    [LLM RAW] {raw[:160]}{'…' if len(raw) > 160 else ''}")
-            obj  = _extract_json_object(raw)
+            obj    = _extract_json_object(raw)
+
+            # Guard against the model answering about the wrong job entirely
+            # (can happen on flaky shared-inference backends even with a
+            # stop sequence and few-shot anchor in place).
+            returned_title = (obj.get("title") or "").strip().lower()
+            if returned_title != expected_title:
+                raise ValueError(
+                    f"Title mismatch: expected {job['title']!r}, got {obj.get('title')!r}"
+                )
+
             desc = (obj.get("description") or "").replace("\n", " ").strip()
             if not desc:
                 raise ValueError("Empty 'description' field in LLM response.")

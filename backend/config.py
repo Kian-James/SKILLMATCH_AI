@@ -22,7 +22,7 @@ load_dotenv(dotenv_path=_ENV_PATH, override=False)
 # ── HuggingFace Inference API ─────────────────────────────────────────────────
 HF_TOKEN: str    = os.getenv("HF_TOKEN", "")
 HF_API_URL: str  = "https://router.huggingface.co/v1/chat/completions"
-HF_MODEL: str    = os.getenv("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct:cerebras")
+HF_MODEL: str    = os.getenv("HF_MODEL", "HuggingFaceH4/zephyr-7b-beta:featherless-ai")
 MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
 
 # ── Firebase / Firestore ──────────────────────────────────────────────────────

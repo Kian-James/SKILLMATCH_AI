@@ -3,27 +3,51 @@ core/scoring.py
 ===============
 Stage 3 (FAISS side) — SBERT embedding + hybrid scoring.
 
-Hybrid score formula (revised)
--------------------------------
-Old formula had a structural ceiling of ~87 and compressed all real-world
-scores into a narrow 55–80 band, making the number meaningless as a signal.
+Hybrid score formula (v3 — fixes two measured problems in v2)
+---------------------------------------------------------------
+v2 (multiplicative: cosine_scaled * sqrt(match_ratio) - gap_penalty) had
+two issues confirmed against real evaluation data:
 
-New formula:
+  1. SCALE BUG: _compute_hybrid_score returned 0-1, but was never actually
+     multiplied by 100 before being stored in results["score"]. The
+     min_match_score threshold (50-60) is on a 0-100 scale, so comparing
+     the raw "score" field against it directly always fails. Fixed: the
+     hybrid score is now computed and returned on a 0-100 scale from this
+     function, so "score" is self-consistent with the documented threshold
+     with no rescaling required downstream.
+
+  2. MULTIPLICATIVE CRUSH: using skill match as a *multiplier* on cosine
+     meant a candidate with a 100% skill match but a merely-good (not
+     great) cosine of ~0.50-0.60 — common for real resumes scored against
+     real job postings — could be dragged below threshold even with a
+     perfect skill match, while sqrt(low match_ratio) could crush a
+     genuinely strong cosine match to ~0 on a single bad extraction.
+     Fixed: cosine and skill match are now combined as a WEIGHTED AVERAGE
+     (50/50 by default) rather than multiplied. Each signal can partially
+     carry the score on its own; neither can be silently erased by a weak
+     reading on the other. The gap penalty (large, lopsided skill gaps)
+     is still subtracted afterward so a near-total skill mismatch still
+     can't be rescued by semantic similarity alone.
+
+Formula:
   1. Rescale cosine similarity from SBERT's real range (0.30–0.90) → 0–1
-  2. Use skill match ratio as a MULTIPLIER, not an additive term
-     — a candidate missing 80% of skills can't ride a high cosine to a pass
+  2. score = WEIGHT_COSINE * cosine_scaled + WEIGHT_SKILL * match_ratio
   3. Apply a gap penalty that only activates when >40% of required skills
      are missing, capping at a 50-point drag
   4. Multiply by 100 for a 0–100 output with a meaningful 60-point threshold
 
-Typical score ranges with new formula:
-  Strong match   (cosine 0.82, skills 0.90, gap 0.10)  →  ~91
-  Good match     (cosine 0.72, skills 0.75, gap 0.25)  →  ~73
-  Semantic only  (cosine 0.80, skills 0.30, gap 0.70)  →  ~18
-  Weak all round (cosine 0.45, skills 0.20, gap 0.80)  →   ~0
-  Perfect        (cosine 0.88, skills 1.00, gap 0.00)  →  ~97
+Typical score ranges with v3 formula:
+  Perfect        (cosine 0.88, skills 1.00, gap 0.00)  →  ~93
+  Strong match   (cosine 0.82, skills 0.90, gap 0.10)  →  ~88
+  Good match     (cosine 0.72, skills 0.75, gap 0.25)  →  ~72
+  Full skills,
+   modest cosine (cosine 0.55, skills 1.00, gap 0.00)  →  ~71  (previously ~43, a false fail)
+  Semantic only  (cosine 0.80, skills 0.30, gap 0.70)  →  ~12  (still heavily penalised —
+                                                                 the gap penalty does the work,
+                                                                 not a multiplier crush to ~1)
+  Weak all round (cosine 0.45, skills 0.20, gap 0.80)  →   ~6
 
-Recommended min_match_score threshold: 60  (was 50)
+Recommended min_match_score threshold: 60
 
 fit_reason generation: generate_fit_reason calls the HF Inference API
   (meta-llama/Llama-3.1-8B-Instruct via the HuggingFace router) to produce
@@ -40,7 +64,6 @@ import requests
 
 import faiss
 import numpy as np
-from rapidfuzz import fuzz as _fuzz
 from tqdm import tqdm
 
 from config import TOP_K, HF_TOKEN, HF_API_URL, HF_MODEL
@@ -51,42 +74,117 @@ from core.ocr_correction import get_sbert
 log = logging.getLogger(__name__)
 
 
+# ── FAISS index cache ──────────────────────────────────────────────────────────
+# Keyed by (id(jobs_corpus), len(jobs_corpus)) so repeat calls against the same
+# loaded corpus (e.g. batch evaluation scoring many resumes in one process)
+# skip re-encoding jobs and rebuilding the index every call. Invalidates
+# automatically if a *different* corpus list is passed, or if the same list
+# object's length changes (a cheap signal something was added/removed).
+#
+# NOT safe across processes or for corpora that mutate in place without a
+# length change (e.g. replacing an element) — call clear_index_cache() if
+# jobs_corpus content changes without changing identity or length.
+_INDEX_CACHE: dict[tuple[int, int], tuple["faiss.IndexFlatIP", np.ndarray]] = {}
+
+
+def clear_index_cache() -> None:
+    """Drop all cached FAISS indexes. Call this if a cached jobs_corpus's
+    content changes in place without its identity or length changing."""
+    _INDEX_CACHE.clear()
+
+
+def _get_or_build_index(jobs_corpus: list[dict]) -> tuple["faiss.IndexFlatIP", np.ndarray]:
+    """
+    Return a cached (index, job_matrix) pair for this jobs_corpus, building
+    and caching it on first use. Subsequent calls with the same corpus list
+    (same object, same length) reuse the cached FAISS index instead of
+    re-encoding every job and rebuilding the index from scratch.
+    """
+    cache_key = (id(jobs_corpus), len(jobs_corpus))
+    cached = _INDEX_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    job_matrix = _encode_jobs(jobs_corpus)
+    dim        = job_matrix.shape[1]
+    index      = faiss.IndexFlatIP(dim)
+    index.add(job_matrix)
+
+    _INDEX_CACHE[cache_key] = (index, job_matrix)
+    return index, job_matrix
+
+
 # ── Scoring constants ─────────────────────────────────────────────────────────
 COSINE_MIN        = 0.30   # SBERT inner-product floor for real documents
 COSINE_MAX        = 0.90   # SBERT inner-product ceiling for real documents
+WEIGHT_COSINE     = 0.50   # weight of rescaled cosine similarity in the blend
+WEIGHT_SKILL      = 0.50   # weight of skill match_ratio in the blend (must sum to 1.0 with above)
 GAP_PENALTY_FLOOR = 0.40   # gap penalty only activates above this missing-skill ratio
 GAP_PENALTY_SCALE = 1.50   # how steeply the penalty grows past the floor
-GAP_PENALTY_CAP   = 0.50   # maximum penalty (50 points), prevents negative scores
-FUZZY_THRESHOLD   = 85     # rapidfuzz token_sort_ratio threshold, matches evaluator
+GAP_PENALTY_CAP   = 0.50   # maximum penalty (50 points on the 0-1 scale), prevents negative scores
+ITEM_SEMANTIC_THRESHOLD = 0.80  # SBERT cosine floor for a semantic skill/cert match,
+# matches the convention used in validation.py / extractor_base.py
 
 
-# ── Skill matching ─────────────────────────────────────────────────────────────
-def _fuzzy_skill_match(job_skill: str, resume_skills_raw: list[str]) -> bool:
+# ── Item matching (skills and certs share this — semantic, not string-fuzzy) ──
+def _encode_norm(texts: list[str]) -> np.ndarray:
+    """Batch-encode normalized embeddings via the shared SBERT model."""
+    if not texts:
+        return np.zeros((0, 1), dtype=np.float32)
+    sbert = get_sbert()
+    return sbert.encode(texts, normalize_embeddings=True).astype(np.float32)
+
+
+def _semantic_item_match(
+        target_item:   str,
+        candidate_norms: list[str],
+        candidate_vecs:  np.ndarray,
+        threshold:       float = ITEM_SEMANTIC_THRESHOLD,
+) -> bool:
     """
-    Return True if job_skill fuzzy-matches any skill in resume_skills_raw.
-    Uses the same 85-point threshold as the offline evaluator so scoring
-    and evaluation are consistent.
+    Return True if target_item matches any candidate semantically.
+
+    Exact-equality and substring checks are kept as cheap pre-filters (they
+    are plain string comparisons, not fuzzy scoring) before falling back to
+    SBERT cosine similarity for anything not already obviously the same.
     """
-    jn = normalize(job_skill)
-    for rs in resume_skills_raw:
-        rn = normalize(rs)
-        if jn == rn:
-            return True
-        if jn in rn or rn in jn:
-            return True
-        if _fuzz.token_sort_ratio(jn, rn) >= FUZZY_THRESHOLD:
-            return True
-    return False
+    tn = normalize(target_item)
+    if tn in candidate_norms:
+        return True
+    if any(tn in cn or cn in tn for cn in candidate_norms):
+        return True
+    if candidate_vecs.shape[0] == 0:
+        return False
+    target_vec = _encode_norm([tn])[0]
+    sims = candidate_vecs @ target_vec
+    return bool(sims.size and float(sims.max()) >= threshold)
 
 
-def _partition_skills(
-        req:               list[str],
-        resume_skills_raw: list[str],
+def _partition_items(
+        req:            list[str],
+        candidate_raw:  list[str],
 ) -> tuple[list[str], list[str]]:
-    """Split required skills into (matched, missing) using fuzzy matching."""
-    matched = [s for s in req if     _fuzzy_skill_match(s, resume_skills_raw)]
-    missing = [s for s in req if not _fuzzy_skill_match(s, resume_skills_raw)]
+    """
+    Split required items (skills or certs) into (matched, missing) using
+    semantic matching against the candidate's discovered items. Embeddings
+    for candidate_raw are computed once and reused across every item in req.
+    """
+    candidate_norms = [normalize(c) for c in candidate_raw]
+    candidate_vecs  = _encode_norm(candidate_norms)
+
+    matched: list[str] = []
+    missing: list[str] = []
+    for s in req:
+        if _semantic_item_match(s, candidate_norms, candidate_vecs):
+            matched.append(s)
+        else:
+            missing.append(s)
     return matched, missing
+
+
+# Backwards-compatible alias — same semantics, kept for any external callers
+# that import _partition_skills by name.
+_partition_skills = _partition_items
 
 
 # ── Hybrid score ──────────────────────────────────────────────────────────────
@@ -96,7 +194,7 @@ def _compute_hybrid_score(
         gap_ratio:   float,
 ) -> float:
     """
-    Compute a 0–1 hybrid score from the three stage inputs.
+    Compute a 0–100 hybrid score from the three stage inputs.
 
     Parameters
     ----------
@@ -106,7 +204,8 @@ def _compute_hybrid_score(
 
     Returns
     -------
-    float in [0, 1] — multiply by 100 for the display score
+    float in [0, 100] — already on display/threshold scale, no further
+    rescaling needed by callers.
     """
     # Step 1: stretch SBERT's real operating range to fill 0–1
     cosine_scaled = float(np.clip(
@@ -114,21 +213,24 @@ def _compute_hybrid_score(
         0.0, 1.0,
         ))
 
-    # Step 2: skill match as a multiplier
-    #   sqrt softens the curve so partial matches aren't brutally penalised:
-    #   0.25 match → 0.50 multiplier
-    #   0.50 match → 0.71 multiplier
-    #   0.80 match → 0.89 multiplier
-    #   1.00 match → 1.00 multiplier
-    skill_multiplier = float(np.sqrt(match_ratio))
+    # Step 2: weighted average of cosine and skill match (NOT a multiplier).
+    #   A multiplier lets either signal single-handedly crush the whole
+    #   score to ~0 even when the other signal is strong (e.g. a 100%
+    #   skill match getting dragged below threshold by a merely-good
+    #   cosine of 0.55, or a strong cosine getting zeroed by one bad
+    #   skill-extraction pass). A weighted average lets each signal
+    #   partially carry the score on its own.
+    blended = WEIGHT_COSINE * cosine_scaled + WEIGHT_SKILL * match_ratio
 
-    # Step 3: gap penalty — only fires when >40% of required skills are absent
+    # Step 3: gap penalty — only fires when >40% of required skills are absent.
+    # This is what actually punishes severe skill mismatches now that
+    # match_ratio is additive rather than multiplicative.
     excess      = max(0.0, gap_ratio - GAP_PENALTY_FLOOR)
     gap_penalty = min(excess * GAP_PENALTY_SCALE, GAP_PENALTY_CAP)
 
-    # Step 4: combine
-    raw = cosine_scaled * skill_multiplier - gap_penalty
-    return round(max(0.0, raw), 4)
+    # Step 4: combine and scale to 0-100
+    raw = blended - gap_penalty
+    return round(max(0.0, raw) * 100, 2)
 
 
 # ── Resume query builder ──────────────────────────────────────────────────────
@@ -287,19 +389,33 @@ def generate_fit_reason(
         missing_skills = missing_skills,
         cosine_score   = cosine_score,
         match_ratio    = match_ratio,
-        industry       = industry,
+        industry        = industry,
     )
 
 
 # ── Skill gap ─────────────────────────────────────────────────────────────────
 def identify_skill_gap(resume_skills: list[str], job_skills: list[str]) -> list[str]:
-    """Return skills present in job_skills but absent from resume_skills (fuzzy)."""
-    return [s for s in job_skills if not _fuzzy_skill_match(s, resume_skills)]
+    """Return skills present in job_skills but absent from resume_skills (semantic)."""
+    resume_norms = [normalize(s) for s in resume_skills]
+    resume_vecs  = _encode_norm(resume_norms)
+    return [s for s in job_skills if not _semantic_item_match(s, resume_norms, resume_vecs)]
 
 
 # ── Job encoding ──────────────────────────────────────────────────────────────
 def _encode_jobs(jobs_corpus: list[dict]) -> np.ndarray:
-    """Encode job documents with SBERT; reuse stored embeddings when available."""
+    """
+    Encode job documents with SBERT; reuse stored embeddings when available.
+
+    SIDE EFFECT: writes job["embedding"] back onto each dict in jobs_corpus
+    in place, so repeat calls against the same corpus list skip re-encoding.
+    This is a deliberate caching optimization for batch evaluation (e.g. the
+    offline evaluator re-scoring many resumes against one loaded corpus),
+    but it means jobs_corpus is NOT safely shared across concurrent callers
+    — if two requests score against the same cached corpus list at once,
+    this mutation is a race condition. Callers that share a corpus across
+    threads/async tasks should either lock around scoring calls or key
+    embeddings by job id in a separate cache instead of mutating the dicts.
+    """
     sbert   = get_sbert()
     vectors: list[np.ndarray] = []
 
@@ -328,13 +444,34 @@ def calculate_cosine_similarity(
         resume_skills: list[str],
         jobs_corpus:   list[dict],
         top_k:         int = TOP_K,
+        resume_certs:  list[str] | None = None,
 ) -> list[dict]:
     """
     Stage 3 — hybrid scoring + per-job NLP validation.
 
     Returns top_k job dicts sorted by score descending, each including
-    an 'nlp_validation' key with per-job accuracy breakdown.
+    an 'nlp_validation' key with per-job accuracy breakdown for skills, and
+    (when resume_certs is provided) a parallel 'nlp_validation_certs' key
+    plus matched_certs/missing_certs/required_certifications.
+
+    resume_certs is optional and defaults to an empty list for backward
+    compatibility with existing callers that don't pass it — in that case
+    cert fields are still present in each result but empty/N-A rather than
+    omitted, so downstream code can rely on the keys always existing.
+
+    NOTE: certs are matched and reported but deliberately NOT folded into
+    the hybrid "score" — the score formula (WEIGHT_COSINE/WEIGHT_SKILL/gap
+    penalty) is unchanged. If you want certs to influence ranking, that's a
+    separate change to _compute_hybrid_score's weighting.
+
+    PERFORMANCE NOTE: the FAISS index for jobs_corpus is built once and
+    cached (see _get_or_build_index) — repeat calls with the same corpus
+    list reuse the cached index instead of re-encoding every job and
+    rebuilding the index from scratch. This matters for batch evaluation
+    (many resumes scored against one loaded corpus in a single process).
+    Call clear_index_cache() if jobs_corpus content changes in place.
     """
+    resume_certs = resume_certs or []
     sbert = get_sbert()
 
     # Build query from full resume (chunked), not just first 500 chars
@@ -342,10 +479,7 @@ def calculate_cosine_similarity(
     q_vec  = sbert.encode(q_text, normalize_embeddings=True).astype(np.float32).reshape(1, -1)
     faiss.normalize_L2(q_vec)
 
-    job_matrix = _encode_jobs(jobs_corpus)
-    dim        = job_matrix.shape[1]
-    index      = faiss.IndexFlatIP(dim)
-    index.add(job_matrix)
+    index, job_matrix = _get_or_build_index(jobs_corpus)
 
     k                = min(top_k, index.ntotal)
     cos_scores, idxs = index.search(q_vec, k)
@@ -359,13 +493,27 @@ def calculate_cosine_similarity(
         job     = jobs_corpus[idx]
         req     = job.get("required_skills", [])
 
-        # Fuzzy skill partition — consistent with the offline evaluator
-        matched, missing = _partition_skills(req, resume_skills)
+        # Semantic skill partition (SBERT cosine, not string fuzzy) — consistent
+        # with the offline evaluator's expectations for matched/missing sets.
+        matched, missing = _partition_items(req, resume_skills)
 
-        match_ratio = len(matched) / len(req) if req else 0.0
-        gap_ratio   = len(missing) / len(req) if req else 0.0
+        # Semantic cert partition — same mechanism, separate from the score.
+        req_certs = job.get("required_certifications", [])
+        matched_certs, missing_certs = _partition_items(req_certs, resume_certs)
 
-        # New hybrid score: rescaled cosine × skill multiplier − gap penalty
+        if req:
+            match_ratio = len(matched) / len(req)
+            gap_ratio   = len(missing) / len(req)
+        else:
+            # Job has no listed required_skills (likely a data-quality gap in
+            # the corpus, not a candidate mismatch). Don't let sqrt(0) zero
+            # out the entire hybrid score for every candidate against this
+            # job — fall back to cosine similarity alone.
+            match_ratio = 1.0
+            gap_ratio   = 0.0
+
+        # New hybrid score (v3): weighted average of rescaled cosine and skill
+        # match_ratio, minus gap penalty — returned already on a 0-100 scale.
         hybrid = _compute_hybrid_score(
             cosine_sim  = float(cosine_score),
             match_ratio = match_ratio,
@@ -391,6 +539,9 @@ def calculate_cosine_similarity(
             "required_skills": req,
             "matched_skills":  matched,
             "missing_skills":  missing,
+            "required_certifications": req_certs,
+            "matched_certs":   matched_certs,
+            "missing_certs":   missing_certs,
             "fit_reason":      generate_fit_reason(
                 title           = title,
                 matched_skills  = matched,
@@ -405,6 +556,10 @@ def calculate_cosine_similarity(
             "nlp_validation":  fuzzy_skill_verify(
                 discovered_list   = resume_skills,
                 ground_truth_list = req,
+            ),
+            "nlp_validation_certs": fuzzy_skill_verify(
+                discovered_list   = resume_certs,
+                ground_truth_list = req_certs,
             ),
         })
 

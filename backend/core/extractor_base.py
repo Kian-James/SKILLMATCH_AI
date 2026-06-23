@@ -1,7 +1,10 @@
 """
 core/extractor_base.py
 ======================
-Shared extraction pipeline for Stage 2 (skills) and Stage 2B (certs).
+Shared extraction pipeline for Stage 2 — both skills and certs discovery.
+Both call into discover_items_dynamically(), which semantically matches
+discovered text against each job's allowlist (SBERT cosine, threshold 0.80)
+before anything is accepted as a discovered skill or cert.
 
 Both extractors are identical in behaviour — they differ only in which section
 heading they search for and which Firestore allowlist key they read from.
@@ -12,7 +15,33 @@ Public API
 ----------
   SectionConfig              — dataclass injected by each caller
   discover_items_dynamically — full pipeline; called by skills.py and certs.py
-  extract_section            — regex section slicer (exposed for unit tests)
+  extract_section             — regex section slicer (exposed for unit tests)
+
+Changes (v26 — OCR correction made lazy/fallback-only):
+  FIXED    v25 applied OCR correction (apply_ocr_corrections) eagerly to every
+           line/token before splitting, on the theory that this was needed to
+           catch collapsed-separator errors like "HTMLICSS" -> "HTML/CSS"
+           before _expand_slash ran. In practice this was too aggressive:
+           _separator_candidates has no real floor on "is this actually an
+           improvement" — it just takes whichever candidate scores marginally
+           higher against the allowlist — so it fired on already-clean text
+           too, e.g. "Responsive Design" -> "Responsiv/e D/esign" and
+           "UI Design" -> "UI D/esign". And it still didn't even fix the
+           target case ("HTMLICSS" stayed unsplit) because the spurious score
+           bump from mangling clean phrases buried the real fix.
+
+           Fix: OCR correction is no longer applied during extraction at all
+           (_parse_section_to_entries and _section_text_to_entries no longer
+           touch it). Instead, discover_items_dynamically now does:
+             1. Extract entries from raw text (untouched).
+             2. Run SBERT matching once on those raw entries (step 4).
+             3. ONLY for entries that failed to match (step 4b), run
+                apply_ocr_corrections on that specific entry, re-split it on
+                '/' and '&', and retry SBERT matching on the resulting pieces.
+           This means correction is only ever attempted on text that has
+           already proven it doesn't match anything as-is — clean entries
+           like "Responsive Design" match on the first pass and are never
+           touched by the correction logic.
 """
 
 from __future__ import annotations
@@ -83,16 +112,22 @@ class SectionConfig:
     """
     Describes how to find a specific resume section.
 
-    heading_re    : matches the section heading line (e.g. "SKILLS", "CERTIFICATIONS").
-    end_re        : matches the first line of the next section (stops extraction).
-    corpus_key    : key inside each jobs_corpus dict that holds the allowlist
-                    (e.g. "required_skills", "required_certifications").
-    label         : short name for log messages ("Skills", "Certs", …).
+    heading_re              : matches the section heading line (e.g. "SKILLS", "CERTIFICATIONS").
+    end_re                  : matches the first line of the next section (stops extraction).
+    corpus_key              : key inside each jobs_corpus dict that holds the allowlist
+                              (e.g. "required_skills", "required_certifications").
+    label                   : short name for log messages ("Skills", "Certs", …).
+    preprocess_section_text : optional callable(str) -> str applied to the raw section
+                              text *before* it is split into entries.  Use this for
+                              section-specific normalisation that must not affect other
+                              extractors (e.g. rejoining cert provider lines).
+                              Defaults to None (no-op).
     """
-    heading_re: re.Pattern
-    end_re:     re.Pattern
-    corpus_key: str
-    label:      str
+    heading_re:              re.Pattern
+    end_re:                  re.Pattern
+    corpus_key:              str
+    label:                   str
+    preprocess_section_text: "callable[[str], str] | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -396,26 +431,74 @@ def _expand_ampersand(entries: list[str], allowlist: list[str] | None = None) ->
     return expanded
 
 
-def _restore_ocr_slash(entries: list[str], allowlist: list[str] | None = None) -> list[str]:
+# Characters that OCR commonly substitutes for '/'
+_SLASH_SURROGATES: frozenset[str] = frozenset("Il1|")
+
+
+def _normalize_sep_local(s: str) -> str:
     """
-    Restore slashes corrupted by OCR into 'I' or 'l' between uppercase groups
-    (e.g. "QAIQC" -> "QA/QC"). Only commits when the replacement scores higher.
+    Separator-aware normalize (local copy to avoid circular import).
+    Converts '/' and '&' to spaces instead of stripping them, so that
+    "IDS/IPS" -> "ids ips" and "IDS/IIPS" -> "ids iips" are distinguishable.
     """
-    _OCR_SLASH_RE = re.compile(r'([A-Z]{1,6})[Il]([A-Z]{1,6})')
+    s = s.lower()
+    s = re.sub(r"[/&]", " ", s)
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _restore_ocr_slash(entries: list[str], allowlist: list[str]) -> list[str]:
+    if not allowlist:
+        return entries
+
+    allow_sep_keys = [_normalize_sep_local(a) for a in allowlist]
+
+    def _score(candidate: str) -> tuple[float, float]:
+        primary   = max(
+            (fuzz.ratio(_normalize_sep_local(candidate), ak) for ak in allow_sep_keys),
+            default=0,
+        )
+        secondary = max(
+            (fuzz.ratio(candidate.lower(), a.lower()) for a in allowlist),
+            default=0,
+        )
+        return (primary, secondary)
+
     restored: list[str] = []
     for entry in entries:
-        m = _OCR_SLASH_RE.search(entry)
-        if not m:
+        # Skip entries that already contain a slash or are too short to split.
+        if "/" in entry or len(entry) < 4:
             restored.append(entry)
             continue
-        candidate = entry[:m.start()] + m.group(1) + '/' + m.group(2) + entry[m.end():]
-        if not allowlist or _fuzzy_score(candidate, allowlist) > _fuzzy_score(entry, allowlist):
-            log.debug(f"[RestoreSlash] '{entry}' -> '{candidate}'")
-            restored.append(candidate)
-        else:
-            restored.append(entry)
-    return restored
 
+        best       = _score(entry)
+        best_entry = entry
+
+        for i, ch in enumerate(entry):
+            if ch not in _SLASH_SURROGATES:
+                continue
+            if i == 0 or i == len(entry) - 1:
+                continue
+            left, right = entry[:i], entry[i + 1:]
+            # Require at least one uppercase letter on each side.
+            if not (any(c.isupper() for c in left) and any(c.isupper() for c in right)):
+                continue
+            candidate = left + "/" + right
+            s = _score(candidate)
+            if s > best:
+                best       = s
+                best_entry = candidate
+
+        if best_entry != entry:
+            log.debug(
+                f"[RestoreSlash] '{entry}' -> '{best_entry}' "
+                f"(primary={best[0]:.0f}, secondary={best[1]:.0f})"
+            )
+
+        restored.append(best_entry)
+
+    return restored
 
 def _expand_slash(entries: list[str], allowlist: list[str] | None = None) -> list[str]:
     """
@@ -574,18 +657,22 @@ def _parse_section_to_entries(
         config:        SectionConfig,
         allowlist:     list[str],
         is_native_pdf: bool = False,
-        corrector=None,
 ) -> list[str]:
     """
-    Locate the section, filter lines, apply OCR repairs, and split by delimiter.
+    Locate the section, filter lines, and split by delimiter.
     Returns a flat list of raw candidate strings ready for SBERT / fuzzy matching.
 
-    corrector : OcrCorrector built from the allowlist (passed in from
-                discover_items_dynamically so it is built only once per call).
-                Skipped when is_native_pdf=True or corrector is None.
-    """
-    from core.ocr_correction import apply_ocr_corrections  # avoid circular at module level
+    Note (v26): OCR correction is intentionally NOT applied here anymore.
+    Eagerly correcting every line/token before splitting was too aggressive —
+    it fired on already-clean text (e.g. "Responsive Design" -> "Responsiv/e
+    D/esign") because the separator-recovery heuristic only needs a marginal
+    score improvement against the allowlist to commit, and that can trigger
+    on phrases that never needed correction in the first place.
 
+    OCR correction now happens centrally in discover_items_dynamically, and
+    only as a fallback for entries that SBERT fails to match on the first
+    pass — i.e. only when it's actually needed.
+    """
     m = config.heading_re.search(text)
     if not m:
         return []
@@ -622,25 +709,10 @@ def _parse_section_to_entries(
     if not kept_lines:
         return []
 
-    # ── OCR correction pass ──────────────────────────────────────────────────
-    if not is_native_pdf and corrector is not None:
-        kept_lines = [apply_ocr_corrections(line, corrector) for line in kept_lines]
-        log.debug(f"[{config.label}] OCR correction applied to {len(kept_lines)} lines.")
-    # ────────────────────────────────────────────────────────────────────────
-
     if "\n\n" in block:
         print(f"\n[{config.label}] Double-newline layout detected — using two-column deinterleave path.")
 
-        corrected_block = block
-        if not is_native_pdf and corrector is not None:
-            corrected_block_lines = [
-                apply_ocr_corrections(ln, corrector)
-                for ln in block.splitlines()
-            ]
-            corrected_block = "\n".join(corrected_block_lines)
-            log.debug(f"[{config.label}] OCR correction applied to raw block for \\n\\n path.")
-
-        reunited = _reunite_double_nl_parens(corrected_block)
+        reunited = _reunite_double_nl_parens(block)
         paragraphs: list[str] = []
         for para in re.split(r"\n{2,}", reunited):
             para = para.strip().strip(",").strip()
@@ -765,18 +837,26 @@ def _sbert_match(
         already_found: set[str],
         threshold:     float = _SBERT_COSINE_THRESHOLD,
         label:         str   = "SBERT",
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """
-    Encode entries and allowlist with SBERT; return canonical allowlist names
-    whose cosine similarity to a candidate meets threshold.
+    Encode entries and allowlist with SBERT.
+
+    Returns (discovered, unmatched):
+      discovered : canonical allowlist names whose cosine similarity to a
+                   candidate meets threshold.
+      unmatched  : candidate strings (post parenthetical-expansion) that did
+                   NOT reach a match. Callers can retry these through OCR
+                   correction before giving up on them — see v26 fallback
+                   in discover_items_dynamically.
+
     Expands parentheticals before encoding so each component is matched independently.
     """
     if not entries:
         log.info(f"[{label}] SBERT skipped — no candidate entries.")
-        return []
+        return [], []
     if not allowlist:
         log.info(f"[{label}] SBERT skipped — allowlist is empty (no {label.lower()} in jobs corpus).")
-        return []
+        return [], list(entries)
 
     sbert   = get_sbert()
     entries = _expand_parentheticals(entries)
@@ -786,7 +866,7 @@ def _sbert_match(
 
     pending = [e for e in entries if e.lower().strip() not in already_found]
     if not pending:
-        return []
+        return [], []
 
     log.info(f"[{label}] Encoding {len(pending)} candidates...")
     entry_vecs = sbert.encode(pending, normalize_embeddings=True, show_progress_bar=False).astype(np.float32)
@@ -794,6 +874,7 @@ def _sbert_match(
     sim_matrix = entry_vecs @ allow_vecs.T   # cosine sim (both L2-normalised)
 
     discovered: list[str] = []
+    unmatched:  list[str] = []
     seen = set(already_found)
 
     for i, entry in enumerate(pending):
@@ -808,22 +889,32 @@ def _sbert_match(
             log.debug(f"[{label}] '{entry}' -> '{canon}' (cosine={score:.4f})")
         else:
             log.debug(f"[{label}] '{entry}' -> no match (best='{canon}' cosine={score:.4f})")
+            unmatched.append(entry)
 
-    return discovered
+    return discovered, unmatched
 
 
 # ---------------------------------------------------------------------------
 # Section text -> entries (used when pre-extracted section_text is provided)
 # ---------------------------------------------------------------------------
 
-def _section_text_to_entries(section_text: str, allowlist: list[str]) -> list[str]:
+def _section_text_to_entries(
+        section_text: str,
+        allowlist:    list[str],
+) -> list[str]:
     """
-    Convert an already-extracted, already-OCR-corrected section text string
-    into a flat list of candidate entries for SBERT matching.
+    Convert an already-extracted section text string into a flat list of
+    candidate entries for SBERT matching.
 
     This is the fast path used when skills.py / certs.py pass in their
     rule-based section text directly, bypassing _parse_section_to_entries
-    and its re-extraction from raw resume text (which would see garbled OCR).
+    and its re-extraction from raw resume text.
+
+    Note (v26): OCR correction is intentionally NOT applied here. See the
+    docstring on _parse_section_to_entries for why — eager correction over
+    every token mangles clean text. Correction now happens centrally in
+    discover_items_dynamically, only as a fallback for entries SBERT fails
+    to match.
 
     Reuses the same delimiter logic and compound expansion as the main path.
     """
@@ -933,14 +1024,20 @@ def discover_items_dynamically(
 
     Steps:
       1. Build allowlist from jobs_corpus[config.corpus_key].
-      2. Build OcrCorrector once from the allowlist (reused across both paths).
-      3. Parse section into candidate entries.
-         - Fast path: section_text is provided (already extracted + OCR-corrected
-           by the caller) — use _section_text_to_entries directly.
-         - Slow path: re-extract from raw resume_text via _parse_section_to_entries
-           (fallback when no pre-extracted text is available).
-      4. SBERT pass — semantic matching (cosine >= 0.80).
-      5. Fuzzy fallback — if SBERT found nothing.
+      2. Build OcrCorrector once from the allowlist — held in reserve, only
+         used in step 4b below.
+      3. Parse section into candidate entries (no OCR correction applied
+         here — entries are extracted as-is from raw or pre-extracted text).
+         - Fast path: section_text is provided by the caller.
+         - Slow path: re-extract from raw resume_text.
+      4. SBERT pass — semantic matching (cosine >= 0.80) on the raw entries.
+      4b. OCR-correction retry — ONLY for entries that failed to match in
+          step 4. Each unmatched entry is run through apply_ocr_corrections,
+          re-split on '/' and '&', and retried through SBERT. This keeps
+          correction lazy: clean entries that already matched are never
+          touched, so there's no risk of correction mangling text that
+          didn't need it.
+      5. Fuzzy fallback — if SBERT found nothing at all.
       6. Drop parenthetical fragment duplicates.
     """
     # 1. Build allowlist
@@ -952,22 +1049,25 @@ def discover_items_dynamically(
     allowlist_list = sorted(allowlist)
 
     # 2. Build OcrCorrector once (FAISS index over allowlist embeddings).
-    #    Skipped for native PDFs — their text is already clean.
-    #    Also skipped for the section_text fast path since that text is
-    #    already corrected upstream.
+    #    Skipped only for native PDFs — their text is already clean.
+    #    Used ONLY as a fallback below (step 4b), for entries SBERT fails
+    #    to match on the first pass — not applied eagerly to every entry.
     corrector = None
-    if not is_native_pdf and not section_text and allowlist_list:
+    if not is_native_pdf and allowlist_list:
         log.info(f"[{config.label}] Building OcrCorrector from {len(allowlist_list)} allowlist entries...")
         corrector = build_ocr_corrector(allowlist_list)
         log.info(f"[{config.label}] OcrCorrector ready.")
 
     # 3. Parse section into candidate entries
     if section_text is not None:
-        # Fast path: caller already extracted + OCR-corrected the section text.
+        # Fast path: caller already extracted the section text.
         # If section_text is empty the section simply doesn't exist in this resume
         # (e.g. no cert section) — skip the emergency fallback entirely.
         if section_text:
             log.info(f"[{config.label}] Using pre-extracted section text ({len(section_text)} chars).")
+            if config.preprocess_section_text is not None:
+                section_text = config.preprocess_section_text(section_text)
+                log.debug(f"[{config.label}] preprocess_section_text applied.")
             entries = _section_text_to_entries(section_text, allowlist_list)
         else:
             log.info(f"[{config.label}] No {config.label.lower()} section found — skipping.")
@@ -979,7 +1079,6 @@ def discover_items_dynamically(
             config,
             allowlist_list,
             is_native_pdf,
-            corrector=corrector,
         )
         # Emergency fallback only on the slow path — section heading may have been
         # missed entirely, so scan the first 3000 chars as a last resort.
@@ -992,15 +1091,89 @@ def discover_items_dynamically(
         for i, e in enumerate(entries):
             log.info(f"  [{i}] {e!r}")
 
-    # 4. SBERT pass
+    # 4. SBERT pass on the raw, uncorrected entries.
     seen:      set[str]  = set()
     canonical: list[str] = []
 
-    for canon in _sbert_match(entries, allowlist_list, seen, label=config.label):
+    matched, unmatched = _sbert_match(entries, allowlist_list, seen, label=config.label)
+    for canon in matched:
         key = canon.lower().strip()
         if key not in seen:
             seen.add(key)
             canonical.append(canon)
+
+    log.info(f"[{config.label}] After SBERT (raw pass): {len(canonical)} matched, {len(unmatched)} unmatched.")
+
+    # 4b. OCR-correction retry — ONLY for entries SBERT failed to match.
+    # This is deliberately a fallback rather than an eager pass over every
+    # entry: correcting clean text up front (e.g. "Responsive Design") risks
+    # mangling tokens that never needed it. Only entries that already failed
+    # to find a home in the allowlist are worth a forced repair attempt.
+    #
+    # Two candidate sources are tried for each unmatched entry:
+    #   1. apply_ocr_corrections() — handles letter/digit OCR confusions and,
+    #      when the allowlist holds a COMBINED phrase (e.g. an "IDS/IPS"-style
+    #      entry), its separator recovery can resolve that too.
+    #   2. Direct surrogate-character separator insertion — apply_ocr_corrections'
+    #      separator recovery scores the WHOLE joined candidate against
+    #      individual allowlist entries, so it can't reliably recover a split
+    #      like "HTMLICSS" -> "HTML/CSS" when "HTML" and "CSS" are SEPARATE
+    #      allowlist entries rather than a combined phrase — splitting never
+    #      scores higher than leaving the blob alone matching one half's
+    #      prefix. So we also try inserting '/' at every common OCR-surrogate
+    #      character position ('I', 'l', '1', '|') directly here.
+    #
+    # Every candidate from both sources is run through _expand_ampersand and
+    # then _expand_slash, which (unlike the correction above) score the two
+    # resulting halves INDEPENDENTLY against the allowlist — that's what
+    # correctly turns "HTML/CSS" into ["HTML", "CSS"] rather than requiring
+    # the allowlist to contain that exact compound phrase.
+    if unmatched and corrector is not None:
+        from core.ocr_correction import apply_ocr_corrections
+
+        _SLASH_SURROGATES = frozenset("Il1|")
+
+        retry_candidates: list[str] = []
+        for entry in unmatched:
+            entry_key = entry.strip().lower()
+            split_candidates: set[str] = set()
+
+            # Source 1: token-level OCR correction.
+            corrected = apply_ocr_corrections(entry, corrector)
+            if corrected.strip().lower() != entry_key:
+                split_candidates.add(corrected)
+
+            # Source 2: direct surrogate-character separator insertion.
+            stripped = entry.strip(".,;:()[]")
+            for i, ch in enumerate(stripped):
+                if ch not in _SLASH_SURROGATES or i == 0 or i == len(stripped) - 1:
+                    continue
+                split_candidates.add(stripped[:i] + "/" + stripped[i + 1:])  # consume surrogate
+                split_candidates.add(stripped[:i] + "/" + stripped[i:])      # keep surrogate
+
+            for cand in split_candidates:
+                if cand.strip().lower() == entry_key:
+                    continue
+                for piece in _expand_slash(
+                        _expand_ampersand([cand], allowlist_list), allowlist_list
+                ):
+                    piece = piece.strip()
+                    if piece and piece.lower() not in seen and piece.lower() != entry_key:
+                        retry_candidates.append(piece)
+
+        if retry_candidates:
+            log.info(
+                f"[{config.label}] Retrying {len(retry_candidates)} OCR-corrected "
+                f"candidate(s) from {len(unmatched)} unmatched entries: {retry_candidates!r}"
+            )
+            retried_matched, _ = _sbert_match(
+                retry_candidates, allowlist_list, seen, label=f"{config.label}-OCRRetry"
+            )
+            for canon in retried_matched:
+                key = canon.lower().strip()
+                if key not in seen:
+                    seen.add(key)
+                    canonical.append(canon)
 
     log.info(f"[{config.label}] After SBERT: {len(canonical)} matched.")
 
