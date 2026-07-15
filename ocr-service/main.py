@@ -88,6 +88,14 @@ async def lifespan(app: FastAPI):
     log.info("[OCR] Loading EasyOCR reader (gpu=False) at startup ...")
     _ocr_reader = easyocr.Reader(OCR_LANGUAGES, gpu=False)
     log.info("[OCR] Reader ready.")
+
+    try:
+        import resource
+        peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        log.info("[OCR] Peak RSS after reader load: %.1f MB", peak_mb)
+    except Exception as exc:
+        log.warning("[OCR] Could not read memory usage: %s", exc)
+
     yield
 
 
@@ -313,6 +321,13 @@ def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+    try:
+        import resource
+        peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        log.info("[OCR] Peak RSS after this request: %.1f MB", peak_mb)
+    except Exception:
+        pass
 
     return {"text": text, "quality": quality, "is_native_pdf": False}
 
