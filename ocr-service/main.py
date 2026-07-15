@@ -12,6 +12,24 @@ Running both in one process regularly exceeds Render's 512MB free-tier
 limit. Splitting OCR into its own service means each process only carries
 the dependencies it actually needs.
 
+Reader lifecycle
+-----------------
+The EasyOCR Reader is loaded ONCE, at process startup, and reused for
+every request. It is NOT reloaded per-request and OCR is NOT run in a
+spawned subprocess.
+
+(An earlier version of this code, ported from a macOS dev environment,
+ran each OCR call in a spawned subprocess to work around a torch
+deadlock/segfault bug specific to Apple Silicon. That workaround doesn't
+apply on Render's Linux containers, and spawning a fresh process per
+request means re-importing torch and rebuilding the Reader from scratch
+every single call — a second full model load stacked on top of the
+already-loaded one in the main process. On a 512MB instance that's
+exactly the kind of thing that gets a container OOM-killed mid-request,
+which is what a 502 Bad Gateway right after "Loading EasyOCR reader"
+in the logs usually means. Loading once and keeping it in memory avoids
+that entirely and is also much faster per request.)
+
 Contract
 --------
 POST /extract-text
@@ -38,12 +56,10 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-import json
 import logging
-import multiprocessing
 import re
-import shutil
 import tempfile
+from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -52,14 +68,34 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 OCR_LANGUAGES = os.getenv("EASYOCR_LANGUAGES", "en").split(",")
-OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "120"))
+
+_ocr_reader = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load the reader once, at startup, from the weights pre-baked into
+    # the Docker image at build time — not on the first request.
+    global _ocr_reader
+    try:
+        import torch
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+
+    import easyocr
+    log.info("[OCR] Loading EasyOCR reader (gpu=False) at startup ...")
+    _ocr_reader = easyocr.Reader(OCR_LANGUAGES, gpu=False)
+    log.info("[OCR] Reader ready.")
+    yield
+
 
 app = FastAPI(
     title="OCR Microservice",
     description="EasyOCR-only text extraction. Called by the main resume-analysis backend.",
+    lifespan=lifespan,
 )
-
-_ocr_reader = None
 
 # ---------------------------------------------------------------------------
 # Bullet / decoration cleanup (unchanged from core/extraction.py)
@@ -208,39 +244,14 @@ def _sort_boxes_reading_order(raw_results: list) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# OCR subprocess worker (unchanged from core/extraction.py)
+# OCR — runs in-process against the reader loaded at startup
 # ---------------------------------------------------------------------------
 
-def _get_ocr_reader():
-    global _ocr_reader
-    if _ocr_reader is None:
-        try:
-            import torch
-            torch.set_num_threads(1)
-            torch.set_num_interop_threads(1)
-        except Exception:
-            pass
+def _run_ocr(file_path: str) -> str:
+    reader = _ocr_reader
+    if reader is None:
+        raise RuntimeError("OCR reader is not ready yet.")
 
-        import easyocr
-        log.info("[OCR] Loading EasyOCR reader (gpu=False) ...")
-        _ocr_reader = easyocr.Reader(OCR_LANGUAGES, gpu=False)
-    return _ocr_reader
-
-
-def _ocr_worker(file_path: str, out_file: str) -> None:
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
-    try:
-        import torch
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
-    except Exception:
-        pass
-
-    reader = _get_ocr_reader()
     lines: list[str] = []
 
     if file_path.lower().endswith(".pdf"):
@@ -266,43 +277,7 @@ def _ocr_worker(file_path: str, out_file: str) -> None:
         except Exception as exc:
             log.warning("[OCR] readtext failed (%s).", exc)
 
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(lines, f)
-
-
-def _ocr_fallback(file_path: str, timeout: int = OCR_TIMEOUT_SECONDS) -> str:
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        out_file = tmp.name
-
-    try:
-        ctx = multiprocessing.get_context("spawn")
-        p = ctx.Process(target=_ocr_worker, args=(file_path, out_file))
-        p.start()
-        p.join(timeout)
-
-        if p.is_alive():
-            p.terminate()
-            p.join(5)
-            log.warning("[OCR] Worker timed out after %ds for %s.", timeout, file_path)
-            return ""
-
-        if p.exitcode != 0:
-            log.warning("[OCR] Worker exited with code %s for %s.", p.exitcode, file_path)
-            return ""
-
-        if not os.path.exists(out_file) or os.path.getsize(out_file) == 0:
-            log.warning("[OCR] Worker produced no output for %s.", file_path)
-            return ""
-
-        with open(out_file, "r", encoding="utf-8") as f:
-            lines = json.load(f)
-        return _clean_text("\n\n".join(lines))
-
-    finally:
-        try:
-            os.unlink(out_file)
-        except OSError:
-            pass
+    return _clean_text("\n\n".join(lines))
 
 
 def _alnum_ratio(text: str) -> float:
@@ -317,17 +292,20 @@ def _alnum_ratio(text: str) -> float:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "reader_ready": _ocr_reader is not None}
 
 
+# Plain `def` (not `async def`) — FastAPI runs sync path operations in a
+# threadpool automatically, which keeps this CPU-bound OCR call from
+# blocking the event loop.
 @app.post("/extract-text")
-async def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
+def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
     temp_path = f"temp_{file.filename}"
     with open(temp_path, "wb") as buf:
-        shutil.copyfileobj(file.file, buf)
+        buf.write(file.file.read())
 
     try:
-        text = _ocr_fallback(temp_path)
+        text = _run_ocr(temp_path)
         quality = _alnum_ratio(text)
     except Exception as exc:
         log.exception("[OCR service] extraction error")
