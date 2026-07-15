@@ -18,6 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
+
 # Render sets $PORT at runtime; default 8001 covers local `docker run`.
 ENV PORT=8001
 EXPOSE 8001
