@@ -1,19 +1,14 @@
 // lib/screens/upload_screen.dart
-// Analysis mode: Targeted | Full  ×  File mode: PDF | Image | Scan
-//
-// v40: Scan mode no longer does on-device ML Kit OCR. It now captures a
-// single photo via CameraScanScreen and sends it through the SAME image
-// API calls as Image mode (analyzeTargetCareerImage / analyzeFullResumeImage),
-// so it goes through core/extraction.py -> EasyOCR -> _sort_boxes_reading_order()
-// like every other input. Multi-page scan is no longer supported (use PDF mode
-// for multi-page documents).
+// Analysis mode: Targeted | Full  ×  File mode: PDF | Image
 
 import 'dart:io';
 
+import 'package:dotted_border/dotted_border.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
@@ -22,11 +17,10 @@ import '../services/tutorial_service.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/tutorial_overlay.dart';
-import 'camera_scan_screen.dart';
 import 'full_results_screen.dart';
 import 'results_screen.dart';
 
-enum FileMode { pdf, image, scan }
+enum FileMode { pdf, image }
 
 class UploadScreen extends StatefulWidget {
   final ResumeUser user;
@@ -48,7 +42,6 @@ class _UploadScreenState extends State<UploadScreen>
   final _keyAnalyzeBtn = GlobalKey();
   final _keyPdfTab = GlobalKey();
   final _keyImageTab = GlobalKey();
-  final _keyScanTab = GlobalKey();
 
   bool _showTutorial = false;
 
@@ -61,10 +54,6 @@ class _UploadScreenState extends State<UploadScreen>
 
   PlatformFile? _pickedPdf;
   XFile? _pickedImage;
-
-  // v40: single captured page from CameraScanScreen, sent through the same
-  // image-analysis API path as Image mode.
-  File? _scannedFile;
 
   bool _isAnalyzing = false;
   String _statusMessage = '';
@@ -95,6 +84,7 @@ class _UploadScreenState extends State<UploadScreen>
   void dispose() {
     _pulseCtrl.dispose();
     _targetJobCtrl.dispose();
+    if (_isAnalyzing) WakelockPlus.disable();
     super.dispose();
   }
 
@@ -112,6 +102,44 @@ class _UploadScreenState extends State<UploadScreen>
     if (mounted) setState(() => _showTutorial = false);
   }
 
+  /// Asks whether to overwrite an existing analysis for this exact
+  /// (file name, analysis type) pair, or view the existing one instead.
+  /// Returns true = override (re-run + overwrite), false/null = view cached.
+  Future<bool> _confirmOverride(String fileName) async {
+    final c = AppColors.of(context);
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: c.navy800,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text('Already analyzed',
+                style: GoogleFonts.fraunces(
+                    fontWeight: FontWeight.w700, color: c.textPrimary)),
+            content: Text(
+              '"$fileName" has already been analyzed. '
+              'Are you sure you want to override the existing result? '
+              'If not, we\'ll take you to the existing analysis instead.',
+              style: GoogleFonts.workSans(
+                  fontSize: 13, color: c.textSecondary, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('View existing',
+                    style: GoogleFonts.workSans(color: c.textSecondary)),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Override'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    return confirmed;
+  }
+
   Future<void> _retryTutorial() async {
     final c = AppColors.of(context);
     final confirmed = await showDialog<bool>(
@@ -121,18 +149,18 @@ class _UploadScreenState extends State<UploadScreen>
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Text('Show tutorial again?',
-                style: GoogleFonts.spaceGrotesk(
+                style: GoogleFonts.fraunces(
                     fontWeight: FontWeight.w700, color: c.textPrimary)),
             content: Text(
               'This will walk you through each feature of the app from the beginning.',
-              style: GoogleFonts.inter(
+              style: GoogleFonts.workSans(
                   fontSize: 13, color: c.textSecondary, height: 1.5),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 child: Text('Cancel',
-                    style: GoogleFonts.inter(color: c.textSecondary)),
+                    style: GoogleFonts.workSans(color: c.textSecondary)),
               ),
               ElevatedButton(
                 onPressed: () => Navigator.pop(context, true),
@@ -179,12 +207,6 @@ class _UploadScreenState extends State<UploadScreen>
           title: 'Upload as an image',
           body:
               'Already have a photo of your resume? Tap here and pick it from your gallery. We\'ll read the text automatically.',
-        ),
-        TutorialStep(
-          targetKey: _keyScanTab,
-          title: 'Scan with your camera',
-          body:
-              'Point your camera at a printed resume and capture one page. Great if you only have a physical copy.',
         ),
         TutorialStep(
           targetKey: _keyDropZone,
@@ -242,35 +264,21 @@ class _UploadScreenState extends State<UploadScreen>
       });
   }
 
-  Future<void> _openScanner() async {
-    final result = await Navigator.push<Map<String, dynamic>>(
-        context, MaterialPageRoute(builder: (_) => const CameraScanScreen()));
-    if (result != null && mounted) {
-      setState(() {
-        _scannedFile = result['file'] as File?;
-        _error = null;
-      });
-    }
-  }
-
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   bool get _hasPayload => switch (_fileMode) {
         FileMode.pdf => _pickedPdf != null,
         FileMode.image => _pickedImage != null,
-        FileMode.scan => _scannedFile != null,
       };
 
   String get _fileName => switch (_fileMode) {
         FileMode.pdf => _pickedPdf?.name ?? 'resume.pdf',
         FileMode.image => _pickedImage?.name ?? 'resume.jpg',
-        FileMode.scan => 'scan_${DateTime.now().millisecondsSinceEpoch}.jpg',
       };
 
   String get _missingMsg => switch (_fileMode) {
         FileMode.pdf => 'Please pick a PDF resume first.',
         FileMode.image => 'Please pick an image of your resume.',
-        FileMode.scan => 'Please capture a photo of your resume first.',
       };
 
   // ── Analysis ──────────────────────────────────────────────────────────────
@@ -290,6 +298,10 @@ class _UploadScreenState extends State<UploadScreen>
       _statusMessage = 'Checking cache…';
     });
 
+    // Keep the screen awake for the whole analysis — this can take ~30s+
+    // and the OS auto-locking mid-scan would silently kill the request.
+    await WakelockPlus.enable();
+
     try {
       if (_analysisType == AnalysisType.targeted) {
         await _runTargeted();
@@ -299,6 +311,7 @@ class _UploadScreenState extends State<UploadScreen>
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
+      await WakelockPlus.disable();
       if (mounted) setState(() => _isAnalyzing = false);
     }
   }
@@ -311,10 +324,13 @@ class _UploadScreenState extends State<UploadScreen>
     final cached = await _firestore.findCachedScan(
         userId: widget.user.id, fileName: fileName, targetJobId: jobId);
     if (cached != null && mounted) {
-      setState(() => _statusMessage = 'Loaded from cache!');
-      await Future.delayed(const Duration(milliseconds: 350));
-      if (mounted) _navTargeted(cached, fromCache: true);
-      return;
+      final override = await _confirmOverride(fileName);
+      if (!override) {
+        if (mounted) _navTargeted(cached, fromCache: true);
+        return;
+      }
+      // else: fall through and re-run the analysis fresh below, then
+      // overwrite this same record instead of creating a duplicate.
     }
 
     final result = await _callApi<TargetCareerResult>(() async {
@@ -332,20 +348,22 @@ class _UploadScreenState extends State<UploadScreen>
               imagePath: _pickedImage!.path,
               fileName: fileName,
               targetJob: targetJob);
-        case FileMode.scan:
-          // v40: scanned photo goes through the same image-analysis path
-          // as Image mode (extract_text() -> EasyOCR backend).
-          setState(() => _statusMessage = 'Uploading scan for analysis…');
-          return _api.analyzeTargetCareerImage(
-              imagePath: _scannedFile!.path,
-              fileName: fileName,
-              targetJob: targetJob);
       }
     });
 
     setState(() => _statusMessage = 'Saving…');
+
+    final mergedSkills = {
+      ...?cached?.skills,
+      ...result.resumeSkills.discoveredSkills,
+    }.toList();
+    final mergedCerts = {
+      ...?cached?.certs,
+      ...result.resumeSkills.discoveredCerts,
+    }.toList();
+
     final record = ResumeScanRecord(
-      id: '',
+      id: cached?.id ?? '',
       userId: widget.user.id,
       fileName: fileName,
       analysisType: AnalysisType.targeted,
@@ -353,28 +371,38 @@ class _UploadScreenState extends State<UploadScreen>
       targetJobTitle: result.targetJob.title,
       targetJobId: result.targetJob.jobId,
       industry: result.targetJob.industry,
-      skills: result.resumeSkills.discoveredSkills,
-      certs: result.resumeSkills.discoveredCerts,
+      skills: mergedSkills,
+      certs: mergedCerts,
       matchedSkills: result.skillGap.matchedSkills,
       missingSkills: result.skillGap.missingSkills,
       nlpAccuracy: result.skillGap.nlpAccuracy,
       hybridScore: result.skillGap.hybridScore,
       scannedAt: DateTime.now(),
     );
-    final docId = await _firestore.saveScanRecord(record);
+    final docId = await _firestore.upsertScanRecord(record);
     if (mounted) _navTargeted(record.copyWith(id: docId), fromCache: false);
   }
 
   Future<void> _runFull() async {
     final fileName = _fileName;
 
-    final cached = await _firestore.findCachedScan(
+    // Check for an existing record BEFORE calling the (slow, ~45s) backend.
+    // If found, ask whether to override it or just view the existing result
+    // — full analysis includes STAGE_3_JOB_MATCHING and
+    // STAGE_4_FAISS_INTEGRITY, both per-run pipeline checks rather than
+    // properties of the resume's content, so we never silently serve a
+    // stale cached result (see prior fix) — but we also shouldn't force a
+    // full re-run without asking, since that's a real ~45s cost.
+    final existing = await _firestore.findCachedScan(
         userId: widget.user.id, fileName: fileName, targetJobId: '__full__');
-    if (cached != null && mounted) {
-      setState(() => _statusMessage = 'Loaded from cache!');
-      await Future.delayed(const Duration(milliseconds: 350));
-      if (mounted) _navFull(cached, fromCache: true);
-      return;
+    if (existing != null && mounted) {
+      final override = await _confirmOverride(fileName);
+      if (!override) {
+        if (mounted) _navFull(existing, fromCache: true);
+        return;
+      }
+      // else: fall through and re-run the analysis fresh below, then
+      // overwrite this same record instead of creating a duplicate.
     }
 
     final result = await _callApi<FullAnalysisResult>(() async {
@@ -389,13 +417,6 @@ class _UploadScreenState extends State<UploadScreen>
           setState(() => _statusMessage = 'Uploading image for full analysis…');
           return _api.analyzeFullResumeImage(
               imagePath: _pickedImage!.path, fileName: fileName);
-        case FileMode.scan:
-          // v40: scanned photo goes through the same image-analysis path
-          // as Image mode (extract_text() -> EasyOCR backend).
-          setState(
-              () => _statusMessage = 'Uploading scan for full analysis…');
-          return _api.analyzeFullResumeImage(
-              imagePath: _scannedFile!.path, fileName: fileName);
       }
     });
 
@@ -403,14 +424,26 @@ class _UploadScreenState extends State<UploadScreen>
 
     final best = result.top5.isNotEmpty ? result.top5.first : null;
 
+    // Merge in skills the user manually promoted last time — the NLP
+    // extraction won't "rediscover" those on its own, so without this a
+    // re-analysis would silently drop that work.
+    final mergedSkills = {
+      ...?existing?.skills,
+      ...result.discoveredSkills,
+    }.toList();
+    final mergedCerts = {
+      ...?existing?.certs,
+      ...result.discoveredCerts,
+    }.toList();
+
     final record = ResumeScanRecord(
-      id: '',
+      id: existing?.id ?? '',
       userId: widget.user.id,
       fileName: fileName,
       analysisType: AnalysisType.full,
       uploadMode: _fileMode.name,
-      skills: result.discoveredSkills,
-      certs: result.discoveredCerts,
+      skills: mergedSkills,
+      certs: mergedCerts,
       top5Matches: result.top5,
       faissScore: result.faissScore,
       nlpAccuracy: best?.nlpAccuracy ?? '0%',
@@ -420,7 +453,7 @@ class _UploadScreenState extends State<UploadScreen>
       targetJobId: '__full__',
       scannedAt: DateTime.now(),
     );
-    final docId = await _firestore.saveScanRecord(record);
+    final docId = await _firestore.upsertScanRecord(record);
     if (mounted) _navFull(record.copyWith(id: docId), fromCache: false);
   }
 
@@ -598,41 +631,23 @@ class _UploadScreenState extends State<UploadScreen>
       }),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: sel ? c.brand : c.navy800,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: sel ? c.brand : c.cardBorder,
-            width: sel ? 0 : 1,
+          border: Border(
+            bottom: BorderSide(
+              color: sel ? c.brand : c.cardBorder,
+              width: sel ? 2 : 1,
+            ),
           ),
-          boxShadow: sel
-              ? [
-                  BoxShadow(
-                      color: c.brand.withOpacity(0.25),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4))
-                ]
-              : [],
         ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon,
-              size: 20,
-              color: sel
-                  ? (Theme.of(context).brightness == Brightness.dark
-                      ? AppTheme.navy900
-                      : Colors.white)
-                  : c.textTertiary),
-          const SizedBox(height: 5),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, size: 16, color: sel ? c.brand : c.textTertiary),
+          const SizedBox(width: 6),
           Text(label,
-              style: GoogleFonts.spaceGrotesk(
+              style: GoogleFonts.fraunces(
                   fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: sel
-                      ? (Theme.of(context).brightness == Brightness.dark
-                          ? AppTheme.navy900
-                          : Colors.white)
-                      : c.textSecondary)),
+                  fontWeight: FontWeight.w600,
+                  color: sel ? c.brand : c.textSecondary)),
         ]),
       ),
     );
@@ -663,7 +678,7 @@ class _UploadScreenState extends State<UploadScreen>
             isTargeted
                 ? 'Match your resume against one specific job title. See exactly which skills you have and which are missing.'
                 : 'Discover your top 5 best-matched careers based on all the skills found in your resume.',
-            style: GoogleFonts.inter(
+            style: GoogleFonts.workSans(
                 fontSize: 12, color: c.textSecondary, height: 1.5),
           )),
         ]),
@@ -686,8 +701,6 @@ class _UploadScreenState extends State<UploadScreen>
         _fileTab(
             FileMode.pdf, Icons.picture_as_pdf_outlined, 'PDF', _keyPdfTab),
         _fileTab(FileMode.image, Icons.image_outlined, 'Image', _keyImageTab),
-        _fileTab(FileMode.scan, Icons.document_scanner_outlined, 'Scan',
-            _keyScanTab),
       ]),
     );
   }
@@ -717,7 +730,7 @@ class _UploadScreenState extends State<UploadScreen>
               Icon(icon, size: 14, color: sel ? c.brandSoft : c.textTertiary),
               const SizedBox(width: 5),
               Text(label,
-                  style: GoogleFonts.spaceGrotesk(
+                  style: GoogleFonts.fraunces(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                       color: sel ? c.brandSoft : c.textTertiary)),
@@ -733,7 +746,6 @@ class _UploadScreenState extends State<UploadScreen>
   Widget _dropZone() => switch (_fileMode) {
         FileMode.pdf => _pdfZone(),
         FileMode.image => _imageZone(),
-        FileMode.scan => _scanZone(),
       };
 
   Widget _pdfZone() {
@@ -804,7 +816,7 @@ class _UploadScreenState extends State<UploadScreen>
           child: Row(children: [
             Expanded(
                 child: Text(_pickedImage!.name,
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.workSans(
                         fontSize: 12,
                         color: Colors.white,
                         fontWeight: FontWeight.w500),
@@ -817,76 +829,7 @@ class _UploadScreenState extends State<UploadScreen>
                 decoration: BoxDecoration(
                     color: c.brand, borderRadius: BorderRadius.circular(6)),
                 child: Text('Change',
-                    style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? AppTheme.navy900
-                            : Colors.white,
-                        fontWeight: FontWeight.w600)),
-              ),
-            ),
-          ])),
-    ]);
-  }
-
-  // ── Scan zone (v40: single captured photo, image-API path) ────────────────
-
-  Widget _scanZone() {
-    final has = _scannedFile != null;
-    return GestureDetector(
-      key: const ValueKey('scan'),
-      onTap: _isAnalyzing ? null : _openScanner,
-      child: has
-          ? _scanPreview()
-          : _shell(
-              false,
-              _prompt(Icons.document_scanner_outlined, 'Tap to open camera',
-                  'Capture one page of your resume')),
-    );
-  }
-
-  Widget _scanPreview() {
-    final c = AppColors.of(context);
-    return Stack(children: [
-      ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Image.file(_scannedFile!,
-            width: double.infinity, height: 190, fit: BoxFit.cover),
-      ),
-      Positioned.fill(
-          child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Colors.transparent, c.navy900.withOpacity(0.78)]),
-        ),
-      )),
-      Positioned(
-          bottom: 12,
-          left: 14,
-          right: 14,
-          child: Row(children: [
-            Expanded(
-                child: Row(children: [
-              Icon(Icons.check_circle_rounded, color: c.brand, size: 16),
-              const SizedBox(width: 6),
-              Text('Page captured',
-                  style: GoogleFonts.spaceGrotesk(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white)),
-            ])),
-            GestureDetector(
-              onTap: _openScanner,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                    color: c.brand, borderRadius: BorderRadius.circular(6)),
-                child: Text('Retake',
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.workSans(
                         fontSize: 11,
                         color: Theme.of(context).brightness == Brightness.dark
                             ? AppTheme.navy900
@@ -900,18 +843,24 @@ class _UploadScreenState extends State<UploadScreen>
 
   Widget _shell(bool has, Widget child) {
     final c = AppColors.of(context);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 280),
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 155),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: has ? c.brand.withOpacity(0.05) : c.navy800,
-        borderRadius: BorderRadius.circular(16),
-        border:
-            Border.all(color: has ? c.brand : c.navy500, width: has ? 1.5 : 1),
+    return DottedBorder(
+      color: has ? c.brand : c.navy500,
+      strokeWidth: has ? 1.5 : 1.3,
+      dashPattern: const [6, 5],
+      borderType: BorderType.RRect,
+      radius: const Radius.circular(14),
+      padding: EdgeInsets.zero,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        width: double.infinity,
+        constraints: const BoxConstraints(minHeight: 155),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: has ? c.brand.withOpacity(0.05) : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: child,
       ),
-      child: child,
     );
   }
 
@@ -929,12 +878,13 @@ class _UploadScreenState extends State<UploadScreen>
       ),
       const SizedBox(height: 12),
       Text(title,
-          style: GoogleFonts.spaceGrotesk(
+          style: GoogleFonts.fraunces(
               fontSize: 15,
               fontWeight: FontWeight.w600,
               color: c.textSecondary)),
       const SizedBox(height: 4),
-      Text(sub, style: GoogleFonts.inter(fontSize: 12, color: c.textTertiary)),
+      Text(sub,
+          style: GoogleFonts.workSans(fontSize: 12, color: c.textTertiary)),
     ]);
   }
 
@@ -952,11 +902,12 @@ class _UploadScreenState extends State<UploadScreen>
       ),
       const SizedBox(height: 10),
       Text(name,
-          style: GoogleFonts.spaceGrotesk(
+          style: GoogleFonts.fraunces(
               fontSize: 14, fontWeight: FontWeight.w600, color: c.textPrimary),
           overflow: TextOverflow.ellipsis),
       const SizedBox(height: 4),
-      Text(meta, style: GoogleFonts.inter(fontSize: 12, color: c.textTertiary)),
+      Text(meta,
+          style: GoogleFonts.workSans(fontSize: 12, color: c.textTertiary)),
     ]);
   }
 
@@ -966,7 +917,7 @@ class _UploadScreenState extends State<UploadScreen>
     final c = AppColors.of(context);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text('Job you\'re aiming for',
-          style: GoogleFonts.spaceGrotesk(
+          style: GoogleFonts.fraunces(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               color: c.textSecondary)),
@@ -974,7 +925,7 @@ class _UploadScreenState extends State<UploadScreen>
       TextFormField(
         controller: _targetJobCtrl,
         enabled: !_isAnalyzing,
-        style: GoogleFonts.inter(fontSize: 14, color: c.textPrimary),
+        style: GoogleFonts.workSans(fontSize: 14, color: c.textPrimary),
         decoration: const InputDecoration(
           hintText: 'e.g. Data Scientist, Software Engineer',
           prefixIcon: Icon(Icons.work_outline_rounded,
@@ -1003,8 +954,8 @@ class _UploadScreenState extends State<UploadScreen>
           const SizedBox(width: 10),
           Expanded(
               child: Text(_error!,
-                  style:
-                      GoogleFonts.inter(fontSize: 13, color: AppTheme.red400))),
+                  style: GoogleFonts.workSans(
+                      fontSize: 13, color: AppTheme.red400))),
         ]),
       );
 
@@ -1014,7 +965,7 @@ class _UploadScreenState extends State<UploadScreen>
       LinearProgressIndicator(backgroundColor: c.navy700, color: c.brand),
       const SizedBox(height: 12),
       Text(_statusMessage,
-          style: GoogleFonts.inter(fontSize: 13, color: c.textSecondary),
+          style: GoogleFonts.workSans(fontSize: 13, color: c.textSecondary),
           textAlign: TextAlign.center),
     ]);
   }

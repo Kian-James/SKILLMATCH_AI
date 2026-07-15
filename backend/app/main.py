@@ -1,26 +1,9 @@
 """
 app/main.py
 ===========
-FastAPI entry point — HTTP layer only.
-
-All analysis logic lives in pipeline.py. This file handles:
-  - File upload / temp file lifecycle
-  - FAISS integrity self-check
-  - Response assembly
-
-Current pipeline (see pipeline.py for the full breakdown)
------------------------------------------------------------
-Stage 1 — text acquisition: plain parsing (PyMuPDF / EasyOCR). No AI matching.
-Stage 2 — skills + certs discovery: candidate phrases are semantically matched
-           against the job corpus allowlist (SBERT cosine similarity, >=0.80)
-           inside core.skills / core.certs.
-Stage 3 — job matching: discovered skills AND certs are compared against
-           every job's requirements via SBERT cosine similarity (core.scoring,
-           core.validation). No string-fuzzy matching (rapidfuzz) is used
-           anywhere in this pipeline anymore — it's all embedding-based.
-Stage 4 — FAISS integrity self-check (this file): a sanity check that the
-           FAISS index round-trips the resume's own embedding correctly. Not
-           part of the analysis itself.
+FastAPI entry point — HTTP layer only. All analysis logic lives in
+pipeline.py; this file handles file upload, the FAISS integrity check,
+and response assembly.
 """
 
 import os
@@ -34,10 +17,9 @@ from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
 
-# Ensure .env is loaded before config values are read
 load_dotenv()
 
-# OpenMP guard — must be before any torch/faiss import
+# Must be set before any torch/faiss import
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -56,7 +38,7 @@ app = FastAPI(
     ),
 )
 
-# FAISS integrity index — 384 dims (all-MiniLM-L6-v2)
+# 384 dims for all-MiniLM-L6-v2
 _integrity_index = faiss.IndexFlatL2(384)
 
 
@@ -82,7 +64,7 @@ async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
     if not result["top_5_matches"]:
         raise HTTPException(status_code=500, detail="Scoring returned no results.")
 
-    # FAISS integrity self-check
+    # Sanity check: does FAISS round-trip this resume's own embedding correctly?
     from core.ocr_correction import get_sbert
     _sbert     = get_sbert()
     resume_vec = (
@@ -166,25 +148,15 @@ async def target_career_analysis(
     """
     Targeted resume analysis against a specific job title.
 
-    The caller supplies:
-      - file        — the resume PDF (same as /thesis-full-analysis)
-      - target_job  — the exact or approximate job title to match against
-                      (e.g. "Data Scientist", "Software Engineer")
+    Runs the standard extraction pipeline, then looks up `target_job` in
+    the Firestore corpus and returns a focused gap report (matched vs.
+    missing skills/certs) for that one job — no top-5 ranking.
 
-    The endpoint runs the standard extraction pipeline, then looks up the
-    requested job in the Firestore corpus and returns a focused report:
-      - which of the job's required skills AND certifications the candidate
-        already has, vs. what's missing
-    No top-5 ranking is produced — only the one targeted job is evaluated.
-
-    Skill and cert matching here uses the same SBERT semantic matching
-    (core.validation.fuzzy_skill_verify) as the main scoring pipeline —
-    this used to be a separate exact-string comparison and has been brought
-    in line so a candidate isn't penalised here for wording a skill/cert
-    differently than the job posting does.
+    Uses the same SBERT semantic matching as the main scoring pipeline,
+    so wording differences between resume and job posting don't count
+    against the candidate.
     """
 
-    # ── 1. Save upload to a temp file ────────────────────────────────────────
     temp_path = f"temp_target_{file.filename}"
     with open(temp_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
@@ -200,21 +172,15 @@ async def target_career_analysis(
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-
-    # ── 2. Find the target job in the full corpus ─────────────────────────────
-    # We search the FULL jobs corpus by title — NOT top_5_matches.
-    # top_5_matches is score-gated to TOP_K (default 5). A job the user
-    # aspires to but currently scores poorly on would never appear there.
-    # The point of this endpoint is to show the gap regardless of current
-    # score, so we resolve the title directly from the corpus.
+    # Search the full corpus by title (not top_5_matches, which is score-gated
+    # and would hide an aspirational job the candidate scores poorly on).
     from db               import load_analyzer_data as _load
-    from core.validation  import fuzzy_skill_verify
+    from core.validation  import semantic_verify
 
     _, jobs_corpus_full, _ = _load()
 
     target_lower = target_job.strip().lower()
 
-    # Exact title match first, then substring fallback.
     exact     = [j for j in jobs_corpus_full if j["title"].lower() == target_lower]
     substring = [j for j in jobs_corpus_full if target_lower in j["title"].lower()]
     candidates = exact or substring
@@ -228,23 +194,19 @@ async def target_career_analysis(
             ),
         )
 
-    # Among all title matches, pick the one with the most required skills
-    # so the gap analysis uses the richest ground truth available.
+    # Pick the richest match (most required skills) as ground truth
     target_job_doc: dict = max(candidates, key=lambda j: len(j.get("required_skills", [])))
 
-    # ── 3. Semantic skill validation against the target job ───────────────────
+    # Skill gap
     req_skills = target_job_doc.get("required_skills", [])
     nlp = fuzzy_skill_verify(
         discovered_list   = result["discovered_skills"],
         ground_truth_list = req_skills,
     )
     match_ratio  = round(len(nlp["matched_skills"]) / len(req_skills), 4) if req_skills else 0.0
-    # Hybrid score without SBERT job-similarity re-encoding (we don't re-run
-    # the job-corpus cosine pass for an arbitrary target here) — match_ratio
-    # only, but match_ratio itself is now semantic, not exact-string.
-    hybrid_score = match_ratio
+    hybrid_score = match_ratio  # no job-corpus re-encoding pass for arbitrary targets
 
-    # ── 4. Semantic cert validation against the target job ────────────────────
+    # Cert gap
     req_certs = target_job_doc.get("required_certifications", [])
     cert_nlp  = fuzzy_skill_verify(
         discovered_list   = result["discovered_certs"],
@@ -253,7 +215,6 @@ async def target_career_analysis(
     matched_certs = cert_nlp["matched_skills"]
     missing_certs = cert_nlp["unmatched_skills"]
 
-    # ── 5. Assemble focused response ──────────────────────────────────────────
     return {
         "target_job": {
             "job_id":   target_job_doc.get("id", ""),

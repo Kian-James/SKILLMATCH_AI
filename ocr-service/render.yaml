@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ocr-service
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: EASYOCR_LANGUAGES
+        value: en
+      - key: OCR_TIMEOUT_SECONDS
+        value: 120
+    # pdf2image needs the poppler-utils binary (pdftoppm) on the system.
+    # Render's native Python environment is Debian-based and does not
+    # include it by default — this installs it during build.
+    aptPackages:
+      - poppler-utils

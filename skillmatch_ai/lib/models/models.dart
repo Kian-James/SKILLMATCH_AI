@@ -285,9 +285,11 @@ class FullAnalysisResult {
   factory FullAnalysisResult.fromJson(Map<String, dynamic> j) {
     final s1 = j['STAGE_1_TEXT_ACQUISITION'] as Map<String, dynamic>? ?? {};
     final s2 = j['STAGE_2_SKILL_EXTRACTION'] as Map<String, dynamic>? ?? {};
-    final s2b = j['STAGE_2B_CERT_EXTRACTION'] as Map<String, dynamic>? ?? {};
-    final s3 = j['STAGE_3_NLP_VALIDATION'] as Map<String, dynamic>? ?? {};
+    final s2b = j['STAGE_2_CERT_EXTRACTION'] as Map<String, dynamic>? ?? {};
+    final s3 = j['STAGE_3_JOB_MATCHING'] as Map<String, dynamic>? ?? {};
     final s4 = j['STAGE_4_FAISS_INTEGRITY'] as Map<String, dynamic>? ?? {};
+
+    final s3Skills = s3['skills'] as Map<String, dynamic>? ?? {};
 
     final top5Raw =
         s3['Top_5_Career_Recommendations_NLP'] as List<dynamic>? ?? [];
@@ -300,9 +302,9 @@ class FullAnalysisResult {
       llmModel: s2['llm_model'] ?? '',
       discoveredSkills: List<String>.from(s2['discovered_skills'] ?? []),
       discoveredCerts: List<String>.from(s2b['discovered_certificates'] ?? []),
-      nlpAccuracy: s3['nlp_accuracy'] ?? '0%',
-      matchedSkills: List<String>.from(s3['matched_skills'] ?? []),
-      unmatchedSkills: List<String>.from(s3['unmatched_skills'] ?? []),
+      nlpAccuracy: s3Skills['nlp_accuracy'] ?? '0%',
+      matchedSkills: List<String>.from(s3Skills['matched_skills'] ?? []),
+      unmatchedSkills: List<String>.from(s3Skills['unmatched_skills'] ?? []),
       top5: top5Raw
           .map((e) => Top5Match.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -365,8 +367,26 @@ class ResumeScanRecord {
 
   int get skillCount => skills.length;
   int get certCount => certs.length;
-  int get matchedCount => matchedSkills.length;
-  int get missingCount => missingSkills.length;
+
+  /// The full required-skill set for this record's job is fixed at analysis
+  /// time (matchedSkills ∪ missingSkills never changes size), but which of
+  /// those skills the user currently HAS does change as they promote/demote
+  /// skills on the results screen. Deriving matched/missing live from the
+  /// current `skills` list keeps these in sync with that — previously they
+  /// read straight off the frozen `matchedSkills`/`missingSkills` snapshot,
+  /// which was only ever set once at analysis time and never updated again,
+  /// so promoting a skill never changed what History showed here.
+  Set<String> get _requiredSkillsLower => {
+        ...matchedSkills.map((s) => s.toLowerCase()),
+        ...missingSkills.map((s) => s.toLowerCase()),
+      };
+
+  int get matchedCount {
+    final mySkillsLower = skills.map((s) => s.toLowerCase()).toSet();
+    return _requiredSkillsLower.where(mySkillsLower.contains).length;
+  }
+
+  int get missingCount => _requiredSkillsLower.length - matchedCount;
 
   String get displayTitle =>
       analysisType == AnalysisType.targeted ? targetJobTitle : 'Full Analysis';

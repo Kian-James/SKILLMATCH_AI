@@ -3,10 +3,8 @@ app/schemas.py
 ==============
 Pydantic response models for the /thesis-full-analysis endpoint.
 
-Using typed models instead of raw dicts gives you:
-  - Auto-generated OpenAPI/Swagger docs with field descriptions
-  - Response validation (catches pipeline bugs that return wrong types)
-  - IDE autocompletion when assembling the response in main.py
+Typed models give auto-generated OpenAPI docs, response validation, and
+IDE autocompletion when assembling the response in main.py.
 """
 
 from __future__ import annotations

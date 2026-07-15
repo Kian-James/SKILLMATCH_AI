@@ -12,10 +12,11 @@ transformers>=4.47.0,<6.0.0
 faiss-cpu
 rapidfuzz
 
-# Document Processing & OCR
+# Document Processing
 PyMuPDF>=1.27.2
-easyocr>=1.7.2
-pdf2image
+
+# HTTP client for calling the OCR microservice (see ocr-service/)
+httpx>=0.27.0
 
 # Data Science & Math
 numpy>=1.26.4,<2.0.0

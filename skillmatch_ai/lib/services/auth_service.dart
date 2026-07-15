@@ -100,7 +100,24 @@ class AuthService {
 
   // ── Guest ─────────────────────────────────────────────────────────────────
 
-  ResumeUser continueAsGuest() => ResumeUser.guest();
+  /// Signs in anonymously via Firebase Auth so guest sessions still carry a
+  /// real `request.auth` context for Firestore (security rules that check
+  /// `request.auth != null` / `request.auth.uid == resource.data.userId`
+  /// otherwise reject every write with PERMISSION_DENIED). Previously this
+  /// just returned a locally-fabricated ResumeUser with no Firebase session
+  /// behind it at all, which is why guest mode could never save scans while
+  /// Google/email sign-in — which do go through FirebaseAuth — worked fine.
+  Future<ResumeUser> continueAsGuest() async {
+    final cred = await _auth.signInAnonymously();
+    final u = cred.user!;
+    return ResumeUser(
+      id: u.uid,
+      name: 'Guest',
+      email: '',
+      avatarInitials: 'G',
+      isGuest: true,
+    );
+  }
 
   // ── Sign out ──────────────────────────────────────────────────────────────
 

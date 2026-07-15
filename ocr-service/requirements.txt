@@ -1,0 +1,9 @@
+# Web Server
+fastapi
+uvicorn
+python-multipart
+
+# OCR
+easyocr>=1.7.2
+pdf2image
+numpy>=1.26.4,<2.0.0

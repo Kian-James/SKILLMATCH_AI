@@ -36,14 +36,14 @@ class StatCard extends StatelessWidget {
           Icon(icon, color: c.textTertiary, size: 18),
           const SizedBox(height: 10),
           Text(value,
-              style: GoogleFonts.spaceGrotesk(
+              style: GoogleFonts.fraunces(
                   fontSize: 26,
                   fontWeight: FontWeight.w700,
                   color: valueColor,
                   height: 1)),
           const SizedBox(height: 4),
           Text(label,
-              style: GoogleFonts.inter(
+              style: GoogleFonts.workSans(
                   fontSize: 12,
                   color: c.textTertiary,
                   fontWeight: FontWeight.w500)),
@@ -132,7 +132,7 @@ class SkillChip extends StatelessWidget {
         border: Border.all(color: border, width: 0.8),
       ),
       child: Text(label,
-          style: GoogleFonts.inter(
+          style: GoogleFonts.workSans(
               fontSize: 12, color: text, fontWeight: FontWeight.w500)),
     );
   }
@@ -156,7 +156,7 @@ class LabeledDivider extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Text(
             label.toUpperCase(),
-            style: GoogleFonts.inter(
+            style: GoogleFonts.workSans(
                 fontSize: 10,
                 color: c.textTertiary,
                 letterSpacing: 1.2,
@@ -169,7 +169,9 @@ class LabeledDivider extends StatelessWidget {
   }
 }
 
-/// Match score ring indicator (replaces "NLP accuracy ring")
+/// Ink-stamp match seal — the "reviewed" case-file signature.
+/// A dashed, slightly rotated ring stamped with the match percentage,
+/// echoing a document reviewer's rubber stamp.
 class AccuracyRing extends StatelessWidget {
   final String accuracy; // e.g. "87.50%"
   final double size;
@@ -181,6 +183,8 @@ class AccuracyRing extends StatelessWidget {
     return (double.tryParse(clean) ?? 0) / 100;
   }
 
+  String get _whole => accuracy.replaceAll('%', '').split('.').first;
+
   Color get _color {
     final v = _value;
     if (v >= 0.75) return AppTheme.green500;
@@ -190,43 +194,63 @@ class AccuracyRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = AppColors.of(context);
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          SizedBox(
-            width: size,
-            height: size,
-            child: CircularProgressIndicator(
-              value: _value,
-              strokeWidth: 5,
-              backgroundColor: c.navy600,
-              valueColor: AlwaysStoppedAnimation<Color>(_color),
-              strokeCap: StrokeCap.round,
+    return Transform.rotate(
+      angle: -0.14, // ~-8°
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(
+          painter: _DashedCirclePainter(color: _color),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '$_whole%',
+                  style: GoogleFonts.fraunces(
+                      fontSize: size * 0.22,
+                      fontWeight: FontWeight.w600,
+                      color: _color),
+                ),
+                Text('reviewed',
+                    style: AppTheme.mono(
+                        fontSize: size * 0.09,
+                        weight: FontWeight.w500,
+                        color: _color)),
+              ],
             ),
           ),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                accuracy.replaceAll('%', ''),
-                style: GoogleFonts.spaceGrotesk(
-                    fontSize: size * 0.22,
-                    fontWeight: FontWeight.w700,
-                    color: _color),
-              ),
-              Text('%',
-                  style: GoogleFonts.inter(
-                      fontSize: size * 0.12, color: c.textTertiary)),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
+}
+
+class _DashedCirclePainter extends CustomPainter {
+  final Color color;
+  const _DashedCirclePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final radius = size.width / 2 - 1.5;
+    final center = Offset(size.width / 2, size.height / 2);
+    const dashCount = 28;
+    const gapFraction = 0.45;
+    for (int i = 0; i < dashCount; i++) {
+      final start = (i / dashCount) * 2 * 3.14159265;
+      final sweep = (2 * 3.14159265 / dashCount) * (1 - gapFraction);
+      canvas.drawArc(Rect.fromCircle(center: center, radius: radius), start,
+          sweep, false, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedCirclePainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 /// User avatar initials circle
@@ -265,7 +289,7 @@ class AvatarCircle extends StatelessWidget {
       child: Center(
         child: Text(
           initials,
-          style: GoogleFonts.spaceGrotesk(
+          style: GoogleFonts.fraunces(
             fontSize: size * 0.35,
             fontWeight: FontWeight.w700,
             color: isSelected ? AppTheme.navy900 : c.textSecondary,
@@ -352,7 +376,7 @@ class TealBadge extends StatelessWidget {
       ),
       child: Text(
         text,
-        style: GoogleFonts.inter(
+        style: GoogleFonts.workSans(
             fontSize: 11, color: c.brandSoft, fontWeight: FontWeight.w600),
       ),
     );

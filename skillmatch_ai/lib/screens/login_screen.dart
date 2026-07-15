@@ -19,19 +19,19 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
-  final _auth      = AuthService();
+  final _auth = AuthService();
   final _emailCtrl = TextEditingController();
-  final _passCtrl  = TextEditingController();
-  final _nameCtrl  = TextEditingController();
-  final _formKey   = GlobalKey<FormState>();
+  final _passCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
 
-  bool _isSignUp      = false;
-  bool _obscurePass   = true;
-  bool _isLoading     = false;
+  bool _isSignUp = false;
+  bool _obscurePass = true;
+  bool _isLoading = false;
   String? _error;
 
   late AnimationController _fadeCtrl;
-  late Animation<double>   _fadeAnim;
+  late Animation<double> _fadeAnim;
 
   @override
   void initState() {
@@ -69,12 +69,12 @@ class _LoginScreenState extends State<LoginScreen>
     try {
       final user = _isSignUp
           ? await _auth.signUpWithEmail(
-              name:     _nameCtrl.text.trim(),
-              email:    _emailCtrl.text.trim(),
+              name: _nameCtrl.text.trim(),
+              email: _emailCtrl.text.trim(),
               password: _passCtrl.text,
             )
           : await _auth.signInWithEmail(
-              email:    _emailCtrl.text.trim(),
+              email: _emailCtrl.text.trim(),
               password: _passCtrl.text,
             );
       _goHome(user);
@@ -96,15 +96,25 @@ class _LoginScreenState extends State<LoginScreen>
       _setError(_friendlyFirebaseError(e.code));
     } catch (e) {
       final msg = e.toString();
-      if (!msg.contains('cancelled')) _setError(msg.replaceFirst('Exception: ', ''));
+      if (!msg.contains('cancelled'))
+        _setError(msg.replaceFirst('Exception: ', ''));
     } finally {
       _setLoading(false);
     }
   }
 
-  void _continueAsGuest() {
-    final user = _auth.continueAsGuest();
-    _goHome(user);
+  Future<void> _continueAsGuest() async {
+    _setLoading(true);
+    try {
+      final user = await _auth.continueAsGuest();
+      _goHome(user);
+    } on FirebaseAuthException catch (e) {
+      _setError(_friendlyFirebaseError(e.code));
+    } catch (e) {
+      _setError(e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      _setLoading(false);
+    }
   }
 
   Future<void> _forgotPassword() async {
@@ -126,32 +136,38 @@ class _LoginScreenState extends State<LoginScreen>
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  void _setLoading(bool v) { if (mounted) setState(() => _isLoading = v); }
-  void _setError(String? v) { if (mounted) setState(() => _error = v); }
+  void _setLoading(bool v) {
+    if (mounted) setState(() => _isLoading = v);
+  }
+
+  void _setError(String? v) {
+    if (mounted) setState(() => _error = v);
+  }
 
   void _toggleMode() {
     setState(() {
       _isSignUp = !_isSignUp;
-      _error    = null;
+      _error = null;
     });
     _fadeCtrl.forward(from: 0);
   }
 
   String _friendlyFirebaseError(String code) => switch (code) {
-    'user-not-found'        => 'No account found with that email.',
-    'wrong-password'        => 'Incorrect password.',
-    'invalid-credential'    => 'Invalid email or password.',
-    'email-already-in-use'  => 'An account already exists with this email.',
-    'weak-password'         => 'Password must be at least 6 characters.',
-    'invalid-email'         => 'Please enter a valid email address.',
-    'too-many-requests'     => 'Too many attempts. Try again later.',
-    'network-request-failed'=> 'No internet connection.',
-    _                       => 'Authentication failed. Please try again.',
-  };
+        'user-not-found' => 'No account found with that email.',
+        'wrong-password' => 'Incorrect password.',
+        'invalid-credential' => 'Invalid email or password.',
+        'email-already-in-use' => 'An account already exists with this email.',
+        'weak-password' => 'Password must be at least 6 characters.',
+        'invalid-email' => 'Please enter a valid email address.',
+        'too-many-requests' => 'Too many attempts. Try again later.',
+        'network-request-failed' => 'No internet connection.',
+        _ => 'Authentication failed. Please try again.',
+      };
 
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: GoogleFonts.inter(color: AppTheme.navy900)),
+      content: Text(msg,
+          style: GoogleFonts.workSans(color: AppColors.of(context).navy900)),
       backgroundColor: AppTheme.teal500,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -203,286 +219,312 @@ class _LoginScreenState extends State<LoginScreen>
   // ── Widgets ───────────────────────────────────────────────────────────────
 
   Widget _buildHero() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Container(
-        width: 56,
-        height: 56,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [AppTheme.teal500, AppTheme.teal300],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [AppTheme.teal500, AppTheme.teal300],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(Icons.auto_awesome_rounded,
+                color: AppColors.of(context).navy900, size: 26),
           ),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Icon(Icons.auto_awesome_rounded,
-            color: AppTheme.navy900, size: 26),
-      ),
-      const SizedBox(height: 20),
-      Text(
-        _isSignUp ? 'Create account' : 'Welcome back',
-        style: GoogleFonts.spaceGrotesk(
-          fontSize: 32,
-          fontWeight: FontWeight.w700,
-          color: AppTheme.textPrimary,
-          height: 1.1,
-        ),
-      ),
-      const SizedBox(height: 8),
-      Text(
-        _isSignUp
-            ? 'Start tracking your skill growth today.'
-            : 'Sign in to access your resume history.',
-        style: GoogleFonts.inter(
-            fontSize: 15, color: AppTheme.textSecondary, height: 1.5),
-      ),
-    ],
-  );
+          const SizedBox(height: 20),
+          Text(
+            _isSignUp ? 'Create account' : 'Welcome back',
+            style: GoogleFonts.fraunces(
+              fontSize: 32,
+              fontWeight: FontWeight.w700,
+              color: AppColors.of(context).textPrimary,
+              height: 1.1,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _isSignUp
+                ? 'Start tracking your skill growth today.'
+                : 'Sign in to access your resume history.',
+            style: GoogleFonts.workSans(
+                fontSize: 15,
+                color: AppColors.of(context).textSecondary,
+                height: 1.5),
+          ),
+        ],
+      );
 
   Widget _buildFormFields() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      // Name field — sign-up only
-      AnimatedSize(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeInOut,
-        child: _isSignUp
-            ? Column(children: [
-                _label('Full Name'),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _nameCtrl,
-                  enabled: !_isLoading,
-                  textCapitalization: TextCapitalization.words,
-                  style: _inputStyle,
-                  decoration: _inputDeco(
-                    hint: 'Kian Reyes',
-                    icon: Icons.person_outline_rounded,
-                  ),
-                  validator: (v) => _isSignUp && (v == null || v.trim().isEmpty)
-                      ? 'Enter your name' : null,
-                ),
-                const SizedBox(height: 16),
-              ])
-            : const SizedBox.shrink(),
-      ),
-
-      _label('Email'),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: _emailCtrl,
-        enabled: !_isLoading,
-        keyboardType: TextInputType.emailAddress,
-        autocorrect: false,
-        style: _inputStyle,
-        decoration: _inputDeco(
-          hint: 'you@gmail.com',
-          icon: Icons.email_outlined,
-        ),
-        validator: (v) {
-          if (v == null || v.trim().isEmpty) return 'Enter your email';
-          if (!v.contains('@') || !v.contains('.')) return 'Enter a valid email';
-          return null;
-        },
-      ),
-      const SizedBox(height: 16),
-
-      _label('Password'),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: _passCtrl,
-        enabled: !_isLoading,
-        obscureText: _obscurePass,
-        style: _inputStyle,
-        decoration: _inputDeco(
-          hint: '••••••••',
-          icon: Icons.lock_outline_rounded,
-        ).copyWith(
-          suffixIcon: GestureDetector(
-            onTap: () => setState(() => _obscurePass = !_obscurePass),
-            child: Icon(
-              _obscurePass
-                  ? Icons.visibility_outlined
-                  : Icons.visibility_off_outlined,
-              color: AppTheme.textTertiary,
-              size: 18,
-            ),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Name field — sign-up only
+          AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeInOut,
+            child: _isSignUp
+                ? Column(children: [
+                    _label('Full Name'),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _nameCtrl,
+                      enabled: !_isLoading,
+                      textCapitalization: TextCapitalization.words,
+                      style: _inputStyle,
+                      decoration: _inputDeco(
+                        hint: 'Kian Reyes',
+                        icon: Icons.person_outline_rounded,
+                      ),
+                      validator: (v) =>
+                          _isSignUp && (v == null || v.trim().isEmpty)
+                              ? 'Enter your name'
+                              : null,
+                    ),
+                    const SizedBox(height: 16),
+                  ])
+                : const SizedBox.shrink(),
           ),
-        ),
-        validator: (v) {
-          if (v == null || v.isEmpty) return 'Enter your password';
-          if (_isSignUp && v.length < 6) return 'Minimum 6 characters';
-          return null;
-        },
-        onFieldSubmitted: (_) => _submitEmailPassword(),
-      ),
-    ],
-  );
+
+          _label('Email'),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _emailCtrl,
+            enabled: !_isLoading,
+            keyboardType: TextInputType.emailAddress,
+            autocorrect: false,
+            style: _inputStyle,
+            decoration: _inputDeco(
+              hint: 'you@gmail.com',
+              icon: Icons.email_outlined,
+            ),
+            validator: (v) {
+              if (v == null || v.trim().isEmpty) return 'Enter your email';
+              if (!v.contains('@') || !v.contains('.'))
+                return 'Enter a valid email';
+              return null;
+            },
+          ),
+          const SizedBox(height: 16),
+
+          _label('Password'),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _passCtrl,
+            enabled: !_isLoading,
+            obscureText: _obscurePass,
+            style: _inputStyle,
+            decoration: _inputDeco(
+              hint: '••••••••',
+              icon: Icons.lock_outline_rounded,
+            ).copyWith(
+              suffixIcon: GestureDetector(
+                onTap: () => setState(() => _obscurePass = !_obscurePass),
+                child: Icon(
+                  _obscurePass
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: AppColors.of(context).textTertiary,
+                  size: 18,
+                ),
+              ),
+            ),
+            validator: (v) {
+              if (v == null || v.isEmpty) return 'Enter your password';
+              if (_isSignUp && v.length < 6) return 'Minimum 6 characters';
+              return null;
+            },
+            onFieldSubmitted: (_) => _submitEmailPassword(),
+          ),
+        ],
+      );
 
   Widget _buildForgotPassword() => Align(
-    alignment: Alignment.centerRight,
-    child: GestureDetector(
-      onTap: _forgotPassword,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Text(
-          'Forgot password?',
-          style: GoogleFonts.inter(
-            fontSize: 13,
-            color: AppTheme.teal400,
-            fontWeight: FontWeight.w500,
+        alignment: Alignment.centerRight,
+        child: GestureDetector(
+          onTap: _forgotPassword,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'Forgot password?',
+              style: GoogleFonts.workSans(
+                fontSize: 13,
+                color: AppTheme.teal400,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         ),
-      ),
-    ),
-  );
+      );
 
   Widget _buildError() => Container(
-    margin: const EdgeInsets.only(bottom: 16),
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    decoration: BoxDecoration(
-      color: AppTheme.red500.withOpacity(0.08),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: AppTheme.red500.withOpacity(0.3)),
-    ),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Icon(Icons.error_outline_rounded, color: AppTheme.red400, size: 16),
-      const SizedBox(width: 10),
-      Expanded(child: Text(_error!,
-          style: GoogleFonts.inter(fontSize: 13, color: AppTheme.red400))),
-    ]),
-  );
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppTheme.red500.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.red500.withOpacity(0.3)),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.error_outline_rounded,
+              color: AppTheme.red400, size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text(_error!,
+                  style: GoogleFonts.workSans(
+                      fontSize: 13, color: AppTheme.red400))),
+        ]),
+      );
 
   Widget _buildSubmitButton() => SizedBox(
-    width: double.infinity,
-    child: ElevatedButton(
-      onPressed: _isLoading ? null : _submitEmailPassword,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppTheme.teal500,
-        foregroundColor: AppTheme.navy900,
-        padding: const EdgeInsets.symmetric(vertical: 15),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        disabledBackgroundColor: AppTheme.teal500.withOpacity(0.4),
-      ),
-      child: _isLoading
-          ? const SizedBox(
-              width: 20, height: 20,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: AppTheme.navy900),
-            )
-          : Text(
-              _isSignUp ? 'Create Account' : 'Sign In',
-              style: GoogleFonts.spaceGrotesk(
-                  fontSize: 15, fontWeight: FontWeight.w700),
-            ),
-    ),
-  );
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: _isLoading ? null : _submitEmailPassword,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.teal500,
+            foregroundColor: AppColors.of(context).navy900,
+            padding: const EdgeInsets.symmetric(vertical: 15),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            disabledBackgroundColor: AppTheme.teal500.withOpacity(0.4),
+          ),
+          child: _isLoading
+              ? SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.of(context).navy900),
+                )
+              : Text(
+                  _isSignUp ? 'Create Account' : 'Sign In',
+                  style: GoogleFonts.fraunces(
+                      fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+        ),
+      );
 
   Widget _buildDivider() => Row(children: [
-    Expanded(child: Container(height: 1, color: AppTheme.divider)),
-    Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Text('or continue with',
-          style: GoogleFonts.inter(
-              fontSize: 12, color: AppTheme.textTertiary, letterSpacing: 0.3)),
-    ),
-    Expanded(child: Container(height: 1, color: AppTheme.divider)),
-  ]);
+        Expanded(
+            child: Container(height: 1, color: AppColors.of(context).divider)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Text('or continue with',
+              style: GoogleFonts.workSans(
+                  fontSize: 12,
+                  color: AppColors.of(context).textTertiary,
+                  letterSpacing: 0.3)),
+        ),
+        Expanded(
+            child: Container(height: 1, color: AppColors.of(context).divider)),
+      ]);
 
   Widget _buildGoogleButton() => SizedBox(
-    width: double.infinity,
-    child: OutlinedButton(
-      onPressed: _isLoading ? null : _signInGoogle,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: AppTheme.textPrimary,
-        side: const BorderSide(color: AppTheme.cardBorder),
-        backgroundColor: AppTheme.navy800,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        // Google G logo using coloured squares
-        _googleIcon(),
-        const SizedBox(width: 12),
-        Text('Continue with Google',
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 14, fontWeight: FontWeight.w600,
-                color: AppTheme.textPrimary)),
-      ]),
-    ),
-  );
+        width: double.infinity,
+        child: OutlinedButton(
+          onPressed: _isLoading ? null : _signInGoogle,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.of(context).textPrimary,
+            side: BorderSide(color: AppColors.of(context).cardBorder),
+            backgroundColor: AppColors.of(context).navy800,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            // Google G logo using coloured squares
+            _googleIcon(),
+            const SizedBox(width: 12),
+            Text('Continue with Google',
+                style: GoogleFonts.fraunces(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.of(context).textPrimary)),
+          ]),
+        ),
+      );
 
   Widget _buildGuestButton() => SizedBox(
-    width: double.infinity,
-    child: OutlinedButton.icon(
-      onPressed: _isLoading ? null : _continueAsGuest,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: AppTheme.textSecondary,
-        side: BorderSide(color: AppTheme.cardBorder.withOpacity(0.6)),
-        backgroundColor: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      icon: const Icon(Icons.person_outline_rounded,
-          color: AppTheme.textTertiary, size: 18),
-      label: Text('Continue as Guest',
-          style: GoogleFonts.spaceGrotesk(
-              fontSize: 14, fontWeight: FontWeight.w600,
-              color: AppTheme.textSecondary)),
-    ),
-  );
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _isLoading ? null : _continueAsGuest,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.of(context).textSecondary,
+            side: BorderSide(
+                color: AppColors.of(context).cardBorder.withOpacity(0.6)),
+            backgroundColor: Colors.transparent,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          icon: Icon(Icons.person_outline_rounded,
+              color: AppColors.of(context).textTertiary, size: 18),
+          label: Text('Continue as Guest',
+              style: GoogleFonts.fraunces(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.of(context).textSecondary)),
+        ),
+      );
 
   Widget _buildToggleMode() => Row(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      Text(
-        _isSignUp ? 'Already have an account? ' : "Don't have an account? ",
-        style: GoogleFonts.inter(fontSize: 14, color: AppTheme.textTertiary),
-      ),
-      GestureDetector(
-        onTap: _toggleMode,
-        child: Text(
-          _isSignUp ? 'Sign In' : 'Sign Up',
-          style: GoogleFonts.spaceGrotesk(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.teal400,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            _isSignUp ? 'Already have an account? ' : "Don't have an account? ",
+            style: GoogleFonts.workSans(
+                fontSize: 14, color: AppColors.of(context).textTertiary),
           ),
-        ),
-      ),
-    ],
-  );
+          GestureDetector(
+            onTap: _toggleMode,
+            child: Text(
+              _isSignUp ? 'Sign In' : 'Sign Up',
+              style: GoogleFonts.fraunces(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.teal400,
+              ),
+            ),
+          ),
+        ],
+      );
 
   // ── Google icon (no asset needed) ─────────────────────────────────────────
 
   Widget _googleIcon() => SizedBox(
-    width: 20,
-    height: 20,
-    child: CustomPaint(painter: _GoogleIconPainter()),
-  );
+        width: 20,
+        height: 20,
+        child: CustomPaint(
+            painter:
+                _GoogleIconPainter(background: AppColors.of(context).navy800)),
+      );
 
   // ── Style helpers ─────────────────────────────────────────────────────────
 
-  TextStyle get _inputStyle =>
-      GoogleFonts.inter(fontSize: 14, color: AppTheme.textPrimary);
+  TextStyle get _inputStyle => GoogleFonts.workSans(
+      fontSize: 14, color: AppColors.of(context).textPrimary);
 
   InputDecoration _inputDeco({required String hint, required IconData icon}) =>
       InputDecoration(
         hintText: hint,
-        prefixIcon: Icon(icon, color: AppTheme.textTertiary, size: 18),
+        prefixIcon:
+            Icon(icon, color: AppColors.of(context).textTertiary, size: 18),
       );
 
   Widget _label(String text) => Text(text,
-      style: GoogleFonts.spaceGrotesk(
+      style: GoogleFonts.fraunces(
           fontSize: 13,
           fontWeight: FontWeight.w600,
-          color: AppTheme.textSecondary));
+          color: AppColors.of(context).textSecondary));
 }
 
 // ── Google coloured G icon painter ───────────────────────────────────────────
 
 class _GoogleIconPainter extends CustomPainter {
+  final Color background;
+  const _GoogleIconPainter({required this.background});
+
   @override
   void paint(Canvas canvas, Size size) {
     final c = Offset(size.width / 2, size.height / 2);
@@ -507,17 +549,17 @@ class _GoogleIconPainter extends CustomPainter {
       );
     }
 
-    // White center circle to make it look like the G
-    canvas.drawCircle(c, r * 0.55,
-        Paint()..color = AppTheme.navy800);
+    // Background-coloured center circle to make it look like the G
+    canvas.drawCircle(c, r * 0.55, Paint()..color = background);
 
-    // White horizontal bar of the G
+    // Background-coloured horizontal bar of the G
     canvas.drawRect(
       Rect.fromLTWH(c.dx - 0.5, c.dy - r * 0.15, r * 0.95, r * 0.3),
-      Paint()..color = AppTheme.navy800,
+      Paint()..color = background,
     );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _GoogleIconPainter oldDelegate) =>
+      oldDelegate.background != background;
 }

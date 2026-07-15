@@ -3,31 +3,17 @@ core/scoring.py
 ===============
 Stage 3 (FAISS side) — SBERT embedding + hybrid scoring.
 
-Hybrid score formula (v3 — fixes two measured problems in v2)
----------------------------------------------------------------
-v2 (multiplicative: cosine_scaled * sqrt(match_ratio) - gap_penalty) had
-two issues confirmed against real evaluation data:
-
-  1. SCALE BUG: _compute_hybrid_score returned 0-1, but was never actually
-     multiplied by 100 before being stored in results["score"]. The
-     min_match_score threshold (50-60) is on a 0-100 scale, so comparing
-     the raw "score" field against it directly always fails. Fixed: the
-     hybrid score is now computed and returned on a 0-100 scale from this
-     function, so "score" is self-consistent with the documented threshold
-     with no rescaling required downstream.
-
-  2. MULTIPLICATIVE CRUSH: using skill match as a *multiplier* on cosine
-     meant a candidate with a 100% skill match but a merely-good (not
-     great) cosine of ~0.50-0.60 — common for real resumes scored against
-     real job postings — could be dragged below threshold even with a
-     perfect skill match, while sqrt(low match_ratio) could crush a
-     genuinely strong cosine match to ~0 on a single bad extraction.
-     Fixed: cosine and skill match are now combined as a WEIGHTED AVERAGE
-     (50/50 by default) rather than multiplied. Each signal can partially
-     carry the score on its own; neither can be silently erased by a weak
-     reading on the other. The gap penalty (large, lopsided skill gaps)
-     is still subtracted afterward so a near-total skill mismatch still
-     can't be rescued by semantic similarity alone.
+Hybrid score formula
+---------------------
+Cosine similarity and skill match are combined as a weighted average
+(50/50 by default), not multiplied together. A multiplicative formula lets
+either signal single-handedly crush the whole score to near-zero even when
+the other signal is strong — e.g. a 100% skill match getting dragged below
+threshold by a merely-good cosine of 0.55, or a strong cosine getting
+zeroed out by one bad skill-extraction pass. A weighted average lets each
+signal partially carry the score on its own. A gap penalty is still
+subtracted afterward so a near-total skill mismatch can't be rescued by
+semantic similarity alone.
 
 Formula:
   1. Rescale cosine similarity from SBERT's real range (0.30–0.90) → 0–1
@@ -36,25 +22,25 @@ Formula:
      are missing, capping at a 50-point drag
   4. Multiply by 100 for a 0–100 output with a meaningful 60-point threshold
 
-Typical score ranges with v3 formula:
+The result is already on a 0-100 scale, self-consistent with the
+recommended min_match_score threshold of 60 — no rescaling needed by callers.
+
+Typical score ranges:
   Perfect        (cosine 0.88, skills 1.00, gap 0.00)  →  ~93
   Strong match   (cosine 0.82, skills 0.90, gap 0.10)  →  ~88
   Good match     (cosine 0.72, skills 0.75, gap 0.25)  →  ~72
   Full skills,
-   modest cosine (cosine 0.55, skills 1.00, gap 0.00)  →  ~71  (previously ~43, a false fail)
-  Semantic only  (cosine 0.80, skills 0.30, gap 0.70)  →  ~12  (still heavily penalised —
-                                                                 the gap penalty does the work,
-                                                                 not a multiplier crush to ~1)
+   modest cosine (cosine 0.55, skills 1.00, gap 0.00)  →  ~71
+  Semantic only  (cosine 0.80, skills 0.30, gap 0.70)  →  ~12 (gap penalty
+                                                                does the work)
   Weak all round (cosine 0.45, skills 0.20, gap 0.80)  →   ~6
-
-Recommended min_match_score threshold: 60
 
 fit_reason generation: generate_fit_reason calls the HF Inference API
   (meta-llama/Llama-3.1-8B-Instruct via the HuggingFace router) to produce
   a personalised 2-3 sentence description grounded in the candidate's actual
   extracted skills. If the API call fails for any reason (timeout, quota,
   missing token) it falls back to the rule-based _fit_reason_fallback so the
-  pipeline never errors out. Function signature is unchanged from before.
+  pipeline never errors out.
 """
 
 from __future__ import annotations
@@ -68,10 +54,27 @@ from tqdm import tqdm
 
 from config import TOP_K, HF_TOKEN, HF_API_URL, HF_MODEL
 from core.utils import normalize
-from core.validation import fuzzy_skill_verify
+from core.validation import semantic_verify
 from core.ocr_correction import get_sbert
 
 log = logging.getLogger(__name__)
+
+
+# ── LLM fit-reason circuit breaker ─────────────────────────────────────────────
+# Once _call_llama_fit_reason fails (timeout, quota, bad token, bad response,
+# etc.), don't keep re-trying it for every remaining job in the same batch —
+# that would mean eating a fresh ~15s timeout per job for a corpus of
+# hundreds of jobs. Trip the breaker on first failure within a process and
+# go straight to the rule-based fallback for everything after that. Call
+# reset_llm_fit_reason_breaker() (e.g. at the start of a new scoring run,
+# or after fixing the underlying issue) to allow the LLM path to be tried again.
+_LLM_FIT_REASON_DISABLED = False
+
+
+def reset_llm_fit_reason_breaker() -> None:
+    """Re-enable the LLM fit-reason path after a prior failure tripped the breaker."""
+    global _LLM_FIT_REASON_DISABLED
+    _LLM_FIT_REASON_DISABLED = False
 
 
 # ── FAISS index cache ──────────────────────────────────────────────────────────
@@ -213,18 +216,14 @@ def _compute_hybrid_score(
         0.0, 1.0,
         ))
 
-    # Step 2: weighted average of cosine and skill match (NOT a multiplier).
-    #   A multiplier lets either signal single-handedly crush the whole
-    #   score to ~0 even when the other signal is strong (e.g. a 100%
-    #   skill match getting dragged below threshold by a merely-good
-    #   cosine of 0.55, or a strong cosine getting zeroed by one bad
-    #   skill-extraction pass). A weighted average lets each signal
-    #   partially carry the score on its own.
+    # Step 2: weighted average of cosine and skill match, not a multiplier —
+    # see module docstring for why. Each signal can partially carry the
+    # score on its own.
     blended = WEIGHT_COSINE * cosine_scaled + WEIGHT_SKILL * match_ratio
 
-    # Step 3: gap penalty — only fires when >40% of required skills are absent.
-    # This is what actually punishes severe skill mismatches now that
-    # match_ratio is additive rather than multiplicative.
+    # Step 3: gap penalty — only fires when >40% of required skills are
+    # absent. This is what actually punishes severe skill mismatches now
+    # that match_ratio is additive rather than multiplicative.
     excess      = max(0.0, gap_ratio - GAP_PENALTY_FLOOR)
     gap_penalty = min(excess * GAP_PENALTY_SCALE, GAP_PENALTY_CAP)
 
@@ -239,10 +238,9 @@ def _build_query_text(resume_text: str, resume_skills: list[str],
     """
     Build the SBERT query string from the resume.
 
-    The old approach truncated to 500 characters, missing everything after
-    the header. This splits the resume into up to max_chunks word-chunks and
-    appends the skill list to each so experience buried lower in the document
-    still influences the cosine score.
+    Splits the resume into up to max_chunks word-chunks and appends the
+    skill list to each, so experience buried lower in the document (not
+    just the header) still influences the cosine score.
     """
     skills_str = " ".join(resume_skills)
     words      = resume_text.split()
@@ -367,9 +365,15 @@ def generate_fit_reason(
     Primary path  : meta-llama/Llama-3.1-8B-Instruct via HF Inference router.
     Fallback path : rule-based _fit_reason_fallback (no external call).
 
-    Falls back automatically if HF_TOKEN is missing or the API errors.
+    Falls back automatically if HF_TOKEN is missing or the API errors. Only
+    ever attempts the LLM call once per process: if it fails, a circuit
+    breaker trips so every subsequent call (this job, and every later job in
+    the same batch) skips the LLM and goes straight to the fallback instead
+    of re-trying (and re-timing-out) on each one. See reset_llm_fit_reason_breaker().
     """
-    if HF_TOKEN:
+    global _LLM_FIT_REASON_DISABLED
+
+    if HF_TOKEN and not _LLM_FIT_REASON_DISABLED:
         try:
             return _call_llama_fit_reason(
                 title           = title,
@@ -381,7 +385,11 @@ def generate_fit_reason(
                 industry        = industry,
             )
         except Exception as exc:
-            log.warning(f"[FitReason] LLM call failed ({exc}); using rule-based fallback.")
+            _LLM_FIT_REASON_DISABLED = True
+            log.warning(
+                f"[FitReason] LLM call failed ({exc}); switching to rule-based "
+                f"fallback for the rest of this run."
+            )
 
     return _fit_reason_fallback(
         title          = title,
@@ -512,7 +520,7 @@ def calculate_cosine_similarity(
             match_ratio = 1.0
             gap_ratio   = 0.0
 
-        # New hybrid score (v3): weighted average of rescaled cosine and skill
+        # Hybrid score: weighted average of rescaled cosine and skill
         # match_ratio, minus gap penalty — returned already on a 0-100 scale.
         hybrid = _compute_hybrid_score(
             cosine_sim  = float(cosine_score),
@@ -553,11 +561,11 @@ def calculate_cosine_similarity(
                 match_ratio     = match_ratio,
                 industry        = industry,
             ),
-            "nlp_validation":  fuzzy_skill_verify(
+            "nlp_validation":  semantic_verify(
                 discovered_list   = resume_skills,
                 ground_truth_list = req,
             ),
-            "nlp_validation_certs": fuzzy_skill_verify(
+            "nlp_validation_certs": semantic_verify(
                 discovered_list   = resume_certs,
                 ground_truth_list = req_certs,
             ),

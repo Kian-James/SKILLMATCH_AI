@@ -403,13 +403,9 @@ def _item_metrics(predicted: list[str], expected: list[str]) -> dict:
     )
 
 
-def _ocr_text_similarity(predicted: str, expected: str) -> float:
-    """Character-level sequence similarity (0-1) -- used when expected_text is set."""
-    from rapidfuzz import fuzz
-    return round(fuzz.ratio(predicted, expected) / 100.0, 4)
-
-
 def _alnum_ratio(text: str) -> float:
+    # Kept only because extract_text() returns a quality float — not used
+    # for evaluation since CER/WER replaced it as the OCR accuracy metric.
     if not text:
         return 0.0
     return round(sum(c.isalnum() for c in text) / len(text) * 100, 2)
@@ -449,6 +445,130 @@ def _title_in_topk(
 
     found = best_rank is not None
     return found, best_rank, round(best_score, 4)
+
+
+# ----------------------------------------------------------------------------
+# Information-Retrieval metrics for FAISS evaluation
+# ----------------------------------------------------------------------------
+# Standard metrics used in the IR / recommender-systems literature
+# (Manning, Raghavan & Schütze, 2008 -- "Introduction to Information
+# Retrieval"; Järvelin & Kekäläinen, 2002 -- NDCG):
+#
+#   Hit@1 -- Whether the relevant item was retrieved at exactly rank 1.
+#             Binary (0 or 1) per query. Mean Hit@1 across queries =
+#             fraction of resumes where the system ranked the correct job
+#             first. The most direct measure of this system's goal.
+#             Equivalent to P@1.
+#
+#   MRR   -- Mean Reciprocal Rank: average of 1/rank over all queries where
+#             the relevant item was found. Measures how highly the ONE correct
+#             answer is ranked. Standard for single-answer retrieval tasks.
+#             MRR ∈ (0, 1]; higher is better.
+#
+#   NDCG@K -- Normalised Discounted Cumulative Gain at K: rewards finding
+#             the relevant item earlier in the ranked list, discounting gains
+#             logarithmically with rank. NDCG@K ∈ [0, 1]; 1 = perfect.
+#             Appropriate because rank 1 is far more useful than rank 5.
+#
+# All three are computed PER SAMPLE here (where the "query" = one resume and
+# the "relevant document" = its expected_job_title), and then macro-averaged
+# across samples in the aggregate summary, exactly as done in IR benchmarks.
+
+def _reciprocal_rank(rank: Optional[int]) -> float:
+    """1 / rank if found, else 0. Contribution to MRR from one query."""
+    return round(1.0 / rank, 4) if rank else 0.0
+
+
+def _hit_at_1(rank: Optional[int]) -> int:
+    """Hit@1: 1 if the correct job is at rank 1, else 0.
+    The most direct measure of this system's goal — rank the right job first."""
+    return 1 if rank == 1 else 0
+
+
+def _ndcg_at_k(rank: Optional[int], top_k: int) -> float:
+    """
+    NDCG@K for a single relevant item with binary relevance.
+    DCG@K  = 1 / log2(rank + 1)  if rank <= K, else 0
+    IDCG@K = 1 / log2(1  + 1)   = 1  (ideal: item at rank 1)
+    NDCG@K = DCG@K / IDCG@K     = DCG@K  (since IDCG = 1)
+    """
+    import math
+    if rank is None or rank > top_k:
+        return 0.0
+    return round(1.0 / math.log2(rank + 1), 4)
+
+
+# ----------------------------------------------------------------------------
+# NLP classification-report helper
+# ----------------------------------------------------------------------------
+# Mirrors sklearn's classification_report layout (precision / recall / F1 /
+# support per class, plus macro and weighted averages) but computed from the
+# TP/FP/FN counts already in the result dicts, so sklearn is not a dependency.
+
+def _nlp_classification_report(
+        skill_metrics: dict,
+        cert_metrics: dict,
+        show_certs: bool,
+) -> str:
+    """
+    Return a classification-report-style string for skill and (optionally)
+    cert extraction.  "Support" = number of expected items (TP + FN).
+
+    Example output:
+                     precision    recall   f1-score   support
+        skills           0.833     0.714      0.769         7
+        certs            1.000     0.667      0.800         3
+       ---------------------------------------------------------
+        macro avg        0.917     0.690      0.784        10
+        weighted avg     0.875     0.700      0.780        10
+    """
+    rows = []
+    total_p = total_r = total_f1 = total_support = 0
+    total_wp = total_wr = total_wf1 = 0
+
+    def _row(label, p, r, f1, support):
+        return (label, p, r, f1, support)
+
+    for label, m in (("skills", skill_metrics),
+                     ("certs",  cert_metrics if show_certs else None)):
+        if m is None or m.get("precision") is None:
+            continue
+        p  = m["precision"]
+        r  = m["recall"]
+        f1 = m["f1"]
+        sup = m["tp"] + m["fn"]
+        rows.append(_row(label, p, r, f1, sup))
+        total_p       += p
+        total_r       += r
+        total_f1      += f1
+        total_support += sup
+        total_wp      += p  * sup
+        total_wr      += r  * sup
+        total_wf1     += f1 * sup
+
+    if not rows:
+        return ""
+
+    n = len(rows)
+    header = f"  {'':>16} {'precision':>10} {'recall':>8} {'f1-score':>10} {'support':>9}"
+    sep    = "  " + "-" * 58
+    lines  = [header, sep]
+    for label, p, r, f1, sup in rows:
+        lines.append(
+            f"  {label:>16} {p:>10.4f} {r:>8.4f} {f1:>10.4f} {sup:>9}"
+        )
+    lines.append(sep)
+    if n > 1:
+        lines.append(
+            f"  {'macro avg':>16} {total_p/n:>10.4f} {total_r/n:>8.4f} {total_f1/n:>10.4f} {total_support:>9}"
+        )
+        if total_support > 0:
+            lines.append(
+                f"  {'weighted avg':>16} {total_wp/total_support:>10.4f} "
+                f"{total_wr/total_support:>8.4f} {total_wf1/total_support:>10.4f} {total_support:>9}"
+            )
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------------
@@ -505,13 +625,9 @@ def _print_methodology(mode: str) -> None:
     if mode in ("ocr", "pipeline"):
         _section("OCR")
         print(textwrap.dedent("""\
-          OCR quality (alnum%)     % of extracted characters that are letters or
-                                    digits. A noise heuristic, not an accuracy
-                                    score -- needs no ground truth.
-
-          Text similarity (legacy) Single rapidfuzz character-ratio score (0-100%)
-                                    against expected_text. Coarse; kept only for
-                                    backward compatibility with older reports.
+          OCR accuracy is measured using CER and WER against expected_text
+          ground truth labels. Without expected_text, only character count
+          and timing are reported.
 
           CER / WER (raw)          Character / Word Error Rate: edit distance from
                                     extracted text to expected_text, divided by
@@ -533,56 +649,115 @@ def _print_methodology(mode: str) -> None:
                                     the dominant error source. Small gap -> genuine
                                     character-level misreads.
 
-          All of the above comparison metrics only run when the label has
-          expected_text -- otherwise OCR only reports quality/char-count/time.
         """))
 
     if mode in ("nlp", "pipeline"):
-        _section("NLP (skill + cert extraction)")
+        _section("NLP (Skill + Certification Extraction)")
         print(textwrap.dedent("""\
-          Discovered skills/certs are compared against expected_skills /
-          expected_certs -- NOT against any job's requirements. This measures
-          extraction quality against a human-annotated answer key, separately
-          from how well a resume matches a job (that's the FAISS stage).
+          Evaluated as a named-entity / information-extraction task against a
+          human-annotated answer key (expected_skills / expected_certs in
+          labels.json).  Matching uses the SAME SBERT semantic matcher (cosine
+          similarity ≥ 0.80) that the live pipeline uses -- imported directly
+          from core/scoring.py so this evaluator cannot silently drift out of
+          sync with production.
 
-          Matching is semantic: SBERT cosine similarity, threshold 0.80 -- the
-          SAME matcher function core/scoring.py uses for live scoring, imported
-          directly here so this evaluator can't silently drift out of sync with
-          what production actually does.
+          DEFINITIONS
+          -----------
+          Support       Number of expected items for this sample (TP + FN).
+                        Reported per-sample and summed over all samples, so you
+                        can report "evaluated against N skill annotations".
 
-            matched   expected items discovery found        (true positives)
-            missed    expected items discovery failed to find (false negatives)
-            extra     discovered items with no semantic match
-                      among expected items                  (false positives)
+          TP (True Positive)  An expected item that was found in the predicted
+                        set by the semantic matcher. The system correctly
+                        identified this skill or cert.
 
-          Precision = TP/(TP+FP), Recall = TP/(TP+FN), F1 = harmonic mean of both.
-          Skills and certs are scored independently; either side reports N/A if
-          its expected_* label list is missing for that file.
+          FP (False Positive) A predicted item with no semantic match among the
+                        expected items. The system extracted something that
+                        wasn't in the ground truth -- either a hallucination
+                        or a genuine extraction the annotator missed.
+
+          FN (False Negative) An expected item NOT found in the predicted set.
+                        The system missed this skill or cert.
+
+          Precision     TP / (TP + FP)
+                        Of everything the system extracted, what fraction was
+                        actually expected?  Measures how much you can trust
+                        the output without a human checking it.
+
+          Recall        TP / (TP + FN)
+                        Of everything that was expected, what fraction did the
+                        system find?  Measures completeness.
+
+          F1-score      2 · Precision · Recall / (Precision + Recall)
+                        Harmonic mean: the single number most commonly reported
+                        in NLP extraction papers (Tjong Kim Sang & De Meulder,
+                        2003 -- CoNLL shared task convention).
+
+          Macro-avg     Simple mean across all samples.  Gives equal weight to
+                        every resume, regardless of how many skills it has.
+                        Use this when every resume matters equally.
+
+          Weighted-avg  Mean weighted by each sample's support (number of
+                        expected items).  Gives more weight to resumes with
+                        more annotations -- more stable when sample sizes vary.
+
+          Skills and certs are scored independently; either side reports N/A
+          if the expected_* label list is absent for that file.
         """))
 
     if mode in ("faiss", "pipeline"):
-        _section("FAISS (job matching)")
-        print(textwrap.dedent("""\
-          Runs the real calculate_cosine_similarity() from core/scoring.py --
-          the same function production uses -- with whichever skills/certs came
-          out of the NLP stage (or from the label directly, in --mode faiss
-          standalone runs).
+        _section("FAISS (Job Retrieval + Ranking)")
+        print(textwrap.dedent(f"""\
+          The FAISS stage is evaluated as an Information Retrieval (IR) task:
+          given a resume, does the system return the correct job at the TOP of
+          its ranked list?  This follows standard IR evaluation methodology
+          (Manning, Raghavan & Schütze, 2008 -- "Introduction to Information
+          Retrieval").
 
-          Two separate things get checked:
+          Each resume is one QUERY.  The correct answer is the
+          expected_job_title from labels.json.  The system returns a ranked
+          list of top-{top_k} jobs.
 
-            1. Title resolution -- is expected_job_title found in the top-k
-               results? Matched via rapidfuzz token_sort_ratio (>=70) on the
-               title STRING. This is identity resolution (which job is this),
-               not skill/cert content matching, so it intentionally stays
-               string-fuzzy rather than semantic -- same approach main.py uses
-               to resolve a target job title.
+          IR RETRIEVAL METRICS
+          --------------------
+          Hit@1
+                        1 if the expected job title was returned at rank 1,
+                        else 0.  Mean Hit@1 across all resumes = the fraction
+                        where the system ranked the correct job first.  The
+                        most direct measure of this system's goal.
 
-            2. Best-match quality -- the top-ranked job's hybrid score, raw
-               cosine similarity, and skill/cert match ratios, read directly off
-               that job's matched_skills/matched_certs -- the same semantic
-               partition production computes, not recomputed here.
+          MRR  (Mean Reciprocal Rank)
+                        MRR = (1/N) · Σ (1 / rank_i)
+                        For each query, the reciprocal rank is 1/rank if the
+                        expected title was found, else 0.  MRR is the mean
+                        across all queries.  A system that always puts the
+                        right answer at rank 1 scores MRR = 1.0; one that
+                        puts it at rank 2 on average scores MRR ≈ 0.5.
+                        Standard single-answer retrieval metric.
 
-          score_pass = best hybrid score >= the label's min_match_score.
+          NDCG@K  (Normalised Discounted Cumulative Gain at K)
+                        DCG@K  = 1 / log₂(rank + 1)  (binary relevance)
+                        IDCG@K = 1                    (ideal: rank 1)
+                        NDCG@K = DCG@K / IDCG@K
+                        Rewards finding the answer earlier in the list more
+                        than later. Rank 1 → NDCG = 1.0; rank 2 → 0.63;
+                        rank 3 → 0.5; not found → 0.  Järvelin & Kekäläinen
+                        (2002), widely used in recommender-system evaluation.
+
+          SCORING METRICS (separate from retrieval)
+          ------------------------------------------
+          Hybrid score  Composite score (0–100) combining cosine similarity,
+                        skill match ratio, and cert match ratio, as computed
+                        by core/scoring.py's calculate_cosine_similarity().
+                        score_pass = hybrid score ≥ min_match_score from label.
+
+          Cosine sim.   Raw SBERT embedding cosine similarity between the
+                        resume vector and the best-matching job vector.
+                        ∈ [0, 1]; 1 = identical embedding direction.
+
+          Skill / cert  Fraction of the job's required skills (or certs) that
+          match ratio   were semantically matched by the resume's extracted
+                        items, as computed by the live pipeline.
         """))
 
     print()
@@ -610,18 +785,9 @@ def run_ocr_stage(file_path: str, label: dict) -> dict:
 
     expected_text = label.get("expected_text")
     if expected_text:
-        # Legacy single-number similarity (kept for backward compatibility
-        # with any code/reports that still read "text_similarity").
-        result["text_similarity"] = _ocr_text_similarity(text, expected_text)
-
-        # Academic-standard CER/WER benchmark, with order-tolerant
-        # alignment so OCR extracting sections in a different order than
-        # the reference (e.g. "Skills" before "Work Experience") isn't
-        # mistaken for a character-recognition error.
         bench = benchmark_ocr(text, expected_text)
         result["benchmark"] = bench.as_dict()
     else:
-        result["text_similarity"] = None
         result["benchmark"] = None
 
     return result
@@ -710,6 +876,11 @@ def run_faiss_stage(
                      if req_certs else None)
     cert_accuracy = best.get("nlp_validation_certs", {}).get("NLP_ACCURACY", "N/A")
 
+    # Standard IR metrics (per-query values; averaged across queries in aggregate)
+    rr    = _reciprocal_rank(rank)
+    h1    = _hit_at_1(rank)
+    ndcg  = _ndcg_at_k(rank, top_k)
+
     return dict(
         top_matches=top_matches,
         best_title=best.get("title", ""),
@@ -723,6 +894,10 @@ def run_faiss_stage(
         title_similarity=title_similarity,
         score_pass=best.get("score", 0.0) >= min_score,
         min_score=min_score,
+        # IR metrics
+        reciprocal_rank=rr,
+        hit_at_1=h1,
+        ndcg_at_k=ndcg,
         elapsed_s=round(elapsed, 2),
         error=None,
     )
@@ -734,7 +909,9 @@ _FAISS_ERROR_FALLBACK = dict(
     best_match_ratio=0.0, best_cert_match_ratio=None, best_cert_accuracy="N/A",
     expected_title_found=False,
     expected_title_rank=None, title_similarity=0.0,
-    score_pass=False, min_score=0, elapsed_s=0,
+    score_pass=False, min_score=0,
+    reciprocal_rank=0.0, hit_at_1=0, ndcg_at_k=0.0,
+    elapsed_s=0,
 )
 
 
@@ -824,15 +1001,8 @@ def _display_ocr_alignment_process(name: str, hyp_text: str, ref_text: str) -> N
 
 def _display_ocr_result(name: str, ocr: dict, label: dict, show_process: bool = False) -> None:
     _section(f"OCR  >  {name}")
-    colour = "GREEN" if ocr["quality"] >= 70 else ("YELLOW" if ocr["quality"] >= 40 else "RED")
     _kv("Characters extracted", ocr["char_count"])
-    _kv("OCR quality (alnum%)",  f"{ocr['quality']:.1f}%", colour)
     _kv("Time",                  f"{ocr['elapsed_s']}s")
-
-    if ocr["text_similarity"] is not None:
-        sim   = ocr["text_similarity"]
-        scol  = "GREEN" if sim >= 0.85 else ("YELLOW" if sim >= 0.65 else "RED")
-        _kv("Text similarity (legacy, vs ground truth)", _pct(sim), scol)
 
     bench = ocr.get("benchmark")
     if bench is not None:
@@ -878,18 +1048,27 @@ def _display_ocr_result(name: str, ocr: dict, label: dict, show_process: bool = 
 def _display_nlp_result(name: str, nlp: dict, label: dict) -> None:
     _section(f"NLP  >  {name}")
     expected       = label.get("expected_skills", [])
-    expected_certs = label.get("expected_certs", [])
+    expected_certs = label.get("expected_certs",  [])
     cm             = nlp.get("cert_metrics", {})
+    has_certs      = bool(expected_certs)
 
-    print(f"  {_c('BOLD','-- Skills --')}")
-    _kv("Expected skills",  f"{len(expected)}")
-    _kv("Predicted skills", f"{len(nlp['skills'])}")
-    _kv("True positives",   nlp["tp"],  "GREEN")
-    _kv("False positives",  nlp["fp"],  "YELLOW" if nlp["fp"] else "GREEN")
-    _kv("False negatives",  nlp["fn"],  "RED"    if nlp["fn"] else "GREEN")
-    _kv("Precision",        _pct(nlp["precision"]))
-    _kv("Recall",           _pct(nlp["recall"]))
-    _kv("F1",               _pct(nlp["f1"]))
+    # ── Classification report (sklearn-style) ────────────────────────────
+    report_str = _nlp_classification_report(nlp, cm, show_certs=has_certs)
+    if report_str:
+        print(f"\n  {_c('BOLD', 'Classification Report')}")
+        print(report_str)
+
+    # ── Skills detail ─────────────────────────────────────────────────────
+    print(f"  {_c('BOLD','-- Skill Extraction --')}")
+    skill_support = nlp["tp"] + nlp["fn"]
+    _kv("Support (expected skills)",  skill_support)
+    _kv("Predicted skills (total)",   len(nlp["skills"]))
+    _kv("True  Positives (TP)",       nlp["tp"],  "GREEN")
+    _kv("False Positives (FP)",       nlp["fp"],  "YELLOW" if nlp["fp"] else "GREEN")
+    _kv("False Negatives (FN)",       nlp["fn"],  "RED"    if nlp["fn"] else "GREEN")
+    _kv("Precision  TP/(TP+FP)",      _pct(nlp["precision"]))
+    _kv("Recall     TP/(TP+FN)",      _pct(nlp["recall"]))
+    _kv("F1         2·P·R/(P+R)",     _pct(nlp["f1"]))
 
     if nlp["matched"]:
         print(f"  {_c('GREEN','  Matched:')}  {_list_preview(nlp['matched'], 'GREEN')}")
@@ -898,16 +1077,18 @@ def _display_nlp_result(name: str, nlp: dict, label: dict) -> None:
     if nlp["extra"]:
         print(f"  {_c('YELLOW','  Extra:')}    {_list_preview(nlp['extra'],  'YELLOW')}")
 
-    print(f"\n  {_c('BOLD','-- Certifications --')}")
-    if expected_certs:
-        _kv("Expected certs",  f"{len(expected_certs)}")
-        _kv("Predicted certs", f"{len(nlp.get('certs', []))}")
-        _kv("True positives",  cm.get("tp", 0), "GREEN")
-        _kv("False positives", cm.get("fp", 0), "YELLOW" if cm.get("fp") else "GREEN")
-        _kv("False negatives", cm.get("fn", 0), "RED"    if cm.get("fn") else "GREEN")
-        _kv("Precision",       _pct(cm.get("precision")))
-        _kv("Recall",          _pct(cm.get("recall")))
-        _kv("F1",              _pct(cm.get("f1")))
+    # ── Certs detail ──────────────────────────────────────────────────────
+    print(f"\n  {_c('BOLD','-- Certification Extraction --')}")
+    if has_certs:
+        cert_support = cm.get("tp", 0) + cm.get("fn", 0)
+        _kv("Support (expected certs)",   cert_support)
+        _kv("Predicted certs (total)",    len(nlp.get("certs", [])))
+        _kv("True  Positives (TP)",       cm.get("tp", 0), "GREEN")
+        _kv("False Positives (FP)",       cm.get("fp", 0), "YELLOW" if cm.get("fp") else "GREEN")
+        _kv("False Negatives (FN)",       cm.get("fn", 0), "RED"    if cm.get("fn") else "GREEN")
+        _kv("Precision  TP/(TP+FP)",      _pct(cm.get("precision")))
+        _kv("Recall     TP/(TP+FN)",      _pct(cm.get("recall")))
+        _kv("F1         2·P·R/(P+R)",     _pct(cm.get("f1")))
         if cm.get("matched"):
             print(f"  {_c('GREEN','  Matched:')}  {_list_preview(cm['matched'], 'GREEN')}")
         if cm.get("missed"):
@@ -915,8 +1096,8 @@ def _display_nlp_result(name: str, nlp: dict, label: dict) -> None:
         if cm.get("extra"):
             print(f"  {_c('YELLOW','  Extra:')}    {_list_preview(cm['extra'],  'YELLOW')}")
     else:
-        _kv("Expected certs", _c("DIM", "N/A (no expected_certs label)"))
-        _kv("Predicted certs", f"{len(nlp.get('certs', []))}")
+        _kv("Expected certs", _c("DIM", "N/A — no expected_certs label for this sample"))
+        _kv("Predicted certs", len(nlp.get("certs", [])))
 
     _kv("Time", f"{nlp['elapsed_s']}s")
     print()
@@ -925,32 +1106,47 @@ def _display_nlp_result(name: str, nlp: dict, label: dict) -> None:
 def _display_faiss_result(name: str, faiss_r: dict, label: dict, top_k: int) -> None:
     _section(f"FAISS  >  {name}")
     expected_title = label.get("expected_job_title", "N/A")
-    score_pct = faiss_r["best_score"]
+    score_pct      = faiss_r["best_score"]
 
-    _kv("Expected job title",   expected_title)
-    _kv("Best matched title",   faiss_r["best_title"],
+    # ── Retrieval result (did we find the right job?) ─────────────────────
+    print(f"  {_c('BOLD', '-- Retrieval Result --')}")
+    _kv("Expected job title",    expected_title)
+    _kv("Best matched title",    faiss_r["best_title"],
         "GREEN" if faiss_r["expected_title_found"] else "YELLOW")
-    _kv("Hybrid score",         f"{score_pct:.1f} / 100",
-        "GREEN" if faiss_r["score_pass"] else "RED")
-    _kv("Cosine score (raw)",   f"{faiss_r['best_cosine']:.4f}")
-    _kv("Skill match ratio",    _pct(faiss_r["best_match_ratio"]))
-    _kv("Cert match ratio",     _pct(faiss_r.get("best_cert_match_ratio")))
-    _kv("Cert NLP accuracy",    faiss_r.get("best_cert_accuracy", "N/A"))
-    _kv("Min score threshold",  f"{faiss_r['min_score']}")
-    _kv("Score pass",           _pass_fail(faiss_r["score_pass"]))
-
     rank_str = (f"Rank {faiss_r['expected_title_rank']}"
-                if faiss_r["expected_title_rank"] else f"Not in top-{top_k}")
-    rank_col = ("GREEN" if (faiss_r["expected_title_rank"] or 99) <= 3
-                else ("YELLOW" if faiss_r["expected_title_found"] else "RED"))
-    _kv(f"Expected title in top-{top_k}", rank_str, rank_col)
-    _kv("Title similarity",     _pct(faiss_r["title_similarity"]))
-    _kv("Time",                 f"{faiss_r['elapsed_s']}s")
+                if faiss_r["expected_title_rank"] else f"Not found in top-{top_k}")
+    rank_col = ("GREEN"  if (faiss_r["expected_title_rank"] or 99) <= 1
+                else "YELLOW" if faiss_r["expected_title_found"] else "RED")
+    _kv(f"Rank of expected title (top-{top_k})", rank_str, rank_col)
 
-    # show the top-3 ranked jobs inline
-    print(f"\n  {_c('DIM', 'Top matches:')}")
-    for i, job in enumerate(faiss_r["top_matches"][:min(3, top_k)], 1):
-        marker = _c("GREEN", "*") if i == faiss_r["expected_title_rank"] else " "
+    # ── IR metrics (standard retrieval evaluation) ────────────────────────
+    print(f"\n  {_c('BOLD', '-- IR Metrics (standard retrieval evaluation) --')}")
+    rr   = faiss_r.get("reciprocal_rank", 0.0)
+    h1   = faiss_r.get("hit_at_1",        0)
+    ndcg = faiss_r.get("ndcg_at_k",       0.0)
+    _kv(f"Hit@1          (rank == 1?)",         _c("GREEN", "YES") if h1 else _c("RED", "NO"))
+    _kv(f"Reciprocal Rank  (1/rank)",           f"{rr:.4f}",
+        "GREEN" if rr >= 0.5 else ("YELLOW" if rr > 0 else "RED"))
+    _kv(f"NDCG@{top_k}       (rank-discounted)",f"{ndcg:.4f}",
+        "GREEN" if ndcg >= 0.5 else ("YELLOW" if ndcg > 0 else "RED"))
+
+    # ── Scoring detail (how well did the best match score?) ───────────────
+    print(f"\n  {_c('BOLD', '-- Scoring Detail (best matched job) --')}")
+    _kv("Hybrid score (0–100)",   f"{score_pct:.1f} / 100",
+        "GREEN" if faiss_r["score_pass"] else "RED")
+    _kv("  — Cosine similarity",  f"{faiss_r['best_cosine']:.4f}",
+        "GREEN" if faiss_r["best_cosine"] >= 0.72 else "YELLOW")
+    _kv("  — Skill match ratio",  _pct(faiss_r["best_match_ratio"]))
+    _kv("  — Cert match ratio",   _pct(faiss_r.get("best_cert_match_ratio")))
+    _kv("  — Cert NLP accuracy",  faiss_r.get("best_cert_accuracy", "N/A"))
+    _kv("Min score threshold",    f"{faiss_r['min_score']}")
+    _kv("Score pass",             _pass_fail(faiss_r["score_pass"]))
+    _kv("Time",                   f"{faiss_r['elapsed_s']}s")
+
+    # ── Top-K ranking list ────────────────────────────────────────────────
+    print(f"\n  {_c('DIM', f'Top-{top_k} ranked jobs:')}")
+    for i, job in enumerate(faiss_r["top_matches"][:top_k], 1):
+        marker = _c("GREEN", "►") if i == faiss_r["expected_title_rank"] else " "
         score  = job.get("score", 0.0)
         scol   = "GREEN" if score >= 75 else ("YELLOW" if score >= 50 else "RED")
         print(f"    {marker} {i}. {_c(scol, f'{score:5.1f}')}  {job.get('title','')}")
@@ -968,10 +1164,7 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
     if mode in ("ocr", "pipeline"):
         ocrs = [r["ocr"] for r in results if r.get("ocr") and not r["ocr"].get("error")]
         if ocrs:
-            avg_quality = sum(o["quality"] for o in ocrs) / len(ocrs)
-            avg_chars   = sum(o["char_count"] for o in ocrs) / len(ocrs)
-            sims        = [o["text_similarity"] for o in ocrs if o["text_similarity"] is not None]
-            avg_sim     = sum(sims) / len(sims) if sims else None
+            avg_chars = sum(o["char_count"] for o in ocrs) / len(ocrs)
 
             benches = [o["benchmark"] for o in ocrs if o.get("benchmark") is not None]
             if benches:
@@ -987,12 +1180,8 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
                 avg_ordering_gap = avg_bow_f1 = None
 
             _section("OCR Aggregates")
-            _kv("Samples evaluated",       len(ocrs))
-            _kv("Avg OCR quality (alnum%)", f"{avg_quality:.1f}%",
-                "GREEN" if avg_quality >= 70 else "YELLOW")
+            _kv("Samples evaluated",        len(ocrs))
             _kv("Avg characters extracted", f"{avg_chars:.0f}")
-            if avg_sim is not None:
-                _kv("Avg text similarity (legacy)",  _pct(avg_sim))
 
             if benches:
                 _kv("Samples with CER/WER benchmark", len(benches))
@@ -1017,24 +1206,40 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
             total_tp = sum(n["tp"] for n in nlps_with_expected)
             total_fp = sum(n["fp"] for n in nlps_with_expected)
             total_fn = sum(n["fn"] for n in nlps_with_expected)
+            total_support = total_tp + total_fn
 
-            _section("NLP (Skill Extraction) Aggregates")
-            _kv("Samples with expected skills", len(nlps_with_expected))
-            _kv("Avg Precision",  _pct(avg_p))
-            _kv("Avg Recall",     _pct(avg_r))
-            _kv("Avg F1",         _pct(avg_f1))
-            _kv("Total TP / FP / FN", f"{total_tp} / {total_fp} / {total_fn}")
+            # Weighted averages (weight by support = expected items per sample)
+            supports = [n["tp"] + n["fn"] for n in nlps_with_expected]
+            total_w  = sum(supports) or 1
+            wavg_p   = sum(n["precision"] * s for n, s in zip(nlps_with_expected, supports)) / total_w
+            wavg_r   = sum(n["recall"]    * s for n, s in zip(nlps_with_expected, supports)) / total_w
+            wavg_f1  = sum(n["f1"]        * s for n, s in zip(nlps_with_expected, supports)) / total_w
+
+            _section("NLP — Skill Extraction Aggregates")
+            _kv("Samples with expected_skills labels", len(nlps_with_expected))
+            _kv("Total support (expected skills)",     total_support)
+            _kv("Total TP / FP / FN",                 f"{total_tp} / {total_fp} / {total_fn}")
+            print()
+            _kv("Macro-avg Precision",  _pct(avg_p),   "GREEN" if avg_p  >= 0.75 else "YELLOW")
+            _kv("Macro-avg Recall",     _pct(avg_r),   "GREEN" if avg_r  >= 0.75 else "YELLOW")
+            _kv("Macro-avg F1",         _pct(avg_f1),  "GREEN" if avg_f1 >= 0.75 else "YELLOW")
+            print()
+            _kv("Weighted-avg Precision", _pct(wavg_p))
+            _kv("Weighted-avg Recall",    _pct(wavg_r))
+            _kv("Weighted-avg F1",        _pct(wavg_f1))
 
             # Per-sample mini table
             print()
-            hdr = f"  {'File':<35} {'P':>6} {'R':>6} {'F1':>6}  {'TP':>3} {'FP':>3} {'FN':>3}"
+            hdr = (f"  {'File':<35} {'P':>7} {'R':>7} {'F1':>7}  "
+                   f"{'TP':>3} {'FP':>3} {'FN':>3}  {'support':>7}")
             print(_c("BOLD", hdr))
-            print(_c("DIM", "  " + "-" * 70))
+            print(_c("DIM", "  " + "-" * 78))
             for r in results:
                 n = r.get("nlp", {})
                 if n.get("precision") is None:
                     continue
                 name = Path(r["file"]).name[:34]
+                sup  = n["tp"] + n["fn"]
                 p_col = "GREEN" if n["precision"] >= 0.75 else ("YELLOW" if n["precision"] >= 0.50 else "RED")
                 r_col = "GREEN" if n["recall"]    >= 0.75 else ("YELLOW" if n["recall"]    >= 0.50 else "RED")
                 f_col = "GREEN" if n["f1"]        >= 0.75 else ("YELLOW" if n["f1"]        >= 0.50 else "RED")
@@ -1047,6 +1252,7 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
                     f" {_c(r_col, r_str)}"
                     f" {_c(f_col, f_str)}"
                     f"  {n['tp']:>3} {n['fp']:>3} {n['fn']:>3}"
+                    f"  {sup:>7}"
                 )
 
         cert_metrics_list = [r["nlp"]["cert_metrics"] for r in results
@@ -1059,13 +1265,26 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
             total_ctp = sum(c["tp"] for c in cert_metrics_list)
             total_cfp = sum(c["fp"] for c in cert_metrics_list)
             total_cfn = sum(c["fn"] for c in cert_metrics_list)
+            total_cert_support = total_ctp + total_cfn
 
-            _section("NLP (Certification Extraction) Aggregates")
-            _kv("Samples with expected certs", len(cert_metrics_list))
-            _kv("Avg Precision",  _pct(avg_cp))
-            _kv("Avg Recall",     _pct(avg_cr))
-            _kv("Avg F1",         _pct(avg_cf1))
-            _kv("Total TP / FP / FN", f"{total_ctp} / {total_cfp} / {total_cfn}")
+            csupports = [c["tp"] + c["fn"] for c in cert_metrics_list]
+            ctotal_w  = sum(csupports) or 1
+            cwavg_p   = sum(c["precision"] * s for c, s in zip(cert_metrics_list, csupports)) / ctotal_w
+            cwavg_r   = sum(c["recall"]    * s for c, s in zip(cert_metrics_list, csupports)) / ctotal_w
+            cwavg_f1  = sum(c["f1"]        * s for c, s in zip(cert_metrics_list, csupports)) / ctotal_w
+
+            _section("NLP — Certification Extraction Aggregates")
+            _kv("Samples with expected_certs labels",  len(cert_metrics_list))
+            _kv("Total support (expected certs)",      total_cert_support)
+            _kv("Total TP / FP / FN",                 f"{total_ctp} / {total_cfp} / {total_cfn}")
+            print()
+            _kv("Macro-avg Precision",   _pct(avg_cp))
+            _kv("Macro-avg Recall",      _pct(avg_cr))
+            _kv("Macro-avg F1",          _pct(avg_cf1))
+            print()
+            _kv("Weighted-avg Precision", _pct(cwavg_p))
+            _kv("Weighted-avg Recall",    _pct(cwavg_r))
+            _kv("Weighted-avg F1",        _pct(cwavg_f1))
 
     # -- FAISS aggregates (skills + certs) -----------------------------------
     if mode in ("faiss", "pipeline"):
@@ -1079,23 +1298,49 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
             rank_1      = sum(1 for f in faiss_rs if f.get("expected_title_rank") == 1)
             rank_top3   = sum(1 for f in faiss_rs if (f.get("expected_title_rank") or 99) <= 3)
 
+            # Standard IR aggregate metrics
+            mrr       = sum(f.get("reciprocal_rank", 0.0) for f in faiss_rs) / len(faiss_rs)
+            mean_h1   = sum(f.get("hit_at_1",        0)   for f in faiss_rs) / len(faiss_rs)
+            mean_ndcg = sum(f.get("ndcg_at_k",       0.0) for f in faiss_rs) / len(faiss_rs)
+
             cert_ratios = [f["best_cert_match_ratio"] for f in faiss_rs
                            if f.get("best_cert_match_ratio") is not None]
             avg_cert_ratio = sum(cert_ratios) / len(cert_ratios) if cert_ratios else None
 
-            _section(f"FAISS (Top-{top_k} Job Matching) Aggregates")
+            _section(f"FAISS — Job Retrieval Aggregates (Top-{top_k})")
             _kv("Samples evaluated",                  len(faiss_rs))
+            print()
+
+            # IR metrics block
+            print(f"  {_c('BOLD', '-- Standard IR Retrieval Metrics --')}")
+            _kv("MRR   (Mean Reciprocal Rank)",
+                f"{mrr:.4f}",
+                "GREEN" if mrr >= 0.7 else ("YELLOW" if mrr >= 0.4 else "RED"))
+            _kv(f"Mean Hit@1  (fraction ranked #1)",
+                f"{mean_h1:.4f}",
+                "GREEN" if mean_h1 >= 0.7 else ("YELLOW" if mean_h1 >= 0.4 else "RED"))
+            _kv(f"Mean NDCG@{top_k} (rank-discounted gain)",
+                f"{mean_ndcg:.4f}",
+                "GREEN" if mean_ndcg >= 0.7 else ("YELLOW" if mean_ndcg >= 0.4 else "RED"))
+            print()
+
+            # Retrieval counts block
+            print(f"  {_c('BOLD', '-- Retrieval Counts --')}")
             _kv(f"Expected title in top-{top_k}",
                 f"{n_found}/{len(faiss_rs)}  ({n_found/len(faiss_rs)*100:.0f}%)",
                 "GREEN" if n_found/len(faiss_rs) >= 0.8 else "YELLOW")
             _kv("Expected title ranked #1",           f"{rank_1}/{len(faiss_rs)}")
             _kv("Expected title ranked top-3",        f"{rank_top3}/{len(faiss_rs)}")
+            print()
+
+            # Scoring block
+            print(f"  {_c('BOLD', '-- Scoring --')}")
             _kv("Score >= min_match_score",
                 f"{n_pass}/{len(faiss_rs)}  ({n_pass/len(faiss_rs)*100:.0f}%)",
                 "GREEN" if n_pass/len(faiss_rs) >= 0.8 else ("YELLOW" if n_pass/len(faiss_rs) >= 0.5 else "RED"))
             _kv("Avg hybrid score",    f"{avg_score:.1f} / 100",
                 "GREEN" if avg_score >= 70 else ("YELLOW" if avg_score >= 50 else "RED"))
-            _kv("Avg cosine (raw)",    f"{avg_cosine:.4f}")
+            _kv("Avg cosine similarity",f"{avg_cosine:.4f}")
             if avg_cert_ratio is not None:
                 _kv("Avg cert match ratio (best job)", _pct(avg_cert_ratio))
             else:
@@ -1103,9 +1348,10 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
 
             # Per-sample mini table
             print()
-            hdr = f"  {'File':<35} {'Score':>7} {'Cos':>7} {'Rank':>6}  {'Title Found':<14} Result"
+            hdr = (f"  {'File':<35} {'Score':>7} {'Cos':>7} {'Rank':>5}  "
+                   f"{'RR':>6} {'H@1':>5} {'NDCG':>6}  Result")
             print(_c("BOLD", hdr))
-            print(_c("DIM", "  " + "-" * 80))
+            print(_c("DIM", "  " + "-" * 86))
             for r in results:
                 f = r.get("faiss", {})
                 if not f or f.get("error"):
@@ -1114,15 +1360,20 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
                 score  = f["best_score"]
                 scol   = "GREEN" if score >= 75 else ("YELLOW" if score >= 50 else "RED")
                 rank   = str(f["expected_title_rank"]) if f["expected_title_rank"] else f">{top_k}"
-                found  = _c("GREEN", "found") if f["expected_title_found"] else _c("RED", "missing")
                 result = _pass_fail(f["score_pass"])
+                rr_v   = f.get("reciprocal_rank", 0.0)
+                h1_v   = f.get("hit_at_1",        0)
+                nd_v   = f.get("ndcg_at_k",       0.0)
+                h1_str = _c("GREEN", "  1") if h1_v else _c("RED", "  0")
                 print(
                     f"  {name:<35}"
                     f" {_c(scol, f'{score:6.1f}')}"
                     f" {f['best_cosine']:7.4f}"
-                    f" {rank:>6}"
-                    f"  {found:<22}"
-                    f" {result}"
+                    f" {rank:>5}"
+                    f"  {rr_v:6.4f}"
+                    f" {h1_str}"
+                    f" {nd_v:6.4f}"
+                    f"  {result}"
                 )
 
     # -- collect aggregates for JSON export ----------------------------------
@@ -1130,9 +1381,7 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
     if mode in ("ocr", "pipeline") and "ocrs" in dir():
         agg["ocr"] = dict(
             samples=len(ocrs),
-            avg_quality=round(avg_quality, 2),
             avg_chars=round(avg_chars, 0),
-            avg_text_similarity=round(avg_sim, 4) if avg_sim is not None else None,
             benchmark_samples=len(benches) if benches else 0,
             avg_char_accuracy_raw=round(avg_char_acc_raw, 4) if avg_char_acc_raw is not None else None,
             avg_char_accuracy_aligned=round(avg_char_acc_aligned, 4) if avg_char_acc_aligned is not None else None,
@@ -1144,25 +1393,40 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
     if mode in ("nlp", "pipeline") and "nlps_with_expected" in dir() and nlps_with_expected:
         agg["nlp"] = dict(
             samples=len(nlps_with_expected),
-            avg_precision=round(avg_p, 4),
-            avg_recall=round(avg_r, 4),
-            avg_f1=round(avg_f1, 4),
+            total_support=total_support,
+            macro_avg_precision=round(avg_p, 4),
+            macro_avg_recall=round(avg_r, 4),
+            macro_avg_f1=round(avg_f1, 4),
+            weighted_avg_precision=round(wavg_p, 4),
+            weighted_avg_recall=round(wavg_r, 4),
+            weighted_avg_f1=round(wavg_f1, 4),
             total_tp=total_tp, total_fp=total_fp, total_fn=total_fn,
         )
     if mode in ("nlp", "pipeline") and "cert_metrics_list" in dir() and cert_metrics_list:
         agg["nlp_certs"] = dict(
             samples=len(cert_metrics_list),
-            avg_precision=round(avg_cp, 4),
-            avg_recall=round(avg_cr, 4),
-            avg_f1=round(avg_cf1, 4),
+            total_support=total_cert_support,
+            macro_avg_precision=round(avg_cp, 4),
+            macro_avg_recall=round(avg_cr, 4),
+            macro_avg_f1=round(avg_cf1, 4),
+            weighted_avg_precision=round(cwavg_p, 4),
+            weighted_avg_recall=round(cwavg_r, 4),
+            weighted_avg_f1=round(cwavg_f1, 4),
             total_tp=total_ctp, total_fp=total_cfp, total_fn=total_cfn,
         )
     if mode in ("faiss", "pipeline") and "faiss_rs" in dir() and faiss_rs:
         agg["faiss"] = dict(
             samples=len(faiss_rs),
+            # IR metrics
+            mrr=round(mrr, 4),
+            mean_hit_at_1=round(mean_h1, 4),
+            mean_ndcg_at_k=round(mean_ndcg, 4),
+            top_k=top_k,
+            # Retrieval counts
             title_found_rate=round(n_found / len(faiss_rs), 4),
             rank_1_rate=round(rank_1 / len(faiss_rs), 4),
             rank_top3_rate=round(rank_top3 / len(faiss_rs), 4),
+            # Scoring
             score_pass_rate=round(n_pass / len(faiss_rs), 4),
             avg_hybrid_score=round(avg_score, 2),
             avg_cosine=round(avg_cosine, 4),
@@ -1285,6 +1549,9 @@ def evaluate(
     print(f"  Top-K   : {top_k}")
     print()
 
+    if explain:
+        _print_methodology(mode)
+
     # Load corpus once (if NLP or FAISS stages are needed)
     corpus_needed = mode in ("nlp", "faiss", "pipeline")
     if corpus_needed:
@@ -1311,12 +1578,12 @@ def evaluate(
                 result["ocr"] = ocr_result
                 elapsed_total += ocr_result["elapsed_s"]
                 if verbose:
-                    _display_ocr_result(name, ocr_result, label)
+                    _display_ocr_result(name, ocr_result, label, show_process=explain)
             except Exception as exc:
                 log.exception(f"[OCR] Error on {name}")
                 result["ocr"] = {"error": str(exc), "text": "", "quality": 0.0,
                                  "char_count": 0, "elapsed_s": 0, "is_native": False,
-                                 "text_similarity": None, "benchmark": None}
+                                 "benchmark": None}
 
         # -- Stage 2 : NLP (skills + certs) -----------------------------------
         if mode in ("nlp", "pipeline"):
@@ -1482,15 +1749,7 @@ def summarize_report(report_path: str) -> None:
         o = agg["ocr"]
         _section("OCR Summary")
         _kv("Samples with OCR",         o.get("samples", 0))
-        _kv("Avg OCR quality (alnum%)", f"{o.get('avg_quality', 0):.1f}%",
-            "GREEN" if o.get("avg_quality", 0) >= 70 else "YELLOW")
         _kv("Avg characters extracted", f"{o.get('avg_chars', 0):.0f}")
-        sim = o.get("avg_text_similarity")
-        if sim is not None:
-            _kv("Avg text similarity (legacy)",  _pct(sim))
-        else:
-            _kv("Avg text similarity (legacy)",  _c("DIM", "N/A (no expected_text labels)"))
-
         if o.get("benchmark_samples"):
             _kv("Samples with CER/WER benchmark", o.get("benchmark_samples", 0))
             _kv("Avg Character Accuracy (raw)",     _pct(o.get("avg_char_accuracy_raw")))
@@ -1506,46 +1765,67 @@ def summarize_report(report_path: str) -> None:
     # -- NLP (skills) -----------------------------------------------------------
     if "nlp" in agg:
         n = agg["nlp"]
-        total_expected = n.get("total_tp", 0) + n.get("total_fn", 0)
-        _section("NLP (Skill Extraction) Summary")
-        _kv("Samples with expected skills", n.get("samples", 0))
-        _kv("Expected skills",              total_expected)
-        _kv("Avg Precision",                _pct(n.get("avg_precision")))
-        _kv("Avg Recall",                   _pct(n.get("avg_recall")))
-        _kv("Avg F1",                       _pct(n.get("avg_f1")))
+        _section("NLP — Skill Extraction Summary")
+        _kv("Samples with expected_skills labels", n.get("samples", 0))
+        _kv("Total support (expected skills)",     n.get("total_support", n.get("total_tp", 0) + n.get("total_fn", 0)))
         _kv("Total TP / FP / FN",
             f"{n.get('total_tp', 0)} / {n.get('total_fp', 0)} / {n.get('total_fn', 0)}")
+        _kv("Macro-avg Precision",   _pct(n.get("macro_avg_precision", n.get("avg_precision"))))
+        _kv("Macro-avg Recall",      _pct(n.get("macro_avg_recall",    n.get("avg_recall"))))
+        _kv("Macro-avg F1",          _pct(n.get("macro_avg_f1",        n.get("avg_f1"))))
+        if n.get("weighted_avg_f1") is not None:
+            _kv("Weighted-avg Precision", _pct(n.get("weighted_avg_precision")))
+            _kv("Weighted-avg Recall",    _pct(n.get("weighted_avg_recall")))
+            _kv("Weighted-avg F1",        _pct(n.get("weighted_avg_f1")))
 
     # -- NLP (certs) --------------------------------------------------------------
     if "nlp_certs" in agg:
         nc = agg["nlp_certs"]
-        total_expected_c = nc.get("total_tp", 0) + nc.get("total_fn", 0)
-        _section("NLP (Certification Extraction) Summary")
-        _kv("Samples with expected certs", nc.get("samples", 0))
-        _kv("Expected certs",               total_expected_c)
-        _kv("Avg Precision",                _pct(nc.get("avg_precision")))
-        _kv("Avg Recall",                   _pct(nc.get("avg_recall")))
-        _kv("Avg F1",                       _pct(nc.get("avg_f1")))
+        _section("NLP — Certification Extraction Summary")
+        _kv("Samples with expected_certs labels",  nc.get("samples", 0))
+        _kv("Total support (expected certs)",      nc.get("total_support", nc.get("total_tp", 0) + nc.get("total_fn", 0)))
         _kv("Total TP / FP / FN",
             f"{nc.get('total_tp', 0)} / {nc.get('total_fp', 0)} / {nc.get('total_fn', 0)}")
+        _kv("Macro-avg Precision",   _pct(nc.get("macro_avg_precision", nc.get("avg_precision"))))
+        _kv("Macro-avg Recall",      _pct(nc.get("macro_avg_recall",    nc.get("avg_recall"))))
+        _kv("Macro-avg F1",          _pct(nc.get("macro_avg_f1",        nc.get("avg_f1"))))
+        if nc.get("weighted_avg_f1") is not None:
+            _kv("Weighted-avg Precision", _pct(nc.get("weighted_avg_precision")))
+            _kv("Weighted-avg Recall",    _pct(nc.get("weighted_avg_recall")))
+            _kv("Weighted-avg F1",        _pct(nc.get("weighted_avg_f1")))
 
     # -- FAISS --------------------------------------------------------------------
     if "faiss" in agg:
-        fa = agg["faiss"]
-        n_samples = fa.get("samples", 0)
-        _section(f"FAISS (Top-{top_k} Job Matching) Summary")
-        _kv("Samples evaluated",            n_samples)
+        fa    = agg["faiss"]
+        top_k = fa.get("top_k", top_k)
+        _section(f"FAISS — Job Retrieval Summary (Top-{top_k})")
+        _kv("Samples evaluated", fa.get("samples", 0))
+        print()
+        print(f"  {_c('BOLD', '-- IR Retrieval Metrics --')}")
+        _kv("MRR  (Mean Reciprocal Rank)",
+            f"{fa.get('mrr', 0):.4f}",
+            "GREEN" if fa.get("mrr", 0) >= 0.7 else ("YELLOW" if fa.get("mrr", 0) >= 0.4 else "RED"))
+        _kv(f"Mean Hit@1  (fraction ranked #1)",
+            f"{fa.get('mean_hit_at_1', 0):.4f}",
+            "GREEN" if fa.get("mean_hit_at_1", 0) >= 0.7 else "YELLOW")
+        _kv(f"Mean NDCG@{top_k}",
+            f"{fa.get('mean_ndcg_at_k', 0):.4f}",
+            "GREEN" if fa.get("mean_ndcg_at_k", 0) >= 0.7 else "YELLOW")
+        print()
+        print(f"  {_c('BOLD', '-- Retrieval Counts --')}")
         _kv(f"Expected title in top-{top_k}",
             f"{fa.get('title_found_rate', 0)*100:.0f}%",
             "GREEN" if fa.get("title_found_rate", 0) >= 0.8 else "YELLOW")
-        _kv("Expected title ranked #1",     f"{fa.get('rank_1_rate', 0)*100:.0f}%")
-        _kv("Expected title ranked top-3",  f"{fa.get('rank_top3_rate', 0)*100:.0f}%")
+        _kv("Expected title ranked #1",    f"{fa.get('rank_1_rate', 0)*100:.0f}%")
+        _kv("Expected title ranked top-3", f"{fa.get('rank_top3_rate', 0)*100:.0f}%")
+        print()
+        print(f"  {_c('BOLD', '-- Scoring --')}")
         _kv("Score >= min_match_score",
             f"{fa.get('score_pass_rate', 0)*100:.0f}%",
             "GREEN" if fa.get("score_pass_rate", 0) >= 0.8 else
             ("YELLOW" if fa.get("score_pass_rate", 0) >= 0.5 else "RED"))
         _kv("Avg hybrid score",  f"{fa.get('avg_hybrid_score', 0):.1f} / 100")
-        _kv("Avg cosine (raw)",  f"{fa.get('avg_cosine', 0):.4f}")
+        _kv("Avg cosine sim.",   f"{fa.get('avg_cosine', 0):.4f}")
         cert_ratio = fa.get("avg_cert_match_ratio")
         if cert_ratio is not None:
             _kv("Avg cert match ratio (best job)", _pct(cert_ratio))
@@ -1612,6 +1892,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Optional path to write a JSON report")
     p.add_argument("--quiet", action="store_true",
                    help="Suppress per-sample verbose output; show only the summary")
+    p.add_argument("--explain", action="store_true",
+                   help="Print a methodology section explaining each metric, plus "
+                        "(for OCR with expected_text) the actual block-alignment "
+                        "and word-diff process behind the CER/WER numbers")
     p.add_argument("--charts", action="store_true",
                    help="Generate charts PDF (requires matplotlib)")
     p.add_argument("--charts-dir", default=".",
@@ -1643,6 +1927,7 @@ if __name__ == "__main__":
         top_k=args.top_k,
         output_path=args.output,
         verbose=not args.quiet,
+        explain=args.explain,
         charts=args.charts,
         charts_dir=args.charts_dir,
         charts_png=args.charts_png,

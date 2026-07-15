@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+
 import '../models/models.dart';
 import '../theme.dart';
 
@@ -67,7 +68,7 @@ class _ProgressionChartState extends State<ProgressionChart> {
         const SizedBox(width: 16),
         _legendDot(AppTheme.amber500, 'Matched skills'),
         const SizedBox(width: 16),
-        _legendDot(AppTheme.navy400, 'Certs'),
+        _legendDot(AppColors.of(context).navy400, 'Certs'),
       ],
     );
   }
@@ -85,9 +86,9 @@ class _ProgressionChartState extends State<ProgressionChart> {
         ),
         const SizedBox(width: 6),
         Text(label,
-            style: GoogleFonts.inter(
+            style: GoogleFonts.workSans(
                 fontSize: 11,
-                color: AppTheme.textTertiary,
+                color: AppColors.of(context).textTertiary,
                 fontWeight: FontWeight.w500)),
       ],
     );
@@ -110,7 +111,9 @@ class _ProgressionChartState extends State<ProgressionChart> {
       ...matchedSpots,
       ...certSpots,
     ].map((s) => s.y).toList();
-    final maxY = ((allY.isEmpty ? 10 : allY.reduce((a, b) => a > b ? a : b)) + 3).toDouble();
+    final maxY =
+        ((allY.isEmpty ? 10 : allY.reduce((a, b) => a > b ? a : b)) + 3)
+            .toDouble();
 
     return LineChartData(
       minY: 0,
@@ -120,14 +123,15 @@ class _ProgressionChartState extends State<ProgressionChart> {
         drawVerticalLine: false,
         horizontalInterval: (maxY / 4).ceilToDouble().clamp(1, 100),
         getDrawingHorizontalLine: (_) => FlLine(
-          color: AppTheme.divider,
+          color: AppColors.of(context).divider,
           strokeWidth: 1,
         ),
       ),
       borderData: FlBorderData(show: false),
       titlesData: FlTitlesData(
         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         leftTitles: AxisTitles(
           sideTitles: SideTitles(
             showTitles: true,
@@ -135,8 +139,8 @@ class _ProgressionChartState extends State<ProgressionChart> {
             interval: (maxY / 4).ceilToDouble().clamp(1, 100),
             getTitlesWidget: (v, _) => Text(
               v.toInt().toString(),
-              style: GoogleFonts.inter(
-                  fontSize: 10, color: AppTheme.textTertiary),
+              style: GoogleFonts.workSans(
+                  fontSize: 10, color: AppColors.of(context).textTertiary),
             ),
           ),
         ),
@@ -154,8 +158,9 @@ class _ProgressionChartState extends State<ProgressionChart> {
                   children: [
                     Text(
                       DateFormat('MMM d').format(d.scannedAt),
-                      style: GoogleFonts.inter(
-                          fontSize: 9, color: AppTheme.textTertiary),
+                      style: GoogleFonts.workSans(
+                          fontSize: 9,
+                          color: AppColors.of(context).textTertiary),
                     ),
                   ],
                 ),
@@ -167,15 +172,14 @@ class _ProgressionChartState extends State<ProgressionChart> {
       lineTouchData: LineTouchData(
         touchCallback: (_, response) {
           setState(() {
-            _touchedIndex =
-                response?.lineBarSpots?.first.spotIndex ?? -1;
+            _touchedIndex = response?.lineBarSpots?.first.spotIndex ?? -1;
           });
         },
         touchTooltipData: LineTouchTooltipData(
-          getTooltipColor: (_) => AppTheme.navy600,
+          getTooltipColor: (_) => AppColors.of(context).navy600,
           tooltipRoundedRadius: 8,
           tooltipBorder:
-          const BorderSide(color: AppTheme.cardBorder, width: 0.8),
+              BorderSide(color: AppColors.of(context).cardBorder, width: 0.8),
           getTooltipItems: (spots) {
             final i = spots.first.spotIndex;
             if (i < 0 || i >= data.length) return [];
@@ -183,18 +187,19 @@ class _ProgressionChartState extends State<ProgressionChart> {
             return [
               LineTooltipItem(
                 '${r.skillCount} skills',
-                GoogleFonts.inter(
+                GoogleFonts.workSans(
                     fontSize: 12,
                     color: AppTheme.teal500,
                     fontWeight: FontWeight.w600),
               ),
               LineTooltipItem(
                 '${r.matchedCount} matched',
-                GoogleFonts.inter(fontSize: 11, color: AppTheme.amber500),
+                GoogleFonts.workSans(fontSize: 11, color: AppTheme.amber500),
               ),
               LineTooltipItem(
                 '${r.certCount} certs',
-                GoogleFonts.inter(fontSize: 11, color: AppTheme.textTertiary),
+                GoogleFonts.workSans(
+                    fontSize: 11, color: AppColors.of(context).textTertiary),
               ),
             ];
           },
@@ -215,7 +220,7 @@ class _ProgressionChartState extends State<ProgressionChart> {
               radius: index == _touchedIndex ? 6 : 3.5,
               color: AppTheme.teal500,
               strokeWidth: 2,
-              strokeColor: AppTheme.navy800,
+              strokeColor: AppColors.of(context).navy800,
             ),
           ),
           belowBarData: BarAreaData(
@@ -245,7 +250,7 @@ class _ProgressionChartState extends State<ProgressionChart> {
               radius: 3,
               color: AppTheme.amber500,
               strokeWidth: 1.5,
-              strokeColor: AppTheme.navy800,
+              strokeColor: AppColors.of(context).navy800,
             ),
           ),
           belowBarData: BarAreaData(show: false),
@@ -255,16 +260,16 @@ class _ProgressionChartState extends State<ProgressionChart> {
           spots: certSpots,
           isCurved: true,
           curveSmoothness: 0.35,
-          color: AppTheme.navy400,
+          color: AppColors.of(context).navy400,
           barWidth: 1.5,
           isStrokeCapRound: true,
           dotData: FlDotData(
             show: true,
             getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
               radius: 2.5,
-              color: AppTheme.navy400,
+              color: AppColors.of(context).navy400,
               strokeWidth: 1.5,
-              strokeColor: AppTheme.navy800,
+              strokeColor: AppColors.of(context).navy800,
             ),
           ),
           belowBarData: BarAreaData(show: false),
@@ -282,9 +287,9 @@ class _ProgressionChartState extends State<ProgressionChart> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: AppTheme.navy700,
+        color: AppColors.of(context).navy700,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(color: AppColors.of(context).cardBorder),
       ),
       child: Row(
         children: [
@@ -293,8 +298,8 @@ class _ProgressionChartState extends State<ProgressionChart> {
           const SizedBox(width: 8),
           Text(
             'Since first scan: ',
-            style: GoogleFonts.inter(
-                fontSize: 12, color: AppTheme.textTertiary),
+            style: GoogleFonts.workSans(
+                fontSize: 12, color: AppColors.of(context).textTertiary),
           ),
           _delta('$skillDelta skills', skillDelta, 'skill'),
           const SizedBox(width: 12),
@@ -319,7 +324,7 @@ class _ProgressionChartState extends State<ProgressionChart> {
         const SizedBox(width: 3),
         Text(
           label.replaceAll('-', ''),
-          style: GoogleFonts.spaceGrotesk(
+          style: GoogleFonts.fraunces(
             fontSize: 12,
             fontWeight: FontWeight.w600,
             color: color,

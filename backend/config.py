@@ -39,6 +39,12 @@ TOP_K: int           = int(os.getenv("TOP_K", "5"))
 OCR_LANGUAGES: list[str] = os.getenv("EASYOCR_LANGUAGES", "en").split(",")
 MIN_NATIVE_CHARS: int    = int(os.getenv("MIN_NATIVE_CHARS", "50"))
 
+# URL of the standalone OCR microservice (see ocr-service/). Required —
+# EasyOCR no longer runs in this process, so this backend can fit in
+# Render's 512MB free-tier limit alongside sentence-transformers/faiss.
+OCR_SERVICE_URL: str      = os.getenv("OCR_SERVICE_URL", "http://localhost:8001")
+OCR_SERVICE_TIMEOUT: int  = int(os.getenv("OCR_SERVICE_TIMEOUT", "150"))
+
 # ── OCR correction thresholds ─────────────────────────────────────────────────
 OCR_EMBED_THRESHOLD: float = float(os.getenv("OCR_EMBED_THRESHOLD", "0.78"))
 BLOB_FUZZY_THRESHOLD: int  = int(os.getenv("BLOB_FUZZY_THRESHOLD", "78"))

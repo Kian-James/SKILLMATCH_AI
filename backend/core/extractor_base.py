@@ -17,31 +17,17 @@ Public API
   discover_items_dynamically — full pipeline; called by skills.py and certs.py
   extract_section             — regex section slicer (exposed for unit tests)
 
-Changes (v26 — OCR correction made lazy/fallback-only):
-  FIXED    v25 applied OCR correction (apply_ocr_corrections) eagerly to every
-           line/token before splitting, on the theory that this was needed to
-           catch collapsed-separator errors like "HTMLICSS" -> "HTML/CSS"
-           before _expand_slash ran. In practice this was too aggressive:
-           _separator_candidates has no real floor on "is this actually an
-           improvement" — it just takes whichever candidate scores marginally
-           higher against the allowlist — so it fired on already-clean text
-           too, e.g. "Responsive Design" -> "Responsiv/e D/esign" and
-           "UI Design" -> "UI D/esign". And it still didn't even fix the
-           target case ("HTMLICSS" stayed unsplit) because the spurious score
-           bump from mangling clean phrases buried the real fix.
-
-           Fix: OCR correction is no longer applied during extraction at all
-           (_parse_section_to_entries and _section_text_to_entries no longer
-           touch it). Instead, discover_items_dynamically now does:
-             1. Extract entries from raw text (untouched).
-             2. Run SBERT matching once on those raw entries (step 4).
-             3. ONLY for entries that failed to match (step 4b), run
-                apply_ocr_corrections on that specific entry, re-split it on
-                '/' and '&', and retry SBERT matching on the resulting pieces.
-           This means correction is only ever attempted on text that has
-           already proven it doesn't match anything as-is — clean entries
-           like "Responsive Design" match on the first pass and are never
-           touched by the correction logic.
+OCR correction is applied lazily, not eagerly. Running apply_ocr_corrections
+on every line before splitting is too aggressive: it can "fix" already-clean
+text (e.g. "Responsive Design" -> "Responsiv/e D/esign") because the
+separator-recovery heuristic only needs a marginal score bump to commit.
+Instead:
+  1. Extract entries from raw text, untouched.
+  2. Run SBERT matching once on those raw entries.
+  3. Only for entries that failed to match, run apply_ocr_corrections on
+     that specific entry, re-split it on '/' and '&', and retry SBERT.
+This means correction only ever touches text that has already proven it
+doesn't match anything as-is.
 """
 
 from __future__ import annotations
@@ -310,9 +296,9 @@ def _merge_split_lines(lines: list[str], allowlist: list[str]) -> list[str]:
         cur = lines[i].strip()
         if len(cur.split()) == 1 and i + 1 < len(lines):
             nxt = lines[i + 1].strip()
-            # Don't merge if either line is a mid-list OCR fragment:
-            # trailing comma means it's part of a comma-delimited list,
-            # unclosed paren means it's the start of a multi-line parenthetical.
+            # Skip merging mid-list fragments: a trailing comma means the
+            # line is part of a comma-delimited list; an unclosed paren means
+            # it's the start of a multi-line parenthetical.
             if (cur.endswith(",") or nxt.endswith(",")
                     or cur.count("(") > cur.count(")")
                     or nxt.count("(") > nxt.count(")")):
@@ -662,16 +648,10 @@ def _parse_section_to_entries(
     Locate the section, filter lines, and split by delimiter.
     Returns a flat list of raw candidate strings ready for SBERT / fuzzy matching.
 
-    Note (v26): OCR correction is intentionally NOT applied here anymore.
-    Eagerly correcting every line/token before splitting was too aggressive —
-    it fired on already-clean text (e.g. "Responsive Design" -> "Responsiv/e
-    D/esign") because the separator-recovery heuristic only needs a marginal
-    score improvement against the allowlist to commit, and that can trigger
-    on phrases that never needed correction in the first place.
-
-    OCR correction now happens centrally in discover_items_dynamically, and
-    only as a fallback for entries that SBERT fails to match on the first
-    pass — i.e. only when it's actually needed.
+    OCR correction is intentionally not applied here — see the module
+    docstring for why eager correction is too aggressive. It happens
+    centrally in discover_items_dynamically, only as a fallback for entries
+    SBERT fails to match on the first pass.
     """
     m = config.heading_re.search(text)
     if not m:
@@ -846,8 +826,8 @@ def _sbert_match(
                    candidate meets threshold.
       unmatched  : candidate strings (post parenthetical-expansion) that did
                    NOT reach a match. Callers can retry these through OCR
-                   correction before giving up on them — see v26 fallback
-                   in discover_items_dynamically.
+                   correction before giving up on them (see the fallback
+                   step in discover_items_dynamically).
 
     Expands parentheticals before encoding so each component is matched independently.
     """
@@ -908,13 +888,10 @@ def _section_text_to_entries(
 
     This is the fast path used when skills.py / certs.py pass in their
     rule-based section text directly, bypassing _parse_section_to_entries
-    and its re-extraction from raw resume text.
-
-    Note (v26): OCR correction is intentionally NOT applied here. See the
-    docstring on _parse_section_to_entries for why — eager correction over
-    every token mangles clean text. Correction now happens centrally in
-    discover_items_dynamically, only as a fallback for entries SBERT fails
-    to match.
+    and its re-extraction from raw resume text. OCR correction is not
+    applied here either, for the same reason described in the module
+    docstring — it happens centrally in discover_items_dynamically as a
+    fallback for entries SBERT fails to match.
 
     Reuses the same delimiter logic and compound expansion as the main path.
     """
@@ -922,18 +899,13 @@ def _section_text_to_entries(
     if not lines:
         return []
 
-    # ── Name + job-title banner guard ───────────────────────────────────────
-    # Some resume layouts bleed into the next candidate's header block, e.g.:
-    #   "NERISSA TOLENTINO"
-    #   "Technical Support Engineer (Tier 2)"
-    # Stop as soon as we see a line that looks like an ALL-CAPS full name
-    # immediately followed by a job-title line.
-    # ALL-CAPS words only, 2–4 tokens, no digits → name line.
-    # Next non-empty line is a job title if it is mixed case, 2–6 words,
-    # no digits, and scores low against the allowlist (not itself a skill).
+    # Name + job-title banner guard: some resume layouts bleed into the next
+    # candidate's header block, e.g. "NERISSA TOLENTINO" followed by
+    # "Technical Support Engineer (Tier 2)". Stop as soon as we see an
+    # ALL-CAPS full name (2–4 words, no digits) immediately followed by a
+    # job-title-shaped line that doesn't itself look like a known skill.
     clipped: list[str] = []
     for idx, line in enumerate(lines):
-        # ALL-CAPS full name (2–4 words, no digits)
         if (_NAME_RE.match(line) and line.isupper()
                 and 2 <= len(line.split()) <= 4
                 and not any(ch.isdigit() for ch in line)):
@@ -946,7 +918,6 @@ def _section_text_to_entries(
                         f"{line!r} / {next_lines[0]!r}"
                     )
                     break
-        # Single-line banner guard (existing helper)
         if clipped and _is_banner_line(line, allowlist):
             log.debug(f"[SectionText] Stopped at banner line: {line!r}")
             break
@@ -955,7 +926,6 @@ def _section_text_to_entries(
     lines = clipped
     if not lines:
         return []
-    # ────────────────────────────────────────────────────────────────────────
 
     lines = _merge_split_lines(lines, allowlist)
     lines = _rejoin_open_parens(lines)
@@ -1024,19 +994,16 @@ def discover_items_dynamically(
 
     Steps:
       1. Build allowlist from jobs_corpus[config.corpus_key].
-      2. Build OcrCorrector once from the allowlist — held in reserve, only
-         used in step 4b below.
-      3. Parse section into candidate entries (no OCR correction applied
-         here — entries are extracted as-is from raw or pre-extracted text).
+      2. Build an OcrCorrector from the allowlist — held in reserve, only
+         used in step 4 below.
+      3. Parse the section into candidate entries, as-is, from raw or
+         pre-extracted text (no OCR correction applied here):
          - Fast path: section_text is provided by the caller.
          - Slow path: re-extract from raw resume_text.
-      4. SBERT pass — semantic matching (cosine >= 0.80) on the raw entries.
-      4b. OCR-correction retry — ONLY for entries that failed to match in
-          step 4. Each unmatched entry is run through apply_ocr_corrections,
-          re-split on '/' and '&', and retried through SBERT. This keeps
-          correction lazy: clean entries that already matched are never
-          touched, so there's no risk of correction mangling text that
-          didn't need it.
+      4. SBERT pass — semantic matching (cosine >= 0.80) on the raw entries,
+         then an OCR-correction retry pass for anything still unmatched
+         (correct + re-split on '/' and '&', then re-run SBERT). This keeps
+         correction lazy: entries that already matched are never touched.
       5. Fuzzy fallback — if SBERT found nothing at all.
       6. Drop parenthetical fragment duplicates.
     """
@@ -1049,9 +1016,8 @@ def discover_items_dynamically(
     allowlist_list = sorted(allowlist)
 
     # 2. Build OcrCorrector once (FAISS index over allowlist embeddings).
-    #    Skipped only for native PDFs — their text is already clean.
-    #    Used ONLY as a fallback below (step 4b), for entries SBERT fails
-    #    to match on the first pass — not applied eagerly to every entry.
+    #    Skipped for native PDFs, whose text is already clean. Used only as
+    #    a fallback below, for entries SBERT fails to match on the first pass.
     corrector = None
     if not is_native_pdf and allowlist_list:
         log.info(f"[{config.label}] Building OcrCorrector from {len(allowlist_list)} allowlist entries...")
@@ -1060,9 +1026,9 @@ def discover_items_dynamically(
 
     # 3. Parse section into candidate entries
     if section_text is not None:
-        # Fast path: caller already extracted the section text.
-        # If section_text is empty the section simply doesn't exist in this resume
-        # (e.g. no cert section) — skip the emergency fallback entirely.
+        # Fast path: caller already extracted the section text. An empty
+        # section_text means the section doesn't exist in this resume (e.g.
+        # no cert section) — skip the emergency fallback entirely.
         if section_text:
             log.info(f"[{config.label}] Using pre-extracted section text ({len(section_text)} chars).")
             if config.preprocess_section_text is not None:
@@ -1080,8 +1046,8 @@ def discover_items_dynamically(
             allowlist_list,
             is_native_pdf,
         )
-        # Emergency fallback only on the slow path — section heading may have been
-        # missed entirely, so scan the first 3000 chars as a last resort.
+        # Emergency fallback only on the slow path — the section heading may
+        # have been missed entirely, so scan the first 3000 chars as a last resort.
         if not entries:
             log.info(f"[{config.label}] Section not found — emergency comma-split fallback.")
             entries = [e.strip() for e in resume_text[:3000].split(",") if e.strip()]
@@ -1104,30 +1070,24 @@ def discover_items_dynamically(
 
     log.info(f"[{config.label}] After SBERT (raw pass): {len(canonical)} matched, {len(unmatched)} unmatched.")
 
-    # 4b. OCR-correction retry — ONLY for entries SBERT failed to match.
-    # This is deliberately a fallback rather than an eager pass over every
-    # entry: correcting clean text up front (e.g. "Responsive Design") risks
-    # mangling tokens that never needed it. Only entries that already failed
-    # to find a home in the allowlist are worth a forced repair attempt.
+    # 4b. OCR-correction retry — only for entries SBERT failed to match, so
+    # clean text that already matched is never at risk of being mangled.
     #
-    # Two candidate sources are tried for each unmatched entry:
-    #   1. apply_ocr_corrections() — handles letter/digit OCR confusions and,
-    #      when the allowlist holds a COMBINED phrase (e.g. an "IDS/IPS"-style
-    #      entry), its separator recovery can resolve that too.
-    #   2. Direct surrogate-character separator insertion — apply_ocr_corrections'
-    #      separator recovery scores the WHOLE joined candidate against
-    #      individual allowlist entries, so it can't reliably recover a split
+    # Two candidate sources are tried per unmatched entry:
+    #   1. apply_ocr_corrections() — handles letter/digit OCR confusions and
+    #      can recover a missing separator when the allowlist holds the
+    #      COMBINED phrase (e.g. an "IDS/IPS"-style entry).
+    #   2. Direct surrogate-character separator insertion — the corrector's
+    #      separator recovery scores the whole joined candidate against
+    #      individual allowlist entries, so it can't reliably split something
     #      like "HTMLICSS" -> "HTML/CSS" when "HTML" and "CSS" are SEPARATE
-    #      allowlist entries rather than a combined phrase — splitting never
-    #      scores higher than leaving the blob alone matching one half's
-    #      prefix. So we also try inserting '/' at every common OCR-surrogate
-    #      character position ('I', 'l', '1', '|') directly here.
+    #      allowlist entries. So we also try inserting '/' at every common
+    #      OCR-surrogate character position ('I', 'l', '1', '|') directly.
     #
     # Every candidate from both sources is run through _expand_ampersand and
-    # then _expand_slash, which (unlike the correction above) score the two
-    # resulting halves INDEPENDENTLY against the allowlist — that's what
-    # correctly turns "HTML/CSS" into ["HTML", "CSS"] rather than requiring
-    # the allowlist to contain that exact compound phrase.
+    # then _expand_slash, which score the two resulting halves independently
+    # against the allowlist — that's what turns "HTML/CSS" into
+    # ["HTML", "CSS"] without needing that exact compound phrase in the allowlist.
     if unmatched and corrector is not None:
         from core.ocr_correction import apply_ocr_corrections
 

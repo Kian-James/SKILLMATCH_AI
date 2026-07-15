@@ -48,19 +48,19 @@ class _HomeShellState extends State<HomeShell> {
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Text('Sign out?',
-                style: GoogleFonts.spaceGrotesk(
+                style: GoogleFonts.fraunces(
                     color: c.textPrimary, fontWeight: FontWeight.w600)),
             content: Text(
               widget.user.isGuest
                   ? 'Your guest session and scan history will be lost.'
                   : 'You\'ll be signed out of your account.',
-              style: GoogleFonts.inter(color: c.textSecondary, fontSize: 13),
+              style: GoogleFonts.workSans(color: c.textSecondary, fontSize: 13),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 child: Text('Cancel',
-                    style: GoogleFonts.inter(color: c.textSecondary)),
+                    style: GoogleFonts.workSans(color: c.textSecondary)),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -97,7 +97,7 @@ class _HomeShellState extends State<HomeShell> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(widget.user.name,
-                    style: GoogleFonts.spaceGrotesk(
+                    style: GoogleFonts.fraunces(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: c.textPrimary)),
@@ -114,14 +114,14 @@ class _HomeShellState extends State<HomeShell> {
                           width: 0.8),
                     ),
                     child: Text('Guest',
-                        style: GoogleFonts.inter(
+                        style: GoogleFonts.workSans(
                             fontSize: 10,
                             color: AppTheme.amber400,
                             fontWeight: FontWeight.w600)),
                   )
                 else if (widget.user.email.isNotEmpty)
                   Text(widget.user.email,
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.workSans(
                           fontSize: 11, color: c.textTertiary),
                       overflow: TextOverflow.ellipsis),
               ],
@@ -199,10 +199,12 @@ class _HomeShellState extends State<HomeShell> {
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? c.brand.withOpacity(0.12) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
+          border: Border(
+            top: BorderSide(
+                color: active ? c.brand : Colors.transparent, width: 2),
+          ),
         ),
         child: Row(children: [
           Icon(active ? activeIcon : icon,
@@ -210,8 +212,8 @@ class _HomeShellState extends State<HomeShell> {
           if (active) ...[
             const SizedBox(width: 7),
             Text(label,
-                style: GoogleFonts.spaceGrotesk(
-                    fontSize: 13, fontWeight: FontWeight.w700, color: c.brand)),
+                style: GoogleFonts.fraunces(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: c.brand)),
           ],
         ]),
       ),

@@ -1,56 +1,70 @@
 // lib/theme.dart
+// Direction B — "Dossier": resumes reviewed like case files.
+// Light = paper case file. Dark = ink-and-lamplight reading room.
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
-  // ── Dark palette (deep navy + electric teal) ───────────────────────────────
-  static const Color navy900 = Color(0xFF0A0E1A);
-  static const Color navy800 = Color(0xFF0F1729);
-  static const Color navy700 = Color(0xFF162035);
-  static const Color navy600 = Color(0xFF1E2D4A);
-  static const Color navy500 = Color(0xFF263759);
-  static const Color navy400 = Color(0xFF3A4F70);
+  // ── Dark palette ("night dossier") ─────────────────────────────────────────
+  static const Color navy900 = Color(0xFF11150F);
+  static const Color navy800 = Color(0xFF1A1F19);
+  static const Color navy700 = Color(0xFF232A21);
+  static const Color navy600 = Color(0xFF2C332A);
+  static const Color navy500 = Color(0xFF3A4438);
+  static const Color navy400 = Color(0xFF4C5949);
 
-  // ── Light palette ──────────────────────────────────────────────────────────
-  static const Color light50 = Color(0xFFF8FAFF);
-  static const Color light100 = Color(0xFFEFF3FC);
-  static const Color light200 = Color(0xFFDDE4F5);
-  static const Color light300 = Color(0xFFC4CFEA);
-  static const Color light400 = Color(0xFF8A9BC4);
+  // ── Light palette (paper) ────────────────────────────────────────────────
+  static const Color light50 = Color(0xFFF1F4F1);
+  static const Color light100 = Color(0xFFEAEDE9);
+  static const Color light200 = Color(0xFFDDE3DC);
+  static const Color light300 = Color(0xFFC7D0C7);
+  static const Color light400 = Color(0xFF93A199);
 
-  // ── Brand ──────────────────────────────────────────────────────────────────
-  static const Color teal500 = Color(0xFF00E5B8);
-  static const Color teal400 = Color(0xFF26ECC5);
-  static const Color teal300 = Color(0xFF4FF0D0);
-  static const Color teal200 = Color(0xFF8FF7E4);
-  static const Color teal100 = Color(0xFFBEFAF0);
+  // ── Brand — forest (accent) ──────────────────────────────────────────────
+  static const Color teal500 =
+      Color(0xFF4C9B72); // bright forest, dark-mode brand
+  static const Color teal400 = Color(0xFF6BB088);
+  static const Color teal300 = Color(0xFF8FC7A5);
+  static const Color teal200 = Color(0xFFB9DFC7);
+  static const Color teal100 = Color(0xFFE0F0E6);
 
-  // Teal shifted darker for light-mode text (meets contrast ratio)
-  static const Color tealDark = Color(0xFF00A884);
+  // Forest shifted darker for light-mode text (meets contrast ratio)
+  static const Color tealDark = Color(0xFF1F5C4C);
 
-  static const Color amber500 = Color(0xFFFFB344);
-  static const Color amber400 = Color(0xFFFFBE5C);
-  static const Color red500 = Color(0xFFFF5C6B);
-  static const Color red400 = Color(0xFFFF7A86);
-  static const Color green500 = Color(0xFF3DCC8E);
-  static const Color green400 = Color(0xFF5DD4A2);
+  // Gold — credential / warning accent
+  static const Color amber500 = Color(0xFFA9782F);
+  static const Color amber400 = Color(0xFFC79A52);
+  // Brick — danger
+  static const Color red500 = Color(0xFFA6402E);
+  static const Color red400 = Color(0xFFC1614C);
+  // Sage — success
+  static const Color green500 = Color(0xFF3E7A55);
+  static const Color green400 = Color(0xFF5C9873);
 
   // ── Dark semantic tokens ───────────────────────────────────────────────────
-  static const Color textPrimary = Color(0xFFF0F4FF);
-  static const Color textSecondary = Color(0xFF8A9BC4);
-  static const Color textTertiary = Color(0xFF4A5C80);
-  static const Color cardBorder = Color(0xFF1E2D4A);
-  static const Color divider = Color(0xFF162035);
+  static const Color textPrimary = Color(0xFFEDEFE8);
+  static const Color textSecondary = Color(0xFFAAB3A3);
+  static const Color textTertiary = Color(0xFF6E796A);
+  static const Color cardBorder = Color(0xFF2C332A);
+  static const Color divider = Color(0xFF232A21);
 
   // ── Light semantic tokens ─────────────────────────────────────────────────
-  static const Color ltTextPrimary = Color(0xFF0F1729);
-  static const Color ltTextSecondary = Color(0xFF3A4F70);
-  static const Color ltTextTertiary = Color(0xFF8A9BC4);
-  static const Color ltCardBorder = Color(0xFFDDE4F5);
-  static const Color ltDivider = Color(0xFFEFF3FC);
+  static const Color ltTextPrimary = Color(0xFF1C2B26);
+  static const Color ltTextSecondary = Color(0xFF5C6D64);
+  static const Color ltTextTertiary = Color(0xFF93A199);
+  static const Color ltCardBorder = Color(0xFFDDE3DC);
+  static const Color ltDivider = Color(0xFFE7EAE5);
   static const Color ltCardBg = Color(0xFFFFFFFF);
-  static const Color ltSurface = Color(0xFFF8FAFF);
+  static const Color ltSurface = Color(0xFFF1F4F1);
+
+  // ── Utility face — for stamped numbers: scores, dates, ids ────────────────
+  static TextStyle mono(
+          {double fontSize = 13,
+          FontWeight weight = FontWeight.w500,
+          Color? color}) =>
+      GoogleFonts.ibmPlexMono(
+          fontSize: fontSize, fontWeight: weight, color: color);
 
   // ── Dark ThemeData ─────────────────────────────────────────────────────────
   static ThemeData get dark => _build(Brightness.dark);
@@ -82,8 +96,8 @@ class AppTheme {
         surface: surface,
         background: bg,
         error: red500,
-        onPrimary: isDark ? navy900 : Colors.white,
-        onSecondary: navy900,
+        onPrimary: Colors.white,
+        onSecondary: Colors.white,
         onSurface: txtPrimary,
         onBackground: txtPrimary,
         onError: Colors.white,
@@ -105,48 +119,45 @@ class AppTheme {
           brandSoft: isDark ? teal400 : tealDark,
         ),
       ],
-      textTheme: GoogleFonts.spaceGroteskTextTheme().copyWith(
-        displayLarge: GoogleFonts.spaceGrotesk(
+      textTheme: GoogleFonts.workSansTextTheme().copyWith(
+        displayLarge: GoogleFonts.fraunces(
             fontSize: 32,
-            fontWeight: FontWeight.w700,
-            color: txtPrimary,
-            letterSpacing: -0.5),
-        displayMedium: GoogleFonts.spaceGrotesk(
-            fontSize: 26,
             fontWeight: FontWeight.w600,
             color: txtPrimary,
             letterSpacing: -0.3),
-        headlineLarge: GoogleFonts.spaceGrotesk(
+        displayMedium: GoogleFonts.fraunces(
+            fontSize: 26, fontWeight: FontWeight.w600, color: txtPrimary),
+        headlineLarge: GoogleFonts.fraunces(
             fontSize: 22, fontWeight: FontWeight.w600, color: txtPrimary),
-        headlineMedium: GoogleFonts.spaceGrotesk(
+        headlineMedium: GoogleFonts.fraunces(
             fontSize: 18, fontWeight: FontWeight.w600, color: txtPrimary),
-        titleLarge: GoogleFonts.spaceGrotesk(
-            fontSize: 16, fontWeight: FontWeight.w600, color: txtPrimary),
-        titleMedium: GoogleFonts.spaceGrotesk(
-            fontSize: 14, fontWeight: FontWeight.w500, color: txtPrimary),
-        bodyLarge: GoogleFonts.inter(
+        titleLarge: GoogleFonts.fraunces(
+            fontSize: 17, fontWeight: FontWeight.w600, color: txtPrimary),
+        titleMedium: GoogleFonts.fraunces(
+            fontSize: 14, fontWeight: FontWeight.w600, color: txtPrimary),
+        bodyLarge: GoogleFonts.workSans(
             fontSize: 15,
             fontWeight: FontWeight.w400,
             color: txtPrimary,
             height: 1.6),
-        bodyMedium: GoogleFonts.inter(
+        bodyMedium: GoogleFonts.workSans(
             fontSize: 13,
             fontWeight: FontWeight.w400,
             color: txtSecond,
             height: 1.5),
-        labelLarge: GoogleFonts.spaceGrotesk(
-            fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.5),
-        labelSmall: GoogleFonts.inter(
+        labelLarge: GoogleFonts.workSans(
+            fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.3),
+        labelSmall: GoogleFonts.workSans(
             fontSize: 11,
             fontWeight: FontWeight.w500,
             color: txtThird,
-            letterSpacing: 0.8),
+            letterSpacing: 0.6),
       ),
       cardTheme: CardThemeData(
         color: surface,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
           side: BorderSide(color: border, width: 1),
         ),
       ),
@@ -154,44 +165,40 @@ class AppTheme {
         backgroundColor: bg,
         elevation: 0,
         scrolledUnderElevation: 0,
-        titleTextStyle: GoogleFonts.spaceGrotesk(
+        titleTextStyle: GoogleFonts.fraunces(
             fontSize: 18, fontWeight: FontWeight.w600, color: txtPrimary),
         iconTheme: IconThemeData(color: txtSecond),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: brand,
-          foregroundColor: isDark ? navy900 : Colors.white,
+          foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: GoogleFonts.spaceGrotesk(
-              fontSize: 14, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          textStyle: GoogleFonts.workSans(
+              fontSize: 14, fontWeight: FontWeight.w600, letterSpacing: 0.2),
         ),
       ),
+      // Underline fields — a form on paper, not a filled app-style box.
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: surface2,
-        border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: border)),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: border)),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
+        fillColor: Colors.transparent,
+        border: UnderlineInputBorder(borderSide: BorderSide(color: border)),
+        enabledBorder:
+            UnderlineInputBorder(borderSide: BorderSide(color: border)),
+        focusedBorder: UnderlineInputBorder(
             borderSide: BorderSide(color: brand, width: 1.5)),
-        hintStyle: GoogleFonts.inter(color: txtThird, fontSize: 14),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        hintStyle: GoogleFonts.workSans(color: txtThird, fontSize: 14),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
       ),
       dividerTheme: DividerThemeData(color: div, thickness: 1, space: 1),
       chipTheme: ChipThemeData(
-        backgroundColor: surface2,
+        backgroundColor: surface,
         side: BorderSide(color: border),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        labelStyle: GoogleFonts.inter(fontSize: 12, color: txtSecond),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
+        labelStyle: GoogleFonts.workSans(fontSize: 12, color: txtSecond),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       ),
     );

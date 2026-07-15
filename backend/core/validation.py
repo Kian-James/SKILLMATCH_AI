@@ -95,7 +95,7 @@ def _sliding_window_match(
     return False, consumed_phrases
 
 
-def fuzzy_skill_verify(
+def semantic_verify(
         discovered_list:   list[str],
         ground_truth_list: list[str],
         threshold:         float = _SEMANTIC_THRESHOLD,

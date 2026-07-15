@@ -20,7 +20,8 @@ import '../models/models.dart';
 
 class ApiService {
   // ── Change this to your backend host ─────────────────────────────────────
-  static const String baseUrl = 'http://192.168.0.52:8000'; // your machine's IP
+  static const String baseUrl =
+      'http://192.168.0.113:8000'; // your machine's IP
   static const _timeout = Duration(minutes: 3);
 
   // ══════════════════════════════════════════════════════════════════════════

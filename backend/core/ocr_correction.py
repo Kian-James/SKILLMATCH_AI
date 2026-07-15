@@ -3,193 +3,40 @@ core/ocr_correction.py
 ======================
 Embedding-based OCR correction using SBERT + FAISS.
 
-Replaces the old hardcoded _OCR_CORRECTIONS dict with a nearest-neighbour
-lookup over a FAISS IndexFlatIP built from the skills/certs allowlist.
+Looks up the nearest allowlist entry for an OCR-garbled token via a FAISS
+IndexFlatIP built from the skills/certs allowlist, rather than relying on a
+hardcoded correction table.
 
-Changes (v6 backport):
-  FIXED    Multi-word canonical handling in ocr_correct_token.
+Token correction pipeline (see apply_ocr_corrections for the exact order)
+--------------------------------------------------------------------------
+Each whitespace-split token is run through a sequence of cheap, targeted
+fixes before falling back to the FAISS nearest-neighbour lookup:
 
-           Problem: When the nearest FAISS neighbour is a multi-word allowlist
-           entry (e.g. "SolarWinds Network Performance Monitor"), the old code
-           picked just one word from it via max(fuzz.ratio per word). This
-           mangled tokens — e.g. "AnyDesk" could get corrected to "Monitor"
-           because "Monitor" scored highest against the OCR token in isolation,
-           causing the skill to be silently lost downstream.
-
-           Fix: when the nearest canonical form is multi-word, compare the
-           entire OCR token against each word of the canonical using fuzz.ratio,
-           but only use the best single word as the corrected token (same as
-           before) — the key change is that we now use normalize() consistently
-           on both sides of the comparison, matching the behaviour in matcher.py.
-           More importantly, the threshold check now correctly uses the cosine
-           similarity from the FAISS search so that low-confidence matches are
-           rejected rather than silently accepted.
-
-Changes (v7): fixed apply_ocr_corrections expanding tech abbreviations that are
-           meaningful only in context (e.g. "js" -> "JavaScript").
-
-           Problem: apply_ocr_corrections splits input on whitespace and
-           corrects each token independently. The token "js" in isolation
-           embeds closest to "JavaScript" and gets expanded, turning
-           "Node js" -> "Node JavaScript" and "Express js" ->
-           "Express JavaScript". These mangled strings then fail to match
-           "Node.js" / "Express.js" in the allowlist.
-
-           Fix: introduced _PROTECTED_SUFFIXES — a set of lowercase token
-           strings that are meaningful tech abbreviations when they appear
-           as part of a multi-token skill name. Tokens in this set are
-           passed through apply_ocr_corrections unchanged (no FAISS lookup).
-
-           "js" is the primary case but the set also covers other common
-           abbreviations that the SBERT model is likely to over-expand:
-           "ts" (TypeScript), "py" (Python), "rb" (Ruby), "go", "rs" (Rust).
-
-           These are only skipped at the apply_ocr_corrections level — the
-           full skill phrase (e.g. "Node js") is still passed to canonicalize()
-           and direct_scan_section where the v24 akey_alt fix maps it correctly
-           to its allowlist form ("Node.js").
-
-Changes (v8): fixed OCR digit/letter substitution errors (e.g. "SAP2OOO"
-           instead of "SAP2000") being matched against the wrong allowlist
-           entry or dropped entirely.
-
-           Problem: OCR scanners commonly confuse digits and visually similar
-           letters: O/0, I/1, S/5, B/8, Z/2, l/1. "SAP2OOO" contains three
-           O's that should be 0's. Without correction the fuzzy scorer matches
-           it against "SAP" at score 60 (below the 82 threshold) and drops it.
-
-           Fix: introduced _digit_letter_candidates() which generates candidate
-           strings by replacing visually similar characters in a token and
-           returns the candidate that scores highest against the allow_norm
-           keys via fuzzy ratio. Applied in apply_ocr_corrections BEFORE the
-           FAISS lookup when the token contains a mix of letters and digits,
-           so "SAP2OOO" -> "SAP2000" before embedding.
-
-           Substitution map (applied to uppercase token):
-             O->0, I->1, S->5, B->8, Z->2, l->1 and reverses (0->O etc.)
-           Only tokens that contain BOTH letters and digits are candidates
-           (pure-letter and pure-digit tokens are left alone).
-
-Changes (v10): fixed apply_ocr_corrections mangling versioned/compound tokens
-           like "HTML5", "CSS3", "ES6+" that contain digits or punctuation
-           and embed close to a wrong FAISS neighbour (e.g. "HTML5" -> "HTML/CSS").
-
-           Two fixes:
-
-           Fix 1 — protect "&": add "&" to _PROTECTED_SUFFIXES so the
-           ampersand connector token in compound skills like "HTML5 & CSS3"
-           is passed through untouched. Previously "&" was fed to FAISS which
-           returned a garbage nearest neighbour and corrupted the rejoined string.
-
-           Fix 2 — allowlist pre-check before FAISS: before calling
-           ocr_correct_token (FAISS lookup), check whether the token already
-           scores >= _FAISS_SKIP_THRESHOLD (88) against the raw allowlist keys
-           via fuzzy ratio. If it does, the token is already correct — skip
-           FAISS to avoid a wrong substitution. This protects tokens like
-           "HTML5", "CSS3", "ES6+" and any other versioned skill name that
-           the SBERT model may map to a semantically close but wrong neighbour.
-           The threshold is intentionally high (88) so genuinely OCR-garbled
-           tokens (score << 88) still go through FAISS correction normally.
-
-           (e.g. "UlKit" instead of "UIKit") being dropped because the fuzzy
-           score falls just below the direct_scan_section threshold (80 < 82).
-
-           Problem: OCR scanners commonly confuse visually similar letters
-           that share no digit component: lowercase l <-> uppercase I,
-           lowercase rn <-> m, 0 <-> O (in all-letter context), vv <-> w,
-           cl <-> d. "UlKit" contains 'l' where 'I' was intended. The token
-           is all-letter so _digit_letter_candidates() (v8) never runs, and
-           the FAISS embedding path scores it below threshold.
-
-           Fix: introduced _letter_letter_candidates() which generates candidate
-           strings by applying a small set of common single-character letter/
-           letter visual substitutions and returns the candidate that scores
-           highest against the allow_norm keys. Applied in apply_ocr_corrections
-           for ALL tokens (not just mixed alphanumeric), BEFORE the FAISS
-           lookup, so corrected tokens arrive at direct_scan_section and
-           canonicalize() already fixed.
-
-           Substitution pairs (bidirectional, case-sensitive):
-             l <-> I   (lowercase L / uppercase I — most common OCR confusion)
-             rn -> m   (two-char sequence misread as one)
-             m -> rn   (reverse)
-             0 <-> O   (zero / letter O in all-letter context)
-             vv -> w   (two v's misread as w)
-             w -> vv   (reverse)
-             cl -> d   (c+l misread as d)
-             d -> cl   (reverse)
-
-           Only single-position substitutions are attempted to keep the
-           candidate space small. "UlKit" -> "UIKit" scores 100 against
-           the allowlist and is committed before the FAISS lookup runs.
-
-Changes (v11): fixed two cases where missing separator characters ('/' or '&')
-           that were collapsed by OCR into a letter (e.g. "IDSIIPS" instead of
-           "IDS/IPS", "GDeT" instead of "GD&T") were not being recovered.
-
-           Root causes identified:
-
-           BUG A — _LETTER_LETTER_SUBS entry ("e", "&") in _letter_letter_candidates
-           worked for "GDeT" -> "GD&T" in isolation but was fragile: the 'e'->'&'
-           substitution replaces ALL occurrences of 'e' in the token (Python's
-           str.replace is global), which corrupts multi-e tokens like "Experience".
-           The token-level guard (best_score comparison) prevents actual damage, but
-           the approach is undiscoverable and brittle.
-
-           BUG B — _separator_candidates (the generalized replacement) was missing
-           entirely from the pipeline. The only guard for collapsed separators was
-           the regex-based _restore_ocr_slash in extractor_base.py, which has a
-           greedy quantifier bug (see extractor_base changes).
-
-           BUG C — The pre_score short-circuit (v10) fires on "IDSIIPS" because
-           normalize("IDSIIPS")="idsiips" scores 92 against normalize("IDS/IPS")=
-           "idsips" (standard normalize strips '/'), which is >= the 88 threshold.
-           This prevents FAISS from ever seeing the token, and _restore_ocr_slash
-           then receives the uncorrected "IDSIIPS".
-
-           Fix: introduced _separator_candidates() which:
-             1. Only fires on purely alphanumeric tokens (no existing punctuation).
-             2. Tries inserting '/' and '&' at every interior position, PLUS
-                consuming the character at that position (handling the case where
-                OCR inserted an extra letter as the separator, e.g. 'I' in
-                "IDSIIPS" = IDS + [I=slash] + IPS).
-             3. Scores candidates with a separator-aware normalize (/ and & become
-                spaces rather than being stripped) so "IDS/IPS" and "IDS/IIPS"
-                are distinguished correctly.
-             4. Uses the raw allowlist strings as a tiebreaker via fuzz.ratio
-                so "GD/T" and "GD&T" (which are identical after sep-aware normalize
-                as "gd t") are correctly resolved to "GD&T" when that is the
-                allowlist form.
-
-           _separator_candidates runs BEFORE the pre_score check so it is not
-           blocked by the v10 threshold guard.
-
-           The ("e", "&") entry is removed from _LETTER_LETTER_SUBS since
-           _separator_candidates handles the "GDeT" -> "GD&T" case more robustly
-           and without the global-replace fragility.
-
-Changes (v27): fixed _separator_candidates' fix getting undone by the FAISS
-           step that runs right after it.
-
-           Problem: once _separator_candidates successfully resolves a garbled
-           token into a multi-part compound (e.g. "HTMLICSS" -> "HTML/CSS"),
-           apply_ocr_corrections kept going and ran the token through the
-           pre-score check and, if that didn't short-circuit, the FAISS
-           nearest-neighbour lookup (ocr_correct_token). That FAISS step is
-           designed to replace an ENTIRE token with a SINGLE nearest canonical
-           word — it has no concept of a multi-part compound. So
-           "HTML/CSS" goes in, FAISS finds "CSS" is the nearest single
-           allowlist word, and the corrected token comes back as just "CSS" —
-           silently discarding "HTML". The extractor's _expand_slash never
-           gets a chance to split the compound because there's nothing left
-           to split.
-
-           Fix: if _separator_candidates changed the token AND the result
-           contains '/' or '&' (i.e. it just resolved a collapsed separator),
-           skip the pre-score check and FAISS lookup entirely for that token.
-           The token is handed back as the recovered compound string; it's
-           the caller's job (via _expand_slash / _expand_ampersand in
-           extractor_base.py) to split it into its parts.
+1. Protected tokens ("js", "&", etc.) are passed through untouched — these
+   are meaningful abbreviations or connectors only in context (e.g. "js" in
+   "Node js" should become part of "Node.js", not get expanded on its own
+   to "JavaScript"), so they're never sent to FAISS.
+2. Letter/letter substitution — fixes common visual OCR confusions such as
+   l<->I, rn<->m, vv<->w, cl<->d, 0<->O (e.g. "UlKit" -> "UIKit").
+3. Digit/letter substitution — fixes confusions like O<->0, I<->1, S<->5,
+   B<->8, Z<->2 in tokens that mix letters and digits (e.g. "SAP2OOO" ->
+   "SAP2000").
+4. Separator recovery — restores a missing '/' or '&' that OCR collapsed or
+   replaced with a stray letter in a compact uppercase token (e.g.
+   "IDSIIPS" -> "IDS/IPS", "GDeT" -> "GD&T", "HTMLICSS" -> "HTML/CSS"). If
+   this step turns the token into a multi-part compound, correction stops
+   here — the token is handed back as-is rather than continuing to FAISS.
+   FAISS only knows how to collapse a whole token down to a single nearest
+   allowlist word, which would silently drop one half of a compound like
+   "HTML/CSS" (e.g. reducing it to just "CSS"). Splitting a recovered
+   compound into its parts is the extractor's job (_expand_slash /
+   _expand_ampersand in extractor_base.py), not this function's.
+5. Allowlist pre-check — if the token already scores highly against the
+   allowlist as-is, skip FAISS entirely. This protects correctly-spelled
+   versioned tokens like "HTML5", "CSS3", "ES6+", which might otherwise
+   embed close to an unrelated but semantically similar allowlist entry.
+6. FAISS nearest-neighbour lookup — the final fallback for tokens that
+   survived all of the above uncorrected.
 """
 
 from __future__ import annotations
@@ -209,7 +56,10 @@ from core.utils import normalize
 
 log = logging.getLogger(__name__)
 
-# ── Protected suffix tokens (v7, updated v10) ────────────────────────────────
+# Tokens that are meaningful tech abbreviations or connectors only in
+# context, and should never be sent through the FAISS lookup on their own
+# (e.g. "js" alone embeds closest to "JavaScript" and would turn
+# "Node js" into "Node JavaScript" instead of "Node.js").
 _PROTECTED_SUFFIXES: frozenset[str] = frozenset({
     "js",   # Node.js, Express.js, Vue.js, React.js, Next.js ...
     "ts",   # TypeScript suffix in some OCR outputs
@@ -218,15 +68,15 @@ _PROTECTED_SUFFIXES: frozenset[str] = frozenset({
     "rs",   # Rust
     "go",   # Go language token
     "cs",   # C# / .NET context
-    "&",    # v10: ampersand connector in compound skills like "HTML5 & CSS3"
+    "&",    # ampersand connector in compound skills like "HTML5 & CSS3"
 })
 
-# v10: if a token already scores >= this against the allowlist, skip FAISS
-# to avoid wrong substitution of correctly-spelled versioned tokens (HTML5,
+# If a token already scores >= this against the allowlist, skip FAISS to
+# avoid wrongly substituting a correctly-spelled versioned token (HTML5,
 # CSS3, ES6+). High threshold so genuinely garbled tokens still go to FAISS.
 _FAISS_SKIP_THRESHOLD: int = 88
 
-# ── Digit/letter substitution map (v8) ───────────────────────────────────────
+# ── Digit/letter substitution map ────────────────────────────────────────────
 # Common OCR confusions. Applied bidirectionally on uppercase tokens.
 _LETTER_TO_DIGIT: dict[str, str] = {"O": "0", "I": "1", "S": "5", "B": "8", "Z": "2", "l": "1"}
 _DIGIT_TO_LETTER: dict[str, str] = {v: k for k, v in _LETTER_TO_DIGIT.items()}
@@ -234,16 +84,11 @@ _DIGIT_TO_LETTER: dict[str, str] = {v: k for k, v in _LETTER_TO_DIGIT.items()}
 # Only attempt substitution when token has BOTH letters and digits (mixed).
 _MIXED_ALPHANUM_RE = re.compile(r'(?=[A-Za-z])(?=.*\d)|(?=\d)(?=.*[A-Za-z])')
 
-# ── Letter/letter substitution pairs (v9, updated v11) ───────────────────────
-# Each entry is (find_str, replace_str). Applied as single-position
-# find-and-replace passes over the token. Both directions are listed
-# explicitly so the table is easy to audit.
-# Multi-char entries (rn<->m, vv<->w, cl<->d) are handled as substring
-# replacements on the whole token string, not per-character.
-#
-# v11: removed ("e", "&") and ("&", "e") — these were attempting to handle
-# "GDeT" -> "GD&T" but str.replace is global (corrupts multi-e tokens) and
-# the case is now handled more robustly by _separator_candidates().
+# ── Letter/letter substitution pairs ─────────────────────────────────────────
+# Each entry is (find_str, replace_str), applied as a single-position
+# find-and-replace pass over the token. Both directions are listed
+# explicitly so the table is easy to audit. Multi-char entries (rn<->m,
+# vv<->w, cl<->d) are substring replacements on the whole token string.
 _LETTER_LETTER_SUBS: list[tuple[str, str]] = [
     # Most common: lowercase l misread as uppercase I and vice versa
     ("l", "I"),
@@ -264,7 +109,7 @@ _LETTER_LETTER_SUBS: list[tuple[str, str]] = [
 # noise on very short tokens like "l" -> "I".
 _MIN_LEN_FOR_LETTER_SUB: int = 3
 
-# ── Separator recovery constants (v11) ───────────────────────────────────────
+# ── Separator recovery constants ─────────────────────────────────────────────
 # Minimum token length to attempt separator insertion.
 _MIN_LEN_FOR_SEP_RECOVERY: int = 4
 
@@ -277,8 +122,8 @@ _OCR_SEP_SURROGATES: frozenset[str] = frozenset("Il1|")
 
 def _normalize_sep(s: str) -> str:
     """
-    Separator-aware normalize used exclusively inside _separator_candidates
-    and the updated _restore_ocr_slash (extractor_base.py).
+    Separator-aware normalize used by _separator_candidates and the matching
+    logic in extractor_base.py's _restore_ocr_slash.
 
     Unlike the standard normalize() which strips '/' and '&', this variant
     converts them to spaces so that "IDS/IPS" -> "ids ips" and "IDS/IIPS" ->
@@ -400,8 +245,8 @@ def _digit_letter_candidates(token: str, allow_norm_keys: list[str]) -> str:
 
 def _separator_candidates(token: str, allowlist_raw: list[str]) -> str:
     """
-    v11: Recover separator characters ('/' or '&') that OCR collapsed or
-    replaced with a letter in compact uppercase tokens.
+    Recover separator characters ('/' or '&') that OCR collapsed or replaced
+    with a stray letter in compact uppercase tokens.
 
     Examples fixed:
         "IDSIIPS"  -> "IDS/IPS"   (OCR inserted 'I' as separator + duplicated it)
@@ -430,15 +275,16 @@ def _separator_candidates(token: str, allowlist_raw: list[str]) -> str:
     Only fires on purely alphanumeric tokens (no existing '/', '&', '.', etc.)
     that are at least _MIN_LEN_FOR_SEP_RECOVERY characters long.
 
-    Runs BEFORE the pre_score FAISS-skip check in apply_ocr_corrections so it
-    is not blocked by the v10 threshold guard (which fires on "IDSIIPS" because
-    standard normalize strips '/' and the token scores 92 against "idsips").
+    Runs before the allowlist pre-check in apply_ocr_corrections, since a
+    collapsed token like "IDSIIPS" can otherwise score deceptively high
+    against the allowlist once '/' is stripped by standard normalize (both
+    become "idsips"), which would skip correction before it's even tried.
 
-    NOTE (v27): the caller (apply_ocr_corrections) must NOT pass a token that
-    has just gained a separator from this function on to the FAISS lookup
-    step — FAISS replaces a whole token with a single nearest canonical word
-    and would collapse a freshly-recovered compound like "HTML/CSS" down to
-    just "CSS". See apply_ocr_corrections for the guard.
+    The caller (apply_ocr_corrections) must not pass a token that just
+    gained a separator from this function on to the FAISS lookup — FAISS
+    replaces a whole token with a single nearest canonical word and would
+    collapse a freshly-recovered compound like "HTML/CSS" down to just
+    "CSS". See apply_ocr_corrections for that guard.
     """
     stripped = token.strip(".,;:()[]")
 
@@ -520,7 +366,7 @@ class OcrCorrector:
     encode_fn:       Callable[[str], np.ndarray]
     cache:           dict[str, str] = field(default_factory=dict)
     allow_norm_keys: list[str]      = field(default_factory=list)
-    # v11: raw allowlist strings needed by _separator_candidates for tiebreaking.
+    # Raw allowlist strings, used by _separator_candidates for tiebreaking.
     allowlist_raw:   list[str]      = field(default_factory=list)
 
 
@@ -609,29 +455,19 @@ def apply_ocr_corrections(s: str, corrector: Optional[OcrCorrector] = None) -> s
     """
     Token-level OCR correction. No-op when corrector is None.
 
-    Processing order per token
-    --------------------------
-    1. Skip tokens in _PROTECTED_SUFFIXES (v7/v10: "js", "&", etc.).
-    2. _letter_letter_candidates  — fix l<->I, rn<->m, etc. (v9).
-    3. _digit_letter_candidates   — fix O<->0, I<->1, etc. in mixed tokens (v8).
-    4. _separator_candidates      — recover missing '/' or '&' in compact
-                                    uppercase tokens (v11: "IDSIIPS"->"IDS/IPS",
-                                    "GDeT"->"GD&T", "HTMLICSS"->"HTML/CSS").
-    4b. v27 guard                 — if step 4 just resolved the token into a
-                                    multi-part compound (it changed AND now
-                                    contains '/' or '&'), STOP here and return
-                                    it as-is. Do not let steps 5/6 below run on
-                                    it — FAISS only knows how to collapse a
-                                    whole token down to a SINGLE nearest word,
-                                    which would silently discard one half of
-                                    the recovered compound (e.g. "HTML/CSS"
-                                    -> "CSS", losing "HTML"). Splitting the
-                                    recovered compound into its parts is the
-                                    extractor's job (_expand_slash /
-                                    _expand_ampersand), not this function's.
-    5. Pre-score check            — if token now scores >= _FAISS_SKIP_THRESHOLD
-                                    against the allowlist, skip FAISS (v10).
-    6. ocr_correct_token          — FAISS nearest-neighbour lookup.
+    Processing order per token (see module docstring for the reasoning
+    behind each step):
+      1. Skip tokens in _PROTECTED_SUFFIXES.
+      2. _letter_letter_candidates — fix l<->I, rn<->m, etc.
+      3. _digit_letter_candidates  — fix O<->0, I<->1, etc. in mixed tokens.
+      4. _separator_candidates     — recover missing '/' or '&' in compact
+                                     uppercase tokens.
+      4b. If step 4 just resolved the token into a multi-part compound,
+          stop here and return it as-is — splitting it further is the
+          extractor's job (_expand_slash / _expand_ampersand), not this
+          function's, and FAISS would otherwise collapse it to one word.
+      5. Allowlist pre-check — skip FAISS if the token already scores well.
+      6. ocr_correct_token — FAISS nearest-neighbour lookup.
     """
     if corrector is None:
         return s
@@ -652,16 +488,13 @@ def apply_ocr_corrections(s: str, corrector: Optional[OcrCorrector] = None) -> s
         # Step 3: fix digit/letter OCR confusions
         tok = _digit_letter_candidates(tok, corrector.allow_norm_keys)
 
-        # Step 4 (v11): recover missing '/' or '&' in compact uppercase tokens.
+        # Step 4: recover missing '/' or '&' in compact uppercase tokens.
         pre_sep_tok = tok
         tok = _separator_candidates(tok, corrector.allowlist_raw)
 
-        # Step 4b (v27): if separator recovery just turned this token into a
-        # multi-part compound, hand it back now. Letting it fall through to
-        # the FAISS lookup below would collapse "HTML/CSS" down to whichever
-        # single allowlist word FAISS thinks is closest (e.g. "CSS"),
-        # silently dropping "HTML". The caller's _expand_slash/_expand_ampersand
-        # is what actually splits this into its separate parts.
+        # Step 4b: if separator recovery just turned this token into a
+        # multi-part compound, hand it back now rather than letting it fall
+        # through to FAISS, which would collapse it to a single nearest word.
         if tok != pre_sep_tok and ("/" in tok or "&" in tok):
             log.debug(
                 f"[OcrCorrector] '{pre_sep_tok}' -> '{tok}' resolved to a "

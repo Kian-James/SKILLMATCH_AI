@@ -23,6 +23,9 @@ dependencies:
   http_parser: ^4.0.2
   file_picker: ^8.0.0+1
 
+  # Keep Awake
+  wakelock_plus: ^1.1.4
+
   # Camera & Image
   camera: ^0.10.5+9
   image_picker: ^1.1.2

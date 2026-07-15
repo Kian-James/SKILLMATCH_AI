@@ -29,27 +29,17 @@ _CERT_END_RE = re.compile(
     )
 
 # ---------------------------------------------------------------------------
-# Cert-specific pre-processing: keep "Provider - Cert Name" as one unit
+# Cert-specific pre-processing: keep "Provider - Cert Name" as one unit.
+#
+# Two forms show up in resumes:
+#   1. Inline dash: "Udemy - Flutter Certified Programmer" — already one
+#      line, but the " - " could later be mistaken for a sub-header split.
+#   2. Split lines: "Udemy" / "Flutter Certified Programmer" on separate
+#      lines — these don't get merged by _merge_split_lines since neither
+#      line alone matches the allowlist well, so we join them here.
 # ---------------------------------------------------------------------------
 
-# A provider token is a short (1–4 word) title-cased or ALL-CAPS label that
-# is followed by " - " (inline) or appears alone on a line directly before
-# the cert name line.  We do NOT want to split or strip it.
-#
-# Step 1 – inline dash form:  "Udemy - Flutter Certified Programmer"
-#   → already one line, but _strip_subheader might later mistake the part
-#     before " - " as a sub-header label.  We replace " - " with a protected
-#     separator so the colon-based strip logic is never triggered.
-#
-# Step 2 – split-line form:
-#   Udemy
-#   Flutter Certified Programmer
-#   → _merge_split_lines won't join them when "Udemy" scores low alone AND
-#     "Udemy Flutter Certified Programmer" also scores low (provider not in
-#     allowlist).  We detect this pattern and pre-join them with " - ".
-
-# Known cert/credential issuers — used to identify provider lines.  This list
-# covers the most common platforms; the regex below is the authoritative check.
+# Common cert/credential issuers, used to recognize provider lines.
 _KNOWN_PROVIDERS = {
     "udemy", "coursera", "freecodecamp", "fcc", "linkedin", "linkedin learning",
     "cisco", "google", "microsoft", "amazon", "aws", "meta", "ibm", "oracle",
@@ -60,10 +50,7 @@ _KNOWN_PROVIDERS = {
     "certiport", "testout", "lpi", "lpic", "python institute",
 }
 
-# A line is a provider when it is a short (1–4 word) phrase AND either:
-#   a) it is an exact known-provider match (case-insensitive), OR
-#   b) it is purely title-cased / ALL-CAPS with no digits and no cert-like
-#      keywords that would indicate it is itself a cert name.
+# Keywords that indicate a line is a cert title rather than a provider name.
 _CERT_KEYWORD_RE = re.compile(
     r"\b(certified|certification|certificate|associate|professional|"
     r"engineer|developer|architect|foundation|practitioner|specialist|"
@@ -73,6 +60,7 @@ _CERT_KEYWORD_RE = re.compile(
     re.I,
 )
 
+# A provider line is title-cased / ALL-CAPS with no lowercase-leading words.
 _PROVIDER_LINE_RE = re.compile(
     r"^(?:[A-ZÁÉÍÓÚÑÜ][A-Za-záéíóúñü0-9]*(?:[\s\-][A-ZÁÉÍÓÚÑÜ][A-Za-záéíóúñü0-9]*)*)$"
 )
@@ -87,11 +75,9 @@ _INLINE_PROVIDER_DASH_RE = re.compile(
 
 def _protect_inline_dash(line: str) -> str:
     """
-    If the line matches "Provider - Cert Name", replace the separating " - "
-    with "  —  " (em-dash + spaces).  This prevents any downstream logic from
-    treating the dash as a list delimiter or the provider word as a sub-header.
-    The em-dash form is visually identical when the cert name is ultimately
-    returned, and SBERT/fuzzy matching works on the cert portion regardless.
+    Replace " - " with "  —  " in "Provider - Cert Name" lines so downstream
+    logic never treats the dash as a list delimiter or splits off the provider
+    as a sub-header. Visually identical; matching still works on the cert part.
     """
     m = _INLINE_PROVIDER_DASH_RE.match(line)
     if m:
@@ -101,24 +87,17 @@ def _protect_inline_dash(line: str) -> str:
 
 def _is_provider_line(line: str) -> bool:
     """
-    Return True when line looks like a cert issuer / platform name rather than
-    a cert title.
-
-    Rules (all must pass):
-      1. 1–4 words, no digits embedded in words (version numbers disqualify).
-      2. Matches the known-provider list  OR  contains no cert-title keywords.
-      3. Structurally title-cased / ALL-CAPS (no lowercase-leading words).
+    True if `line` looks like a cert issuer/platform name rather than a cert
+    title: 1–4 words, no cert-title keywords (unless it's a known provider),
+    and title-cased or ALL-CAPS.
     """
     words = line.split()
     if not (1 <= len(words) <= 4):
         return False
-    # Known provider → always treat as provider
     if line.lower() in _KNOWN_PROVIDERS:
         return True
-    # Contains cert-title keywords → it IS a cert, not a provider
     if _CERT_KEYWORD_RE.search(line):
         return False
-    # Must be title-cased or ALL-CAPS (no all-lowercase words)
     if not _PROVIDER_LINE_RE.match(line):
         return False
     return True
@@ -126,27 +105,10 @@ def _is_provider_line(line: str) -> bool:
 
 def _normalize_cert_lines(section_text: str) -> str:
     """
-    Pre-process the raw certifications section text so that cert entries
-    referencing an issuing provider are preserved as a single line.
-
-    Two patterns are handled:
-
-    1. Inline dash  — "Udemy - Flutter Certified Programmer"
-       Already on one line. Replace the separating " - " with "  —  " so that
-       downstream splitters and _strip_subheader never break the entry apart.
-
-    2. Split lines (including \\n\\n-separated)  — provider on its own line /
-       paragraph, cert name on the next non-empty line / paragraph.  We
-       identify provider lines with _is_provider_line(), find the very next
-       non-empty line (skipping any blank lines), and join them as
-       "Provider - Cert Name", then apply pattern-1 normalisation.
-
-       Example (\\n\\n layout from the PDF extractor):
-           FreeCodeCamp\\n\\nCertified Information Technology (ITF+)\\n\\nCisco...
-       After normalisation:
-           FreeCodeCamp  —  Certified Information Technology (ITF+)
-           Cisco  —  Responsive Web Design
-           ...
+    Pre-process the raw certifications section so provider + cert name stay
+    paired as a single entry, whether they're already inline or split across
+    lines (e.g. "FreeCodeCamp" then "Certified Information Technology (ITF+)"
+    on the next non-empty line).
     """
     lines = section_text.splitlines()
     out: list[str] = []
@@ -157,9 +119,8 @@ def _normalize_cert_lines(section_text: str) -> str:
             i += 1
             continue
 
-        # ── Pattern 2: provider line followed by cert line ───────────────────
+        # Provider line followed by a cert line → join them.
         if _is_provider_line(line):
-            # Find the actual index of the next non-empty line (skips blanks).
             next_idx = None
             for j in range(i + 1, len(lines)):
                 if lines[j].strip():
@@ -168,15 +129,13 @@ def _normalize_cert_lines(section_text: str) -> str:
 
             if next_idx is not None:
                 nxt = lines[next_idx].strip()
-                # Only pair when the next line is NOT itself a bare provider
-                # (guards against two consecutive provider-only lines).
+                # Don't pair two consecutive provider-only lines.
                 if not _is_provider_line(nxt) and len(nxt.split()) >= 1:
                     combined = f"{line} - {nxt}"
-                    i = next_idx + 1          # advance past the consumed cert line
+                    i = next_idx + 1
                     out.append(_protect_inline_dash(combined))
                     continue
 
-        # ── Pattern 1: inline dash ───────────────────────────────────────────
         out.append(_protect_inline_dash(line))
         i += 1
 
