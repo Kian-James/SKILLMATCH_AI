@@ -22,6 +22,7 @@ RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
 
 # Render sets $PORT at runtime; default 8001 covers local `docker run`.
 ENV PORT=8001
+ENV MALLOC_ARENA_MAX=1
 EXPOSE 8001
 
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]

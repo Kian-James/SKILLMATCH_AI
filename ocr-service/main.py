@@ -260,27 +260,54 @@ def _run_ocr(file_path: str) -> str:
     if reader is None:
         raise RuntimeError("OCR reader is not ready yet.")
 
+    import torch
+    import gc
+
     lines: list[str] = []
 
     if file_path.lower().endswith(".pdf"):
         try:
+            from pdf2image.pdf2image import pdfinfo_from_path
             from pdf2image import convert_from_path
-            with tempfile.TemporaryDirectory() as tmpdir:
-                pages = convert_from_path(file_path, dpi=200, output_folder=tmpdir)
-                for img in pages:
-                    raw = reader.readtext(np.array(img), detail=1, paragraph=False)
+
+            info = pdfinfo_from_path(file_path)
+            num_pages = info["Pages"]
+
+            for page_num in range(1, num_pages + 1):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    # first_page/last_page limits rendering to ONE page at a
+                    # time, instead of rasterizing the whole document into
+                    # memory at once — this is what actually caps peak
+                    # memory regardless of how many pages the resume has.
+                    page_imgs = convert_from_path(
+                        file_path, dpi=150, output_folder=tmpdir,
+                        first_page=page_num, last_page=page_num,
+                    )
+                    img = page_imgs[0]
+                    img_arr = np.array(img)
+
+                    with torch.inference_mode():
+                        raw = reader.readtext(
+                            img_arr, detail=1, paragraph=False,
+                            canvas_size=1280,
+                        )
                     lines.extend(_sort_boxes_reading_order(raw))
                     lines.append("")  # page-break marker
+
+                    del img, img_arr, page_imgs, raw
+                    gc.collect()
         except Exception as exc:
-            log.warning("[OCR] pdf2image failed (%s); direct image fallback ...", exc)
+            log.warning("[OCR] Page-by-page PDF handling failed (%s); direct image fallback ...", exc)
             try:
-                raw = reader.readtext(file_path, detail=1, paragraph=False)
+                with torch.inference_mode():
+                    raw = reader.readtext(file_path, detail=1, paragraph=False, canvas_size=1280)
                 lines = _sort_boxes_reading_order(raw)
             except Exception as exc2:
                 log.warning("[OCR] Direct fallback also failed (%s).", exc2)
     else:
         try:
-            raw = reader.readtext(file_path, detail=1, paragraph=False)
+            with torch.inference_mode():
+                raw = reader.readtext(file_path, detail=1, paragraph=False, canvas_size=1280)
             lines = _sort_boxes_reading_order(raw)
         except Exception as exc:
             log.warning("[OCR] readtext failed (%s).", exc)
@@ -321,6 +348,8 @@ def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        import gc
+        gc.collect()
 
     try:
         import resource
