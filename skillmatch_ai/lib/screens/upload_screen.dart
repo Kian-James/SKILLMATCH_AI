@@ -2,9 +2,11 @@
 // Analysis mode: Targeted | Full  ×  File mode: PDF | Image
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dotted_border/dotted_border.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
@@ -55,6 +57,7 @@ class _UploadScreenState extends State<UploadScreen>
 
   PlatformFile? _pickedPdf;
   XFile? _pickedImage;
+  Uint8List? _pickedImageBytes;
 
   bool _isAnalyzing = false;
   String _statusMessage = '';
@@ -288,11 +291,17 @@ class _UploadScreenState extends State<UploadScreen>
   Future<void> _pickImage() async {
     final x = await _imagePicker.pickImage(
         source: ImageSource.gallery, imageQuality: 95);
-    if (x != null)
-      setState(() {
-        _pickedImage = x;
-        _error = null;
-      });
+    if (x == null) return;
+
+    // XFile.readAsBytes() works on every platform (including web), unlike
+    // dart:io File — so we cache the bytes once here and reuse them both
+    // for the preview and for the upload request.
+    final bytes = await x.readAsBytes();
+    setState(() {
+      _pickedImage = x;
+      _pickedImageBytes = bytes;
+      _error = null;
+    });
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -369,16 +378,17 @@ class _UploadScreenState extends State<UploadScreen>
         case FileMode.pdf:
           setState(() => _statusMessage = 'Extracting & analyzing (~30s)…');
           return _api.analyzeTargetCareer(
-              filePath: _pickedPdf!.path ?? '',
+              filePath: kIsWeb ? '' : (_pickedPdf!.path ?? ''),
               fileName: fileName,
               targetJob: targetJob,
               fileBytes: _pickedPdf!.bytes);
         case FileMode.image:
           setState(() => _statusMessage = 'Uploading image for analysis…');
           return _api.analyzeTargetCareerImage(
-              imagePath: _pickedImage!.path,
+              imagePath: kIsWeb ? _pickedImage!.name : _pickedImage!.path,
               fileName: fileName,
-              targetJob: targetJob);
+              targetJob: targetJob,
+              fileBytes: _pickedImageBytes);
       }
     });
 
@@ -441,13 +451,15 @@ class _UploadScreenState extends State<UploadScreen>
         case FileMode.pdf:
           setState(() => _statusMessage = 'Full pipeline analysis (~45s)…');
           return _api.analyzeFullResume(
-              filePath: _pickedPdf!.path ?? '',
+              filePath: kIsWeb ? '' : (_pickedPdf!.path ?? ''),
               fileName: fileName,
               fileBytes: _pickedPdf!.bytes);
         case FileMode.image:
           setState(() => _statusMessage = 'Uploading image for full analysis…');
           return _api.analyzeFullResumeImage(
-              imagePath: _pickedImage!.path, fileName: fileName);
+              imagePath: kIsWeb ? _pickedImage!.name : _pickedImage!.path,
+              fileName: fileName,
+              fileBytes: _pickedImageBytes);
       }
     });
 
@@ -827,8 +839,11 @@ class _UploadScreenState extends State<UploadScreen>
     return Stack(children: [
       ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: Image.file(File(_pickedImage!.path),
-            width: double.infinity, height: 190, fit: BoxFit.cover),
+        child: _pickedImageBytes != null
+            ? Image.memory(_pickedImageBytes!,
+                width: double.infinity, height: 190, fit: BoxFit.cover)
+            : Image.file(File(_pickedImage!.path),
+                width: double.infinity, height: 190, fit: BoxFit.cover),
       ),
       Positioned.fill(
           child: Container(

@@ -13,6 +13,7 @@ import logging
 import faiss
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,25 @@ app = FastAPI(
         "fit-reason generation only) -> SBERT semantic matching (skills + certs "
         "discovery AND job matching) -> FAISS (similarity search) -> Firestore"
     ),
+)
+
+# Allow the deployed web frontend (and localhost during development) to call
+# this API from the browser. Without this, the browser blocks every response
+# with a CORS error even though the request succeeds on the server.
+_default_origins = [
+    "https://skillmatch-ai-frontend.onrender.com",
+    "http://localhost:5000",
+    "http://localhost:8080",
+]
+_env_origins = os.environ.get("ALLOWED_ORIGINS", "")
+allowed_origins = _default_origins + [o.strip() for o in _env_origins.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # 384 dims for all-MiniLM-L6-v2
