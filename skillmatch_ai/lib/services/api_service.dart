@@ -22,7 +22,12 @@ class ApiService {
   // ── Change this to your backend host ─────────────────────────────────────
   static const String baseUrl =
       'https://skillmatch-ai-b5s7.onrender.com'; // your machine's IP
-  static const _timeout = Duration(minutes: 3);
+  // Bumped from 3 to 5 minutes: the backend now queues a second concurrent
+  // request instead of freezing (see backend fix), but a queued request can
+  // still take close to 2x a single run's time to finish. This gives it
+  // enough room to actually complete instead of giving up right as it would
+  // have succeeded.
+  static const _timeout = Duration(minutes: 5);
 
   // ══════════════════════════════════════════════════════════════════════════
   //  /target-career-analysis
@@ -162,7 +167,8 @@ class ApiService {
     final streamed = await req.send().timeout(
           _timeout,
           onTimeout: () => throw Exception(
-              'Request timed out — the server may still be processing. Try again.'),
+              'This is taking longer than usual (the server may be busy with '
+              'another request). Please try again in a moment.'),
         );
     final res = await http.Response.fromStream(streamed);
     final json = jsonDecode(res.body) as Map<String, dynamic>;
