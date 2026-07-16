@@ -9,6 +9,7 @@ and response assembly.
 import os
 import shutil
 import logging
+import threading
 
 import faiss
 import numpy as np
@@ -61,9 +62,18 @@ app.add_middleware(
 # 384 dims for all-MiniLM-L6-v2
 _integrity_index = faiss.IndexFlatL2(384)
 
+# Now that endpoints run in a threadpool (see `def` not `async def` below),
+# two requests CAN run at the same time instead of one fully blocking the
+# other. That's good for avoiding timeouts, but on a 512MB instance running
+# two full OCR/SBERT/inference pipelines simultaneously risks an out-of-memory
+# crash. This semaphore caps how many pipeline runs execute at once — extra
+# requests wait briefly (without freezing the server) instead of piling on
+# memory pressure. Raise this only if you move to a bigger Render plan.
+_pipeline_semaphore = threading.Semaphore(1)
+
 
 @app.post("/thesis-full-analysis")
-async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
+def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
     """Full pipeline analysis for a single uploaded resume PDF."""
 
     temp_path = f"temp_{file.filename}"
@@ -71,7 +81,8 @@ async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
         shutil.copyfileobj(file.file, buf)
 
     try:
-        result = run_pipeline(temp_path, file.filename)
+        with _pipeline_semaphore:
+            result = run_pipeline(temp_path, file.filename)
     except HTTPException:
         raise
     except Exception as exc:
@@ -161,7 +172,7 @@ async def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
 
 
 @app.post("/target-career-analysis")
-async def target_career_analysis(
+def target_career_analysis(
         file:       UploadFile = File(...),
         target_job: str        = Form(...),
 ) -> dict:
@@ -182,7 +193,8 @@ async def target_career_analysis(
         shutil.copyfileobj(file.file, buf)
 
     try:
-        result = run_pipeline(temp_path, file.filename)
+        with _pipeline_semaphore:
+            result = run_pipeline(temp_path, file.filename)
     except HTTPException:
         raise
     except Exception as exc:
