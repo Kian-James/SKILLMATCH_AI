@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/models.dart';
@@ -239,6 +240,9 @@ class _UploadScreenState extends State<UploadScreen>
 
   // ── File picking ──────────────────────────────────────────────────────────
 
+  /// Max allowed pages for an uploaded resume PDF.
+  static const int _maxPdfPages = 1;
+
   Future<void> _pickPdf() async {
     final r = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -246,12 +250,39 @@ class _UploadScreenState extends State<UploadScreen>
       withData: true,
       allowCompression: false,
     );
-    if (r != null && r.files.isNotEmpty) {
-      setState(() {
-        _pickedPdf = r.files.first;
-        _error = null;
-      });
+    if (r == null || r.files.isEmpty) return;
+
+    final file = r.files.first;
+    final bytes = file.bytes;
+
+    // Verify page count before accepting the file. `withData: true` above
+    // guarantees bytes are populated on every platform (web included).
+    if (bytes == null) {
+      setState(() => _error = 'Could not read that PDF. Please try again.');
+      return;
     }
+
+    int pageCount;
+    try {
+      final doc = PdfDocument(inputBytes: bytes);
+      pageCount = doc.pages.count;
+      doc.dispose();
+    } catch (_) {
+      setState(() => _error = 'That file doesn\'t look like a valid PDF.');
+      return;
+    }
+
+    if (pageCount > _maxPdfPages) {
+      setState(() => _error =
+          'Your resume PDF has $pageCount pages. Please upload a resume that is '
+              '$_maxPdfPages page or fewer.');
+      return;
+    }
+
+    setState(() {
+      _pickedPdf = file;
+      _error = null;
+    });
   }
 
   Future<void> _pickImage() async {

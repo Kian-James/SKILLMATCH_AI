@@ -59,6 +59,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import logging
 import re
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 
 import numpy as np
@@ -70,6 +71,14 @@ log = logging.getLogger(__name__)
 OCR_LANGUAGES = os.getenv("EASYOCR_LANGUAGES", "en").split(",")
 
 _ocr_reader = None
+
+# Only one OCR run at a time. FastAPI runs sync route handlers in a thread
+# pool that can execute several requests concurrently by default — without
+# this, two resumes uploaded close together could run readtext() in
+# parallel and double the memory spike right when there's no headroom for
+# it. This forces a second request to genuinely wait, not run alongside
+# the first.
+_ocr_semaphore = threading.Semaphore(1)
 
 
 @asynccontextmanager
@@ -340,8 +349,11 @@ def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
         buf.write(file.file.read())
 
     try:
-        text = _run_ocr(temp_path)
-        quality = _alnum_ratio(text)
+        log.info("[OCR] Waiting for OCR slot (queue depth may apply) ...")
+        with _ocr_semaphore:
+            log.info("[OCR] Slot acquired, running OCR ...")
+            text = _run_ocr(temp_path)
+            quality = _alnum_ratio(text)
     except Exception as exc:
         log.exception("[OCR service] extraction error")
         raise HTTPException(status_code=500, detail=str(exc))

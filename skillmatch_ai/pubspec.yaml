@@ -36,6 +36,8 @@ dependencies:
   # Charts
   fl_chart: ^0.68.0
 
+  syncfusion_flutter_pdf: ^34.1.31
+
   # UI
   google_fonts: ^6.2.1
   animate_do: ^3.3.4
@@ -52,5 +54,18 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^3.0.0
 
+  # App icon generation
+  flutter_launcher_icons: ^0.14.1
+
+  # Splash screen generation
+  flutter_native_splash: ^2.4.1
+
 flutter:
   uses-material-design: true
+  assets:
+    - assets/skillmatch_icon_1024.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/skillmatch_splash.png"

@@ -10,6 +10,7 @@ import 'firebase_options.dart';
 import 'models/models.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
 import 'theme.dart';
 
 Future<void> main() async {
@@ -65,21 +66,36 @@ class _ResumeAnalyzerAppState extends State<ResumeAnalyzerApp> {
   }
 }
 
-class _AuthGate extends StatelessWidget {
+class _AuthGate extends StatefulWidget {
   const _AuthGate();
+
+  @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  // Enforces a minimum splash duration so the entrance animation
+  // (and poster content) always gets to play out, even if Firebase
+  // resolves auth state almost instantly.
+  bool _minSplashElapsed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(milliseconds: 1600), () {
+      if (mounted) setState(() => _minSplashElapsed = true);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return Scaffold(
-            body: Center(
-              child:
-                  CircularProgressIndicator(color: AppColors.of(context).brand),
-            ),
-          );
+        final authResolved = snap.connectionState != ConnectionState.waiting;
+
+        if (!authResolved || !_minSplashElapsed) {
+          return const SplashScreen();
         }
 
         final firebaseUser = snap.data;
