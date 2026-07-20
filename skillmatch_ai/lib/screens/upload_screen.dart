@@ -39,12 +39,12 @@ class _UploadScreenState extends State<UploadScreen>
   final _keyHeader = GlobalKey();
   final _keyAnalysisToggle = GlobalKey();
   final _keyAnalysisDesc = GlobalKey();
-  final _keyFileSelector = GlobalKey();
   final _keyDropZone = GlobalKey();
   final _keyTargetField = GlobalKey();
   final _keyAnalyzeBtn = GlobalKey();
   final _keyPdfTab = GlobalKey();
   final _keyImageTab = GlobalKey();
+  final _keyInfoBtn = GlobalKey();
 
   bool _showTutorial = false;
 
@@ -233,10 +233,10 @@ class _UploadScreenState extends State<UploadScreen>
           shape: SpotlightShape.roundedRect,
         ),
         TutorialStep(
-          targetKey: _keyAnalyzeBtn,
+          targetKey: _keyInfoBtn,
           title: 'You\'re all set! 🎉',
           body:
-              'That\'s everything you need to know. You can always tap the ⓘ button at the top right to replay this guide whenever you need a refresher.',
+              'That\'s everything you need to know. You can always tap this ⓘ button to replay this guide whenever you need a refresher.',
           shape: SpotlightShape.circle,
         ),
       ];
@@ -536,10 +536,13 @@ class _UploadScreenState extends State<UploadScreen>
               IconButton(
                 onPressed: _retryTutorial,
                 tooltip: 'How to use this screen',
-                icon: Icon(
-                  Icons.info_outline_rounded,
-                  color: c.textTertiary,
-                  size: 20,
+                icon: KeyedSubtree(
+                  key: _keyInfoBtn,
+                  child: Icon(
+                    Icons.info_outline_rounded,
+                    color: c.textTertiary,
+                    size: 20,
+                  ),
                 ),
               ),
               const SizedBox(width: 4),
@@ -571,10 +574,7 @@ class _UploadScreenState extends State<UploadScreen>
                     const SizedBox(height: 20),
 
                     // ── File mode tabs ──────────────────────────────────
-                    KeyedSubtree(
-                      key: _keyFileSelector,
-                      child: _fileModeSelector(),
-                    ),
+                    _fileModeSelector(),
                     const SizedBox(height: 16),
 
                     // ── Drop zone ───────────────────────────────────────

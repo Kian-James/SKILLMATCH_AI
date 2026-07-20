@@ -103,13 +103,23 @@ class _TutorialOverlayState extends State<TutorialOverlay>
     if (_current > 0) _goTo(_current - 1);
   }
 
-  // Get bounding rect of the target widget in global coordinates
+  // Get bounding rect of the target widget, in the SAME coordinate space
+  // this overlay itself is painted in — not the whole app's global space.
+  // UploadScreen is nested inside home_shell's own top bar, so plain
+  // localToGlobal(Offset.zero) (app-root-relative) doesn't match the local
+  // canvas this widget paints on, and every spotlight lands offset by
+  // whatever sits above this overlay. Passing `ancestor:` fixes that by
+  // returning the offset relative to this overlay's own RenderBox instead.
   Rect? _targetRect(TutorialStep step) {
     final ctx = step.targetKey.currentContext;
     if (ctx == null) return null;
     final box = ctx.findRenderObject() as RenderBox?;
-    if (box == null) return null;
-    final pos = box.localToGlobal(Offset.zero);
+    if (box == null || !box.attached) return null;
+
+    final overlayBox = context.findRenderObject() as RenderBox?;
+    if (overlayBox == null || !overlayBox.attached) return null;
+
+    final pos = box.localToGlobal(Offset.zero, ancestor: overlayBox);
     return pos & box.size;
   }
 
@@ -118,64 +128,86 @@ class _TutorialOverlayState extends State<TutorialOverlay>
     final step = widget.steps[_current];
     final total = widget.steps.length;
     final c = AppColors.of(context);
-    final size = MediaQuery.of(context).size;
     final rect = _targetRect(step);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Material(
       color: Colors.transparent,
-      child: Stack(
-        children: [
-          // ── Dimmed backdrop with spotlight cutout ─────────────────────
-          AnimatedBuilder(
-            animation: _spotAnim,
-            builder: (_, __) {
-              return CustomPaint(
-                size: size,
-                painter: _SpotlightPainter(
-                  rect: rect,
-                  shape: step.shape,
-                  progress: _spotAnim.value,
-                  dimColor: Colors.black.withOpacity(isDark ? 0.72 : 0.55),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Use the box this overlay was actually given, not the raw
+          // device screen size — this screen is nested inside home_shell's
+          // body (above its bottom nav bar), so MediaQuery's full-screen
+          // size overstates how much vertical room is really available
+          // here and pushes the card past the bottom of the real box.
+          final size = constraints.biggest;
+          return Stack(
+            children: [
+              // ── Dimmed backdrop with spotlight cutout ─────────────────
+              AnimatedBuilder(
+                animation: _spotAnim,
+                builder: (_, __) {
+                  return CustomPaint(
+                    size: size,
+                    painter: _SpotlightPainter(
+                      rect: rect,
+                      shape: step.shape,
+                      progress: _spotAnim.value,
+                      dimColor: Colors.black.withOpacity(isDark ? 0.72 : 0.55),
+                    ),
+                  );
+                },
+              ),
+
+              // ── Tap outside → next ────────────────────────────────────
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _next,
                 ),
-              );
-            },
-          ),
+              ),
 
-          // ── Tap outside → next ────────────────────────────────────────
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: _next,
-            ),
-          ),
-
-          // ── Step card ─────────────────────────────────────────────────
-          _buildCard(context, step, total, c, size, rect),
-        ],
+              // ── Step card ───────────────────────────────────────────
+              _buildCard(context, step, total, c, size, rect),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildCard(BuildContext context, TutorialStep step, int total,
       AppColors c, Size size, Rect? rect) {
+    // Respect the device's actual safe area (status bar / notch / camera
+    // cutout up top, home indicator down below) instead of a hardcoded
+    // pixel margin — a fixed 60px can land the card (and its buttons)
+    // partly under system UI on devices with taller status bars/notches.
+    final safePad = MediaQuery.of(context).padding;
+    final double minTop = safePad.top + 16;
+    final double minBottom = safePad.bottom + 16;
+    final double maxTop = size.height - 320;
+
     // Decide if card goes above or below the spotlight
     final double screenMid = size.height / 2;
     final double rectMid = rect != null ? rect.center.dy : screenMid;
     final bool cardBelow = rectMid < screenMid;
 
-    final double cardTop = cardBelow
-        ? (rect != null ? rect.bottom + 20 : screenMid + 60)
-        : null as double? ?? 0;
-    final double cardBottom = !cardBelow
-        ? (rect != null ? size.height - rect.top + 20 : size.height / 2 - 60)
-        : null as double? ?? 0;
+    double? cardTop;
+    double? cardBottom;
+    if (cardBelow) {
+      final raw = rect != null ? rect.bottom + 20 : screenMid + 60;
+      cardTop = raw.clamp(minTop, maxTop);
+    } else {
+      final raw =
+          rect != null ? size.height - rect.top + 20 : size.height / 2 - 60;
+      cardBottom = raw.clamp(minBottom, maxTop);
+    }
 
     return Positioned(
       left: 20,
       right: 20,
-      top: cardBelow ? cardTop.clamp(60, size.height - 280) : null,
-      bottom: !cardBelow ? cardBottom.clamp(60, size.height - 280) : null,
+      top: cardTop,
+      bottom: cardBottom,
       child: SlideTransition(
         position: _cardAnim,
         child: FadeTransition(
