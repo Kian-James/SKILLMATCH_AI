@@ -48,18 +48,27 @@ log = logging.getLogger(__name__)
 logging.getLogger("core.skills").setLevel(logging.DEBUG)
 
 
-def run_pipeline(temp_path: str, file_name: str) -> dict:
+def extract_and_discover(temp_path: str, file_name: str) -> dict:
     """
-    Execute the full resume analysis pipeline.
+    Execute Stages 1-2 only: text acquisition + skill/cert discovery.
+
+    Deliberately stops short of Stage 3 (job-corpus scoring), so callers
+    that only need the discovered skills/certs against ONE job (e.g. the
+    target-career endpoint) don't pay for encoding + scoring + fit-reason
+    generation against the entire jobs corpus.
 
     Parameters
     ----------
     temp_path : path to the saved upload on disk
-    file_name : original filename (for Firestore record)
+    file_name : original filename (unused here, kept for a consistent
+                signature with run_pipeline / future persistence needs)
 
     Returns
     -------
-    Full result dict consumed by the FastAPI endpoint.
+    dict with resume_text, ocr_quality, text_source, discovered_skills,
+    discovered_certs, section debug slices, and jobs_corpus (so callers
+    doing a single-job lookup don't need a second load_analyzer_data()
+    round-trip).
     """
     # Stage 0 — load corpus
     firestore_skills, jobs_corpus, firestore_certs = load_analyzer_data()
@@ -88,6 +97,44 @@ def run_pipeline(temp_path: str, file_name: str) -> dict:
         extra_certs   = firestore_certs if firestore_certs else None,
         is_native_pdf = is_native,
     )
+
+    return {
+        "resume_text":          resume_text,
+        "ocr_quality":          ocr_quality,
+        "text_source":          text_source,
+        "discovered_skills":    discovered_skills,
+        "discovered_certs":     discovered_certificates,
+        "skills_section_debug": skills_section_debug,
+        "cert_section_debug":   cert_section_debug,
+        "jobs_corpus":          jobs_corpus,
+    }
+
+
+def run_pipeline(temp_path: str, file_name: str) -> dict:
+    """
+    Execute the full resume analysis pipeline (Stages 1-3 against the
+    whole jobs corpus, then persist). Used by /thesis-full-analysis,
+    which needs a ranked top-5 across every job.
+
+    Parameters
+    ----------
+    temp_path : path to the saved upload on disk
+    file_name : original filename (for Firestore record)
+
+    Returns
+    -------
+    Full result dict consumed by the FastAPI endpoint.
+    """
+    stage_1_2   = extract_and_discover(temp_path, file_name)
+    jobs_corpus = stage_1_2["jobs_corpus"]
+
+    resume_text              = stage_1_2["resume_text"]
+    ocr_quality               = stage_1_2["ocr_quality"]
+    text_source               = stage_1_2["text_source"]
+    discovered_skills         = stage_1_2["discovered_skills"]
+    discovered_certificates   = stage_1_2["discovered_certs"]
+    skills_section_debug      = stage_1_2["skills_section_debug"]
+    cert_section_debug        = stage_1_2["cert_section_debug"]
 
     # Stage 3 — hybrid scoring + per-job semantic validation (skills AND certs)
     top_5_matches = calculate_cosine_similarity(

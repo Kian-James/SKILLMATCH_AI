@@ -27,7 +27,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 from config        import HOST, PORT, HF_MODEL
-from pipeline      import run_pipeline
+from pipeline      import run_pipeline, extract_and_discover
 
 log = logging.getLogger(__name__)
 
@@ -179,9 +179,12 @@ def target_career_analysis(
     """
     Targeted resume analysis against a specific job title.
 
-    Runs the standard extraction pipeline, then looks up `target_job` in
-    the Firestore corpus and returns a focused gap report (matched vs.
-    missing skills/certs) for that one job — no top-5 ranking.
+    Runs Stages 1-2 only (text acquisition + skill/cert discovery) — NOT
+    the full pipeline — then looks up `target_job` in the Firestore corpus
+    and scores that one job directly. This deliberately skips scoring
+    against the other ~180 jobs in the corpus: no top-5 ranking, no
+    fit_reason generation, no FAISS encoding pass over the full corpus.
+    Only the target job gets encoded and scored.
 
     Uses the same SBERT semantic matching as the main scoring pipeline,
     so wording differences between resume and job posting don't count
@@ -194,7 +197,7 @@ def target_career_analysis(
 
     try:
         with _pipeline_semaphore:
-            result = run_pipeline(temp_path, file.filename)
+            result = extract_and_discover(temp_path, file.filename)
     except HTTPException:
         raise
     except Exception as exc:
@@ -204,15 +207,11 @@ def target_career_analysis(
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    if not result["top_5_matches"]:
-        raise HTTPException(status_code=500, detail="Scoring returned no results.")
-
-    # Search the full corpus by title (not top_5_matches, which is score-gated
-    # and would hide an aspirational job the candidate scores poorly on).
-    from db           import load_analyzer_data as _load
     from core.scoring import calculate_cosine_similarity
 
-    _, jobs_corpus_full, _ = _load()
+    # jobs_corpus already came back from extract_and_discover's own
+    # load_analyzer_data() call above — no second corpus fetch needed.
+    jobs_corpus_full = result["jobs_corpus"]
 
     target_lower = target_job.strip().lower()
 
