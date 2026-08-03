@@ -56,7 +56,7 @@ import re
 import sys
 import time
 import textwrap
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -124,24 +124,37 @@ def _c(colour: str, text: str) -> str:
 #   - "raw"      CER/WER : standard, order-sensitive, directly comparable
 #                          to numbers reported in other OCR papers.
 #   - "aligned"  CER/WER : same Levenshtein computation, but the
-#                          hypothesis is first split into blocks
-#                          (paragraphs) and greedily reordered to match
-#                          the reference block order via fuzzy
-#                          block-to-block matching, BEFORE the
-#                          character/word edit distance is computed. This
-#                          isolates genuine recognition errors from
-#                          section-ordering differences.
+#                          hypothesis is first reordered at TWO levels
+#                          before the character/word edit distance is
+#                          computed:
+#                            1. Block level  -- split into paragraphs and
+#                               greedily reordered to match the reference
+#                               block order via fuzzy block-to-block
+#                               matching (_ocr_align_blocks).
+#                            2. Word level   -- within that reordered
+#                               text, individual words are re-sequenced
+#                               to match the reference's word order via
+#                               exact (case-insensitive) multiset
+#                               alignment (_ocr_align_words), so e.g.
+#                               hypothesis "quick the fox brown" against
+#                               reference "the quick brown fox" counts as
+#                               a full match instead of 4 substitutions --
+#                               the words were all found, just shuffled.
+#                          This isolates genuine recognition errors (a
+#                          word that's actually misread/missing) from
+#                          pure ordering/scrambling differences at either
+#                          granularity.
 #
 # The raw vs. aligned gap is itself a useful reportable statistic for a
 # methodology section: a large gap indicates the layout/ordering stage is
 # the dominant error source, while a small gap with still-low aligned
 # accuracy indicates genuine character-recognition error.
 #
-# NOTE on this block-alignment step specifically: it is matching whole
-# paragraphs of OCR'd text to find re-ordering, not comparing discovered
-# skills/certs to a job's requirements -- a different problem from the
-# skill/cert semantic matching used elsewhere in this file. rapidfuzz
-# remains appropriate here.
+# NOTE on this alignment step specifically: it is matching whole
+# paragraphs / individual words of OCR'd text to find re-ordering, not
+# comparing discovered skills/certs to a job's requirements -- a
+# different problem from the skill/cert semantic matching used elsewhere
+# in this file. rapidfuzz remains appropriate here.
 
 # Minimum token_sort_ratio (0-100) for two blocks to be considered the
 # "same section" during alignment. Below this, a hypothesis block is
@@ -223,6 +236,50 @@ def _ocr_align_blocks(hyp_blocks: list[str], ref_blocks: list[str]) -> list[str]
     return reordered
 
 
+def _ocr_align_words(hyp_words: list[str], ref_words: list[str]) -> list[str]:
+    """
+    Reorder hyp_words to match the sequence of ref_words, using exact
+    (case-insensitive) multiset alignment.
+
+    This is the word-level counterpart to _ocr_align_blocks: it solves for
+    WORD order the same way that function solves for BLOCK order. Given
+    hyp "quick the fox brown" and ref "the quick brown fox", every word is
+    genuinely present -- only the order differs -- so this reorders the
+    hypothesis to "the quick brown fox" before edit distance is computed,
+    correctly scoring it as a full match rather than 4 substitutions.
+
+    Exact matching (not fuzzy) is deliberate here: at the word level, a
+    fuzzy match risks quietly forgiving genuine misreads (e.g. matching
+    "brwon" to "brown"), which is exactly the kind of character-level
+    recognition error CER/WER exist to catch. Reordering should only ever
+    fix ordering, never mask a misread word -- fuzzy word-level tolerance
+    is deliberately left to the separate bag_of_words_f1 metric instead.
+
+    Words in ref with no exact counterpart left in hyp are emitted as ""
+    (a genuine miss, still counted as an error). Leftover hyp words with
+    no match in ref are appended at the end (genuine extra content).
+    """
+    avail: dict[str, deque] = defaultdict(deque)
+    for i, w in enumerate(hyp_words):
+        avail[w.lower()].append(i)
+
+    used_hyp: set[int] = set()
+    reordered: list[str] = []
+    for w in ref_words:
+        key = w.lower()
+        bucket = avail.get(key)
+        if bucket:
+            hi = bucket.popleft()
+            reordered.append(hyp_words[hi])
+            used_hyp.add(hi)
+        else:
+            reordered.append("")
+
+    leftover = [w for i, w in enumerate(hyp_words) if i not in used_hyp]
+    reordered.extend(leftover)
+    return reordered
+
+
 def character_error_rate(hyp: str, ref: str) -> float:
     """
     CER = character-level Levenshtein edit distance / len(ref characters).
@@ -274,10 +331,10 @@ def bag_of_words_f1(hyp: str, ref: str) -> dict:
 
 @dataclass
 class OCRBenchmarkResult:
-    cer_raw:     float    # standard CER, sensitive to block/section order
-    wer_raw:     float    # standard WER, sensitive to block/section order
-    cer_aligned: float    # CER after block-reordering normalization
-    wer_aligned: float    # WER after block-reordering normalization
+    cer_raw:     float    # standard CER, sensitive to block/section AND word order
+    wer_raw:     float    # standard WER, sensitive to block/section AND word order
+    cer_aligned: float    # CER after block- and word-reordering normalization
+    wer_aligned: float    # WER after block- and word-reordering normalization
     bow_f1:      dict     # order-invariant bag-of-words precision/recall/F1
 
     char_accuracy_raw:     float = field(init=False)
@@ -319,7 +376,18 @@ def benchmark_ocr(hyp_text: str, ref_text: str) -> OCRBenchmarkResult:
 
     hyp_blocks = _ocr_split_blocks(hyp_text)
     ref_blocks = _ocr_split_blocks(ref_text)
-    aligned_hyp_text = "\n\n".join(_ocr_align_blocks(hyp_blocks, ref_blocks))
+    block_aligned_hyp_text = "\n\n".join(_ocr_align_blocks(hyp_blocks, ref_blocks))
+
+    # Second pass: within the block-reordered text, also re-sequence
+    # individual words to match the reference's word order (see
+    # _ocr_align_words) so within-block word shuffling -- e.g. "quick the
+    # fox brown" vs "the quick brown fox" -- isn't miscounted as
+    # recognition errors either.
+    ref_words = _ocr_tokenize_words(ref_text)
+    word_aligned_hyp_words = _ocr_align_words(
+        _ocr_tokenize_words(block_aligned_hyp_text), ref_words
+    )
+    aligned_hyp_text = " ".join(word_aligned_hyp_words)
 
     cer_aligned = character_error_rate(aligned_hyp_text, ref_text)
     wer_aligned = word_error_rate(aligned_hyp_text, ref_text)
@@ -632,21 +700,30 @@ def _print_methodology(mode: str) -> None:
           CER / WER (raw)          Character / Word Error Rate: edit distance from
                                     extracted text to expected_text, divided by
                                     reference length. Computed in reading order --
-                                    sensitive to section ordering.
+                                    sensitive to both section ordering and
+                                    word-within-section ordering.
 
-          CER / WER (aligned)      Same computation, but paragraphs are first
-                                    greedily reordered to match the reference's
-                                    section order before measuring edit distance.
-                                    Isolates genuine character misreads from whole
-                                    sections coming out in a different order.
+          CER / WER (aligned)      Same computation, but the hypothesis is first
+                                    reordered at two levels to match the
+                                    reference: (1) paragraphs are greedily
+                                    reordered to match the reference's section
+                                    order, then (2) within that, individual words
+                                    are re-sequenced to match the reference's word
+                                    order (exact, case-insensitive match -- e.g.
+                                    "quick the fox brown" now counts as a full
+                                    match against "the quick brown fox", not 4
+                                    errors). Isolates genuine character misreads
+                                    and truly missing/extra words from content
+                                    that's simply out of order.
 
           Bag-of-words F1          Word-level precision/recall/F1 with order
                                     ignored entirely. High bow-F1 + low WER means
                                     the gap is an ordering/scrambling artifact, not
                                     a recognition error.
 
-          Section-ordering impact  cer_raw - cer_aligned. Large gap -> ordering is
-                                    the dominant error source. Small gap -> genuine
+          Section-ordering impact  cer_raw - cer_aligned. Large gap -> ordering
+                                    (section- and/or word-level) is the dominant
+                                    error source. Small gap -> genuine
                                     character-level misreads.
 
         """))

@@ -344,7 +344,14 @@ async def health() -> dict:
 # blocking the event loop.
 @app.post("/extract-text")
 def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
-    temp_path = f"temp_{file.filename}"
+    # file.filename is client-supplied and untrusted -- it can legitimately
+    # contain "/" (e.g. a caller that uploads using its own local relative
+    # path as the filename) or, in a hostile case, "../" traversal
+    # sequences. Strip it down to just the basename so this always writes
+    # into the service's own working directory, never into a subdirectory
+    # (which may not exist -> FileNotFoundError) or outside it.
+    safe_name = os.path.basename(file.filename or "upload")
+    temp_path = f"temp_{safe_name}"
     with open(temp_path, "wb") as buf:
         buf.write(file.file.read())
 

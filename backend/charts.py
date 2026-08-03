@@ -147,6 +147,58 @@ def _chart_ocr_accuracy(results: list[dict], ax) -> None:
         ax.text(w + 0.015, yi - h / 2, f"{w:.0%}", va="center", fontsize=8, color=_DARK)
 
 
+# ── 1b. OCR raw vs aligned comparison ───────────────────────────────────
+def _chart_ocr_raw_vs_aligned(results: list[dict], ax) -> None:
+    """
+    Aggregate raw (order-sensitive) vs aligned (order-tolerant) character &
+    word accuracy, side by side. The gap between raw and aligned bars for
+    each metric is the "ordering penalty" — how much of the raw error is
+    caused by section/paragraph reordering rather than genuine character
+    misreads. A small gap means aligned isn't doing much work and the
+    error is real OCR quality; a large gap means a lot of the raw penalty
+    is just layout-order mismatch against expected_text.
+    """
+    import numpy as np
+    samples = [r for r in results if r.get("ocr") and r["ocr"].get("benchmark")]
+    if not samples:
+        _no_data_msg(ax, "OCR Accuracy: Raw vs Order-Tolerant (Aligned)",
+                     "Add expected_text to labels.json to enable OCR scoring.")
+        return
+
+    char_raw     = np.array([r["ocr"]["benchmark"]["char_accuracy_raw"]     for r in samples])
+    char_aligned = np.array([r["ocr"]["benchmark"]["char_accuracy_aligned"] for r in samples])
+    word_raw     = np.array([r["ocr"]["benchmark"]["word_accuracy_raw"]     for r in samples])
+    word_aligned = np.array([r["ocr"]["benchmark"]["word_accuracy_aligned"] for r in samples])
+
+    labels = ["Character\naccuracy", "Word\naccuracy"]
+    raw_means     = [char_raw.mean(),     word_raw.mean()]
+    aligned_means = [char_aligned.mean(), word_aligned.mean()]
+
+    x = np.arange(len(labels))
+    w = 0.32
+    bars_raw     = ax.bar(x - w / 2, raw_means,     width=w, color=_GREY,  label="Raw (order-sensitive)",  edgecolor="white")
+    bars_aligned = ax.bar(x + w / 2, aligned_means,  width=w, color=_BLUE, label="Aligned (order-tolerant)", edgecolor="white")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Accuracy (higher = better)", fontsize=11)
+    ax.set_title("OCR Accuracy: Raw vs Order-Tolerant (Aligned)", fontsize=14, fontweight="bold", pad=10)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.axhline(0.85, color=_GREEN, linestyle="--", linewidth=1, label="Good ≥ 85%")
+    ax.legend(fontsize=9, loc="upper right")
+
+    for bars, vals in ((bars_raw, raw_means), (bars_aligned, aligned_means)):
+        for bar, val in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, val + 0.02,
+                    f"{val:.1%}", ha="center", va="bottom", fontsize=10, color=_DARK, fontweight="bold")
+
+    for xi, (r, a) in enumerate(zip(raw_means, aligned_means)):
+        gap = a - r
+        ax.text(x[xi], min(r, a) - 0.07, f"ordering gap: {gap:+.1%}",
+                ha="center", va="top", fontsize=8.5, color=_GREY, style="italic")
+
+
 # ── 2. NLP extraction quality ───────────────────────────────────────────
 def _chart_nlp_prf(results: list[dict], ax) -> None:
     """
@@ -319,8 +371,10 @@ def _chart_pass_rate(results: list[dict], ax, mode: str = "pipeline", top_k: int
 
     ocrs = [r for r in results if r.get("ocr") and r["ocr"].get("benchmark")]
     if ocrs and mode in ("ocr", "pipeline"):
-        rate = sum(1 for r in ocrs if r["ocr"]["benchmark"]["char_accuracy_aligned"] >= 0.85) / len(ocrs)
-        slices.append((f"OCR char accuracy ≥ 85%", rate, _BLUE))
+        rate_raw     = sum(1 for r in ocrs if r["ocr"]["benchmark"]["char_accuracy_raw"]     >= 0.85) / len(ocrs)
+        rate_aligned = sum(1 for r in ocrs if r["ocr"]["benchmark"]["char_accuracy_aligned"] >= 0.85) / len(ocrs)
+        slices.append(("OCR char accuracy ≥ 85% (raw)",     rate_raw,     _GREY))
+        slices.append(("OCR char accuracy ≥ 85% (aligned)", rate_aligned, _BLUE))
 
     nlps = [r for r in results if r.get("nlp") and r["nlp"].get("f1") is not None]
     if nlps and mode in ("nlp", "pipeline"):
@@ -370,10 +424,15 @@ def _chart_aggregate_table(results: list[dict], ax, mode: str = "pipeline") -> N
     ocrs = [r for r in results if r.get("ocr") and r["ocr"].get("benchmark")]
     if ocrs and mode in ("ocr", "pipeline"):
         rows.append(("OCR", "", ""))
-        ca = np.array([r["ocr"]["benchmark"]["char_accuracy_aligned"] for r in ocrs])
-        wa = np.array([r["ocr"]["benchmark"]["word_accuracy_aligned"] for r in ocrs])
+        ca  = np.array([r["ocr"]["benchmark"]["char_accuracy_aligned"] for r in ocrs])
+        wa  = np.array([r["ocr"]["benchmark"]["word_accuracy_aligned"] for r in ocrs])
+        car = np.array([r["ocr"]["benchmark"]["char_accuracy_raw"]     for r in ocrs])
+        war = np.array([r["ocr"]["benchmark"]["word_accuracy_raw"]     for r in ocrs])
+        rows.append(("  Character accuracy (raw)",      f"{car.mean():.1%}", f"±{car.std():.1%}"))
         rows.append(("  Character accuracy (aligned)", f"{ca.mean():.1%}", f"±{ca.std():.1%}"))
+        rows.append(("  Word accuracy (raw)",           f"{war.mean():.1%}", f"±{war.std():.1%}"))
         rows.append(("  Word accuracy (aligned)",       f"{wa.mean():.1%}", f"±{wa.std():.1%}"))
+        rows.append(("  Ordering gap (char, aligned − raw)", f"{(ca.mean()-car.mean()):+.1%}", ""))
         rows.append(("  n samples", str(len(ocrs)), ""))
 
     nlps = [r for r in results if r.get("nlp") and r["nlp"].get("precision") is not None]
@@ -539,6 +598,14 @@ def generate_charts(
             _chart_ocr_accuracy(results, ax)
             fig.tight_layout(pad=1.5)
             _save(fig, "ocr_accuracy")
+
+            # 1b. Raw vs aligned comparison — separate page so the per-sample
+            # chart above stays uncluttered, but the ordering-gap context is
+            # still one page away.
+            fig, ax = plt.subplots(figsize=(8, 5.5))
+            _chart_ocr_raw_vs_aligned(results, ax)
+            fig.tight_layout(pad=1.5)
+            _save(fig, "ocr_raw_vs_aligned")
 
         # 2 & 3. NLP
         has_nlp_labels = any(r.get("nlp", {}).get("precision") is not None for r in results)

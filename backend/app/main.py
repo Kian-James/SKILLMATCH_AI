@@ -204,10 +204,13 @@ def target_career_analysis(
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+    if not result["top_5_matches"]:
+        raise HTTPException(status_code=500, detail="Scoring returned no results.")
+
     # Search the full corpus by title (not top_5_matches, which is score-gated
     # and would hide an aspirational job the candidate scores poorly on).
-    from db               import load_analyzer_data as _load
-    from core.validation  import semantic_verify
+    from db           import load_analyzer_data as _load
+    from core.scoring import calculate_cosine_similarity
 
     _, jobs_corpus_full, _ = _load()
 
@@ -229,54 +232,75 @@ def target_career_analysis(
     # Pick the richest match (most required skills) as ground truth
     target_job_doc: dict = max(candidates, key=lambda j: len(j.get("required_skills", [])))
 
-    # Skill gap
-    req_skills = target_job_doc.get("required_skills", [])
-    nlp = fuzzy_skill_verify(
-        discovered_list   = result["discovered_skills"],
-        ground_truth_list = req_skills,
-    )
-    match_ratio  = round(len(nlp["matched_skills"]) / len(req_skills), 4) if req_skills else 0.0
-    hybrid_score = match_ratio  # no job-corpus re-encoding pass for arbitrary targets
+    # Same Stage 3 scoring function the full analysis uses (hybrid score,
+    # semantic skill/cert partitioning, nlp_validation, fit_reason) — just
+    # scoped to a corpus of exactly one job instead of the whole corpus.
+    target_match = calculate_cosine_similarity(
+        resume_text   = result["resume_text"],
+        resume_skills = result["discovered_skills"],
+        jobs_corpus   = [target_job_doc],
+        top_k         = 1,
+        resume_certs  = result["discovered_certs"],
+    )[0]
 
-    # Cert gap
-    req_certs = target_job_doc.get("required_certifications", [])
-    cert_nlp  = fuzzy_skill_verify(
-        discovered_list   = result["discovered_certs"],
-        ground_truth_list = req_certs,
+    # Sanity check: does FAISS round-trip this resume's own embedding correctly?
+    from core.ocr_correction import get_sbert
+    _sbert     = get_sbert()
+    resume_vec = (
+        _sbert.encode(result["resume_text"], convert_to_tensor=False)
+        .reshape(1, -1)
+        .astype("float32")
     )
-    matched_certs = cert_nlp["matched_skills"]
-    missing_certs = cert_nlp["unmatched_skills"]
+    pre_count = _integrity_index.ntotal
+    _integrity_index.add(resume_vec)
+    D, I = _integrity_index.search(resume_vec, 1)
+    faiss_integrity = 100.0 if I[0][0] == pre_count and D[0][0] < 0.0001 else 0.0
 
     return {
-        "target_job": {
-            "job_id":   target_job_doc.get("id", ""),
-            "title":    target_job_doc.get("title", ""),
-            "industry": target_job_doc.get("industry", ""),
-        },
-        "resume_skills": {
-            "discovered_skills":  result["discovered_skills"],
-            "discovered_certs":   result["discovered_certs"],
-            "total_skills_found": len(result["discovered_skills"]),
-            "total_certs_found":  len(result["discovered_certs"]),
-        },
-        "skill_gap_analysis": {
-            "required_skills": req_skills,
-            "matched_skills":  nlp["matched_skills"],
-            "missing_skills":  nlp["unmatched_skills"],
-            "nlp_accuracy":    nlp["NLP_ACCURACY"],
-            "match_ratio":     match_ratio,
-            "hybrid_score":    hybrid_score,
-        },
-        "cert_gap_analysis": {
-            "required_certs": req_certs,
-            "matched_certs":  matched_certs,
-            "missing_certs":  missing_certs,
-            "nlp_accuracy":   cert_nlp["NLP_ACCURACY"],
-        },
-        "text_acquisition": {
+        "STAGE_1_TEXT_ACQUISITION": {
             "text_source": result["text_source"],
             "ocr_quality": f"{result['ocr_quality']}%",
             "char_count":  len(result["resume_text"]),
+            "raw_text":    result["resume_text"],
+        },
+        "STAGE_2_SKILL_EXTRACTION": {
+            "llm_model":                 HF_MODEL,
+            "matching":                  "SBERT semantic (cosine >= 0.80)",
+            "skills_section_rule_based": result["skills_section_debug"],
+            "discovered_skills":         result["discovered_skills"],
+        },
+        "STAGE_2_CERT_EXTRACTION": {
+            "llm_model":               HF_MODEL,
+            "matching":                "SBERT semantic (cosine >= 0.80)",
+            "cert_section_rule_based": result["cert_section_debug"],
+            "discovered_certificates": result["discovered_certs"],
+        },
+        "STAGE_3_TARGET_JOB_MATCHING": {
+            "matching_method":     "SBERT semantic cosine similarity (skills and certs)",
+            "ground_truth_source": "target_job_required_skills_and_certifications",
+            "target_job": {
+                "job_id":   target_match["job_id"],
+                "title":    target_match["title"],
+                "industry": target_match.get("industry", ""),
+            },
+            "score":              target_match["score"],
+            "skills": {
+                "ground_truth_count": len(target_match["required_skills"]),
+                "nlp_accuracy":       target_match["nlp_validation"]["NLP_ACCURACY"],
+                "matched_skills":     target_match["nlp_validation"]["matched_skills"],
+                "unmatched_skills":   target_match["nlp_validation"]["unmatched_skills"],
+            },
+            "certifications": {
+                "ground_truth_count": len(target_match["required_certifications"]),
+                "nlp_accuracy":       target_match["nlp_validation_certs"]["NLP_ACCURACY"],
+                "matched_certs":      target_match["matched_certs"],
+                "missing_certs":      target_match["missing_certs"],
+            },
+            "fit_reason": target_match.get("fit_reason", ""),
+        },
+        "STAGE_4_FAISS_INTEGRITY": {
+            "score":       f"{faiss_integrity}%",
+            "index_total": _integrity_index.ntotal,
         },
     }
 

@@ -4,6 +4,9 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 python evaluate_pipeline.py --labels labels.json --samples-pdf ./resumes/ --type pdf \
   --output report_pdf.json --charts --charts-prefix pdf
 
+python evaluate_pipeline.py --labels labels.json --samples-pdf ./resumes/ --type pdf \
+--output report_pdf.json --charts --charts-dir ./eval_charts
+
 # Images
 python evaluate_pipeline.py --labels labels.json --samples-img ./resumes-images/ --type img \
   --output report_img.json --charts --charts-prefix img

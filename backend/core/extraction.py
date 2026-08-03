@@ -17,6 +17,7 @@ Configure the microservice URL via the OCR_SERVICE_URL env var
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import httpx
 
@@ -37,7 +38,16 @@ def extract_text(file_path: str) -> tuple[str, float, bool]:
 
     try:
         with open(file_path, "rb") as f:
-            files = {"file": (file_path, f)}
+            # Send only the basename as the multipart filename -- file_path
+            # here is a LOCAL path on this machine (e.g. "resumes/foo.pdf" or
+            # an absolute path) and is meaningless to the OCR service on the
+            # other end. The service uses this filename to build its own
+            # temp file path; if it receives a name containing "/" (our full
+            # relative/absolute path), it tries to write into a subdirectory
+            # that doesn't exist there and fails with FileNotFoundError. Only
+            # the filename itself is relevant, never the directory it lives
+            # in on this side.
+            files = {"file": (Path(file_path).name, f)}
             resp = httpx.post(
                 f"{OCR_SERVICE_URL}/extract-text",
                 files=files,
