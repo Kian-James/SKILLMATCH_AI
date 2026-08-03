@@ -216,15 +216,9 @@ class _TutorialOverlayState extends State<TutorialOverlay>
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: c.navy800,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: c.brand.withOpacity(0.3), width: 1.5),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.35),
-                  blurRadius: 32,
-                  offset: const Offset(0, 8),
-                ),
-              ],
+              borderRadius: BorderRadius.circular(AppTheme.radius),
+              border: Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+              boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 5, dy: 5),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -243,7 +237,10 @@ class _TutorialOverlayState extends State<TutorialOverlay>
                               color: i == _current
                                   ? c.brand
                                   : c.brand.withOpacity(0.25),
-                              borderRadius: BorderRadius.circular(3),
+                              borderRadius: BorderRadius.circular(2),
+                              border: Border.all(
+                                  color: c.cardBorder,
+                                  width: i == _current ? 1.5 : 1),
                             ),
                           )),
                   const Spacer(),
@@ -290,7 +287,8 @@ class _TutorialOverlayState extends State<TutorialOverlay>
                         onPressed: _back,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: c.textSecondary,
-                          side: BorderSide(color: c.cardBorder),
+                          side: BorderSide(
+                              color: c.cardBorder, width: AppTheme.borderWidth),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
@@ -313,7 +311,10 @@ class _TutorialOverlayState extends State<TutorialOverlay>
                                 : Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
+                          borderRadius: BorderRadius.circular(10),
+                          side: BorderSide(
+                              color: c.cardBorder, width: AppTheme.borderWidth),
+                        ),
                         elevation: 0,
                       ),
                       child: Text(

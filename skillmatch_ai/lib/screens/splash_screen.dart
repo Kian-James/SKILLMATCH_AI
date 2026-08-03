@@ -120,16 +120,7 @@ class _SplashScreenState extends State<SplashScreen>
           FadeTransition(
             opacity: _bgFade,
             child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    c.brand,
-                    Color.lerp(c.brand, Colors.black, 0.28)!,
-                  ],
-                ),
-              ),
+              decoration: BoxDecoration(color: c.brand),
             ),
           ),
 
@@ -145,25 +136,25 @@ class _SplashScreenState extends State<SplashScreen>
                     Positioned(
                       top: -size.width * 0.28 + math.sin(t) * 10,
                       right: -size.width * 0.32,
-                      child: _posterCircle(
-                        size.width * 0.85,
-                        Colors.white.withOpacity(0.07),
+                      child: _posterBlock(
+                        size.width * 0.7,
+                        Colors.white.withOpacity(0.12),
                       ),
                     ),
                     Positioned(
-                      bottom: -size.width * 0.35,
-                      left: -size.width * 0.4 + math.cos(t) * 8,
-                      child: _posterCircle(
-                        size.width * 0.95,
-                        Colors.white.withOpacity(0.06),
+                      bottom: -size.width * 0.3,
+                      left: -size.width * 0.32 + math.cos(t) * 8,
+                      child: _posterBlock(
+                        size.width * 0.75,
+                        Colors.white.withOpacity(0.1),
                       ),
                     ),
                     Positioned(
                       top: size.height * 0.14,
-                      left: -size.width * 0.18,
-                      child: _posterCircle(
-                        size.width * 0.4,
-                        Colors.white.withOpacity(0.05),
+                      left: -size.width * 0.15,
+                      child: _posterBlock(
+                        size.width * 0.32,
+                        Colors.white.withOpacity(0.09),
                       ),
                     ),
                   ],
@@ -188,18 +179,15 @@ class _SplashScreenState extends State<SplashScreen>
                       height: 132,
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(32),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.18),
-                            blurRadius: 36,
-                            offset: const Offset(0, 16),
-                          ),
-                        ],
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(
+                            color: AppTheme.ink, width: AppTheme.borderWidthThick),
+                        boxShadow: AppTheme.hardShadow(AppTheme.ink,
+                            dx: 7, dy: 7),
                       ),
                       padding: const EdgeInsets.all(14),
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: BorderRadius.circular(18),
                         child: Image.asset(
                           'assets/skillmatch_icon_1024.png',
                           fit: BoxFit.cover,
@@ -219,7 +207,7 @@ class _SplashScreenState extends State<SplashScreen>
                     child: Text(
                       'SkillMatch',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.fraunces(
+                      style: GoogleFonts.spaceGrotesk(
                         fontSize: 46,
                         fontWeight: FontWeight.w700,
                         color: Colors.white,
@@ -268,10 +256,11 @@ class _SplashScreenState extends State<SplashScreen>
                             child: Opacity(
                               opacity: 0.35 + wave * 0.65,
                               child: Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
+                                width: 9,
+                                height: 9,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.rectangle,
+                                  borderRadius: BorderRadius.circular(2),
                                   color: Colors.white,
                                 ),
                               ),
@@ -292,13 +281,17 @@ class _SplashScreenState extends State<SplashScreen>
     );
   }
 
-  Widget _posterCircle(double diameter, Color color) {
-    return Container(
-      width: diameter,
-      height: diameter,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color,
+  Widget _posterBlock(double side, Color color) {
+    return Transform.rotate(
+      angle: -0.12,
+      child: Container(
+        width: side,
+        height: side,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(40),
+          border: Border.all(color: Colors.white.withOpacity(0.25), width: 3),
+        ),
       ),
     );
   }

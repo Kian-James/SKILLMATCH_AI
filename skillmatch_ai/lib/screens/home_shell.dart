@@ -48,7 +48,7 @@ class _HomeShellState extends State<HomeShell> {
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Text('Sign out?',
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     color: c.textPrimary, fontWeight: FontWeight.w600)),
             content: Text(
               widget.user.isGuest
@@ -97,7 +97,7 @@ class _HomeShellState extends State<HomeShell> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(widget.user.name,
-                    style: GoogleFonts.fraunces(
+                    style: GoogleFonts.spaceGrotesk(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: c.textPrimary)),
@@ -170,7 +170,7 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: c.navy800,
-          border: Border(top: BorderSide(color: c.cardBorder)),
+          border: Border(top: BorderSide(color: c.cardBorder, width: 2.5)),
         ),
         child: SafeArea(
           child: Padding(
@@ -212,7 +212,7 @@ class _HomeShellState extends State<HomeShell> {
           if (active) ...[
             const SizedBox(width: 7),
             Text(label,
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     fontSize: 13, fontWeight: FontWeight.w600, color: c.brand)),
           ],
         ]),

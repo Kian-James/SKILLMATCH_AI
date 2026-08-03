@@ -131,7 +131,7 @@ class HistoryScreen extends StatelessWidget {
               color: AppColors.of(context).textTertiary, size: 48),
           const SizedBox(height: 16),
           Text('Failed to load history',
-              style: GoogleFonts.fraunces(
+              style: GoogleFonts.spaceGrotesk(
                   color: AppColors.of(context).textSecondary,
                   fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
@@ -155,7 +155,7 @@ class HistoryScreen extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.of(ctx).navy800,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: AppColors.of(ctx).cardBorder),
+              border: Border.all(color: AppColors.of(ctx).cardBorder, width: 2.5),
             ),
             child: Icon(Icons.history_rounded,
                 color: AppColors.of(ctx).textTertiary, size: 36),
@@ -220,7 +220,8 @@ class _ScanCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.of(context).navy800,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.of(context).cardBorder),
+          border: Border.all(color: AppColors.of(context).cardBorder, width: 2.5),
+          boxShadow: AppTheme.hardShadow(AppColors.of(context).cardBorder, dx: 4, dy: 4),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Top row
@@ -282,10 +283,10 @@ class _ScanCard extends StatelessWidget {
               decoration: BoxDecoration(
                 color: _accuracyColor.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _accuracyColor.withOpacity(0.3)),
+                border: Border.all(color: _accuracyColor.withOpacity(0.3), width: 2.5),
               ),
               child: Text(record.nlpAccuracy,
-                  style: GoogleFonts.fraunces(
+                  style: GoogleFonts.spaceGrotesk(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                       color: _accuracyColor)),
@@ -335,7 +336,7 @@ class _ScanCard extends StatelessWidget {
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Text(value,
-            style: GoogleFonts.fraunces(
+            style: GoogleFonts.spaceGrotesk(
                 fontSize: 12, fontWeight: FontWeight.w700, color: color)),
         const SizedBox(width: 4),
         Text(label,
@@ -352,7 +353,7 @@ class _ScanCard extends StatelessWidget {
         backgroundColor: AppColors.of(context).navy700,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text('Delete Scan?',
-            style: GoogleFonts.fraunces(
+            style: GoogleFonts.spaceGrotesk(
                 color: AppColors.of(context).textPrimary,
                 fontWeight: FontWeight.w600)),
         content: Text(

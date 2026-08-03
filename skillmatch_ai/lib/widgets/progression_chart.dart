@@ -289,7 +289,7 @@ class _ProgressionChartState extends State<ProgressionChart> {
       decoration: BoxDecoration(
         color: AppColors.of(context).navy700,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.of(context).cardBorder),
+        border: Border.all(color: AppColors.of(context).cardBorder, width: 2.5),
       ),
       child: Row(
         children: [
@@ -324,7 +324,7 @@ class _ProgressionChartState extends State<ProgressionChart> {
         const SizedBox(width: 3),
         Text(
           label.replaceAll('-', ''),
-          style: GoogleFonts.fraunces(
+          style: GoogleFonts.spaceGrotesk(
             fontSize: 12,
             fontWeight: FontWeight.w600,
             color: color,

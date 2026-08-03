@@ -52,15 +52,13 @@ class _UserSelectScreenState extends State<UserSelectScreen> {
                   width: 60,
                   height: 60,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppTheme.teal500, AppTheme.teal300],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: AppTheme.teal500,
                     borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.ink, width: AppTheme.borderWidth),
+                    boxShadow: AppTheme.hardShadow(AppTheme.ink, dx: 4, dy: 4),
                   ),
                   child: const Icon(Icons.auto_awesome_rounded,
-                      color: AppTheme.navy900, size: 28),
+                      color: AppTheme.ink, size: 28),
                 ),
                 const SizedBox(height: 24),
 
@@ -111,7 +109,7 @@ class _UserSelectScreenState extends State<UserSelectScreen> {
                     decoration: BoxDecoration(
                       color: AppTheme.navy700,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppTheme.cardBorder),
+                      border: Border.all(color: AppTheme.cardBorder, width: 2.5),
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Container(

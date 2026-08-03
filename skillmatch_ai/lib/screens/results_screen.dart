@@ -107,10 +107,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildJobHeader(context),
-            const SizedBox(height: 20),
-            _buildStatRow(context),
-            const SizedBox(height: 24),
-            _buildAccuracyCard(context),
+            const SizedBox(height: 14),
+            _buildBentoGrid(context),
             const SizedBox(height: 24),
             _buildSkillsSection(context, 'Matched Skills',
                 widget.record.matchedSkills, SkillChipType.matched,
@@ -132,12 +130,14 @@ class _ResultsScreenState extends State<ResultsScreen> {
   }
 
   Widget _buildJobHeader(BuildContext context) {
+    final c = AppColors.of(context);
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppColors.of(context).navy800,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.teal500.withOpacity(0.25)),
+        color: c.brand,
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        border: Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+        boxShadow: AppTheme.hardShadow(c.cardBorder),
       ),
       child: Row(
         children: [
@@ -145,8 +145,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: AppTheme.teal500.withOpacity(0.1),
+              color: AppTheme.ink,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: c.cardBorder, width: 1.75),
             ),
             child: const Icon(Icons.work_outline_rounded,
                 color: AppTheme.teal500, size: 22),
@@ -157,18 +158,24 @@ class _ResultsScreenState extends State<ResultsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(widget.record.targetJobTitle,
-                    style: Theme.of(context).textTheme.titleLarge),
+                    style: GoogleFonts.spaceGrotesk(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.ink)),
                 const SizedBox(height: 3),
                 Text(
                     widget.record.industry.isNotEmpty
                         ? widget.record.industry
                         : 'Industry',
-                    style: Theme.of(context).textTheme.bodyMedium),
+                    style: GoogleFonts.workSans(
+                        fontSize: 13,
+                        color: AppTheme.ink.withOpacity(0.75),
+                        fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
                 Text(widget.record.fileName,
                     style: GoogleFonts.workSans(
                         fontSize: 11,
-                        color: AppColors.of(context).textTertiary,
+                        color: AppTheme.ink.withOpacity(0.65),
                         fontStyle: FontStyle.italic)),
               ],
             ),
@@ -178,77 +185,109 @@ class _ResultsScreenState extends State<ResultsScreen> {
     );
   }
 
-  Widget _buildStatRow(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 2,
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 1.5,
+  /// Bento grid — one tall accuracy tile beside two stacked stat tiles,
+  /// then a wide row of two more stat tiles underneath. Deliberately
+  /// asymmetric tile sizes, thick outlines, hard offset shadows.
+  Widget _buildBentoGrid(BuildContext context) {
+    final c = AppColors.of(context);
+    return Column(
       children: [
-        StatCard(
-          label: 'Total Skills',
-          value: '${widget.record.skillCount}',
-          valueColor: AppColors.of(context).textPrimary,
-          icon: Icons.psychology_outlined,
+        SizedBox(
+          height: 176,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(flex: 5, child: _buildAccuracyTile(context)),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 4,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: StatCard(
+                        label: 'Matched',
+                        value: '${widget.record.matchedCount}',
+                        valueColor: AppTheme.teal500,
+                        icon: Icons.check_circle_outline_rounded,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: StatCard(
+                        label: 'Missing',
+                        value: '${_missingSkills.length}',
+                        valueColor: AppTheme.red500,
+                        icon: Icons.remove_circle_outline_rounded,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-        StatCard(
-          label: 'Matched',
-          value: '${widget.record.matchedCount}',
-          valueColor: AppTheme.green500,
-          icon: Icons.check_circle_outline_rounded,
-        ),
-        StatCard(
-          label: 'Missing',
-          value: '${_missingSkills.length}',
-          valueColor: AppTheme.red500,
-          icon: Icons.remove_circle_outline_rounded,
-        ),
-        StatCard(
-          label: 'Certifications',
-          value: '${widget.record.certCount}',
-          valueColor: AppTheme.amber500,
-          icon: Icons.verified_outlined,
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 96,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: StatCard(
+                  label: 'Total skills',
+                  value: '${widget.record.skillCount}',
+                  valueColor: c.textPrimary,
+                  icon: Icons.psychology_outlined,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: StatCard(
+                  label: 'Certifications',
+                  value: '${widget.record.certCount}',
+                  valueColor: AppTheme.amber500,
+                  icon: Icons.verified_outlined,
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildAccuracyCard(BuildContext context) {
+  Widget _buildAccuracyTile(BuildContext context) {
+    final c = AppColors.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.of(context).navy800,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.of(context).cardBorder),
+        color: isDark ? c.navy800 : Colors.white,
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        border: Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AccuracyRing(accuracy: widget.record.nlpAccuracy, size: 80),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('NLP Match Accuracy',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 6),
-                Text(
-                  _accuracyDescription,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: _accuracyValue / 100,
-                    minHeight: 6,
-                    backgroundColor: AppColors.of(context).navy600,
-                    valueColor: AlwaysStoppedAnimation<Color>(_accuracyColor),
-                  ),
-                ),
-              ],
+          AccuracyRing(accuracy: widget.record.nlpAccuracy, size: 64),
+          const Spacer(),
+          Text('NLP match accuracy',
+              style: GoogleFonts.spaceGrotesk(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: c.textPrimary)),
+          const SizedBox(height: 4),
+          Text(
+            _accuracyDescription,
+            style: GoogleFonts.workSans(fontSize: 11, color: c.textSecondary),
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _accuracyValue / 100,
+              minHeight: 6,
+              backgroundColor: c.navy600,
+              valueColor: AlwaysStoppedAnimation<Color>(_accuracyColor),
             ),
           ),
         ],
@@ -296,7 +335,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
               ),
               child: Text(
                 '${skills.length}',
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: iconColor),
@@ -341,7 +380,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
               ),
               child: Text(
                 '${_missingSkills.length}',
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: AppTheme.red500),
@@ -393,7 +432,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                     borderRadius: BorderRadius.circular(10)),
               ),
               child: Text('Add',
-                  style: GoogleFonts.fraunces(
+                  style: GoogleFonts.spaceGrotesk(
                       fontSize: 13, fontWeight: FontWeight.w700)),
             ),
           ],
@@ -405,17 +444,20 @@ class _ResultsScreenState extends State<ResultsScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: c.navy800,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: c.cardBorder),
+              color: AppTheme.teal200,
+              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              border:
+                  Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
             ),
             child: Row(children: [
-              Icon(Icons.check_circle_outline_rounded,
-                  color: AppTheme.green500, size: 15),
+              const Icon(Icons.check_circle_outline_rounded,
+                  color: AppTheme.tealDark, size: 15),
               const SizedBox(width: 8),
               Text('No missing skills — great job!',
                   style: GoogleFonts.workSans(
-                      fontSize: 13, color: c.textSecondary)),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.tealDark)),
             ]),
           )
         else
@@ -435,9 +477,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: AppTheme.red500.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.red500.withOpacity(0.3)),
+        color: AppTheme.red400.withOpacity(0.25),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.cardBorder, width: 1.75),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -494,12 +536,15 @@ class _ResultsScreenState extends State<ResultsScreen> {
   }
 
   Widget _buildMetaCard(BuildContext context) {
+    final c = AppColors.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.of(context).navy800,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.of(context).cardBorder),
+        color: isDark ? c.navy800 : Colors.white,
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        border: Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
       child: Column(
         children: [

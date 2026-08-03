@@ -1,52 +1,68 @@
 // lib/widgets/common_widgets.dart
+// Neo-brutalist shared components: thick outlines, hard offset shadows,
+// flat color blocks. These are reused across every screen so changing them
+// here cascades the new look app-wide.
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme.dart';
 
-/// Glowing stat metric card
+/// Bento-tile stat card — flat color block, thick outline, hard shadow.
 class StatCard extends StatelessWidget {
   final String label;
   final String value;
   final Color valueColor;
   final IconData icon;
+  final Color? blockColor;
 
   const StatCard({
     super.key,
     required this.label,
     required this.value,
-    this.valueColor = AppTheme.teal500,
+    this.valueColor = AppTheme.ink,
     required this.icon,
+    this.blockColor,
   });
 
   @override
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fill = blockColor ?? (isDark ? c.navy800 : Colors.white);
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: c.navy800,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.cardBorder),
+        color: fill,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: c.textTertiary, size: 18),
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: valueColor.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: c.cardBorder, width: 1.5),
+            ),
+            child: Icon(icon, color: valueColor, size: 16),
+          ),
           const SizedBox(height: 10),
           Text(value,
-              style: GoogleFonts.fraunces(
-                  fontSize: 26,
+              style: GoogleFonts.spaceGrotesk(
+                  fontSize: 24,
                   fontWeight: FontWeight.w700,
-                  color: valueColor,
+                  color: c.textPrimary,
                   height: 1)),
           const SizedBox(height: 4),
           Text(label,
               style: GoogleFonts.workSans(
-                  fontSize: 12,
-                  color: c.textTertiary,
-                  fontWeight: FontWeight.w500)),
+                  fontSize: 11,
+                  color: c.textSecondary,
+                  fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -93,7 +109,8 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
-/// Skill chip — green for matched, red for missing, neutral for default
+/// Skill chip — flat color block, thick outline. Green for matched,
+/// coral for missing, neutral outline otherwise.
 class SkillChip extends StatelessWidget {
   final String label;
   final SkillChipType type;
@@ -104,43 +121,44 @@ class SkillChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
-    final Color bg, border, text;
+    final Color bg, text;
 
     switch (type) {
       case SkillChipType.matched:
-        bg = AppTheme.green500.withOpacity(0.12);
-        border = AppTheme.green500.withOpacity(0.35);
-        text = AppTheme.green400;
+        bg = AppTheme.teal200;
+        text = AppTheme.tealDark;
         break;
       case SkillChipType.missing:
-        bg = AppTheme.red500.withOpacity(0.12);
-        border = AppTheme.red500.withOpacity(0.35);
-        text = AppTheme.red400;
+        bg = AppTheme.red400.withOpacity(0.28);
+        text = Theme.of(context).brightness == Brightness.dark
+            ? AppTheme.red400
+            : const Color(0xFF8C2A1C);
         break;
       case SkillChipType.neutral:
-        bg = c.navy700;
-        border = c.cardBorder;
+        bg = Theme.of(context).brightness == Brightness.dark
+            ? c.navy700
+            : Colors.white;
         text = c.textSecondary;
         break;
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(color: border, width: 0.8),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.cardBorder, width: 1.75),
       ),
       child: Text(label,
           style: GoogleFonts.workSans(
-              fontSize: 12, color: text, fontWeight: FontWeight.w500)),
+              fontSize: 12, color: text, fontWeight: FontWeight.w600)),
     );
   }
 }
 
 enum SkillChipType { matched, missing, neutral }
 
-/// Teal-accented divider with label
+/// Bold divider with a boxed label — like a section tab.
 class LabeledDivider extends StatelessWidget {
   final String label;
 
@@ -151,27 +169,31 @@ class LabeledDivider extends StatelessWidget {
     final c = AppColors.of(context);
     return Row(
       children: [
-        Expanded(child: Container(height: 1, color: c.divider)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: c.brand,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: c.cardBorder, width: 1.75),
+          ),
           child: Text(
             label.toUpperCase(),
             style: GoogleFonts.workSans(
                 fontSize: 10,
-                color: c.textTertiary,
-                letterSpacing: 1.2,
-                fontWeight: FontWeight.w600),
+                color: AppTheme.ink,
+                letterSpacing: 1,
+                fontWeight: FontWeight.w700),
           ),
         ),
-        Expanded(child: Container(height: 1, color: c.divider)),
+        const SizedBox(width: 10),
+        Expanded(child: Container(height: 2, color: c.divider)),
       ],
     );
   }
 }
 
-/// Ink-stamp match seal — the "reviewed" case-file signature.
-/// A dashed, slightly rotated ring stamped with the match percentage,
-/// echoing a document reviewer's rubber stamp.
+/// Match score stamp — a bold outlined block with the percentage, sitting
+/// at a slight brutalist tilt like a stamped sticker.
 class AccuracyRing extends StatelessWidget {
   final String accuracy; // e.g. "87.50%"
   final double size;
@@ -187,73 +209,49 @@ class AccuracyRing extends StatelessWidget {
 
   Color get _color {
     final v = _value;
-    if (v >= 0.75) return AppTheme.green500;
+    if (v >= 0.75) return AppTheme.teal500;
     if (v >= 0.5) return AppTheme.amber500;
     return AppTheme.red500;
   }
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     return Transform.rotate(
-      angle: -0.14, // ~-8°
-      child: SizedBox(
+      angle: -0.08,
+      child: Container(
         width: size,
         height: size,
-        child: CustomPaint(
-          painter: _DashedCirclePainter(color: _color),
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '$_whole%',
-                  style: GoogleFonts.fraunces(
-                      fontSize: size * 0.22,
-                      fontWeight: FontWeight.w600,
-                      color: _color),
-                ),
-                Text('reviewed',
-                    style: AppTheme.mono(
-                        fontSize: size * 0.09,
-                        weight: FontWeight.w500,
-                        color: _color)),
-              ],
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: _color,
+          shape: BoxShape.circle,
+          border: Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+          boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '$_whole%',
+              style: GoogleFonts.spaceGrotesk(
+                  fontSize: size * 0.24,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.ink),
             ),
-          ),
+            Text('matched',
+                style: AppTheme.mono(
+                    fontSize: size * 0.1,
+                    weight: FontWeight.w600,
+                    color: AppTheme.ink)),
+          ],
         ),
       ),
     );
   }
 }
 
-class _DashedCirclePainter extends CustomPainter {
-  final Color color;
-  const _DashedCirclePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    final radius = size.width / 2 - 1.5;
-    final center = Offset(size.width / 2, size.height / 2);
-    const dashCount = 28;
-    const gapFraction = 0.45;
-    for (int i = 0; i < dashCount; i++) {
-      final start = (i / dashCount) * 2 * 3.14159265;
-      final sweep = (2 * 3.14159265 / dashCount) * (1 - gapFraction);
-      canvas.drawArc(Rect.fromCircle(center: center, radius: radius), start,
-          sweep, false, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DashedCirclePainter oldDelegate) =>
-      oldDelegate.color != color;
-}
-
-/// User avatar initials circle
+/// User avatar initials block — flat color square, thick outline.
 class AvatarCircle extends StatelessWidget {
   final String initials;
   final double size;
@@ -269,30 +267,29 @@ class AvatarCircle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+      duration: const Duration(milliseconds: 150),
       width: size,
       height: size,
       decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: isSelected
-              ? [AppTheme.teal500, AppTheme.teal300]
-              : [c.navy600, c.navy500],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        color: isSelected ? c.brand : (isDark ? c.navy700 : Colors.white),
+        borderRadius: BorderRadius.circular(size * 0.28),
+        border: Border.all(
+          color: c.cardBorder,
+          width: isSelected ? AppTheme.borderWidthThick : AppTheme.borderWidth,
         ),
-        border: isSelected
-            ? Border.all(color: c.brand, width: 2)
-            : Border.all(color: c.cardBorder),
+        boxShadow: isSelected
+            ? AppTheme.hardShadow(c.cardBorder, dx: 3, dy: 3)
+            : null,
       ),
       child: Center(
         child: Text(
           initials,
-          style: GoogleFonts.fraunces(
-            fontSize: size * 0.35,
+          style: GoogleFonts.spaceGrotesk(
+            fontSize: size * 0.34,
             fontWeight: FontWeight.w700,
-            color: isSelected ? AppTheme.navy900 : c.textSecondary,
+            color: isSelected ? AppTheme.ink : c.textSecondary,
           ),
         ),
       ),
@@ -300,7 +297,7 @@ class AvatarCircle extends StatelessWidget {
   }
 }
 
-/// Loading shimmer card placeholder
+/// Loading placeholder block — flat color sweep instead of a soft shimmer.
 class ShimmerCard extends StatefulWidget {
   final double height;
 
@@ -340,7 +337,9 @@ class _ShimmerCardState extends State<ShimmerCard>
         return Container(
           height: widget.height,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+            border:
+                Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
             gradient: LinearGradient(
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,
@@ -358,7 +357,7 @@ class _ShimmerCardState extends State<ShimmerCard>
   }
 }
 
-/// Teal pill badge
+/// Bold outlined badge block
 class TealBadge extends StatelessWidget {
   final String text;
 
@@ -368,16 +367,16 @@ class TealBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = AppColors.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: c.brand.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: c.brand.withOpacity(0.3)),
+        color: c.brand,
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: c.cardBorder, width: 1.75),
       ),
       child: Text(
         text,
         style: GoogleFonts.workSans(
-            fontSize: 11, color: c.brandSoft, fontWeight: FontWeight.w600),
+            fontSize: 11, color: AppTheme.ink, fontWeight: FontWeight.w700),
       ),
     );
   }

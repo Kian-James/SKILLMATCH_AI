@@ -1,6 +1,7 @@
 // lib/services/firestore_service.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
 
@@ -101,6 +102,54 @@ class FirestoreService {
   /// Update the certs list on an existing scan record.
   Future<void> updateCerts(String docId, List<String> certs) async {
     await _db.collection(_collection).doc(docId).update({'certs': certs});
+  }
+
+  /// Canonical job/career titles from the public `jobs` collection —
+  /// readable by any authenticated user (no owner check), so this is the
+  /// right source for a broad autosuggest list rather than mining
+  /// `resume_scans`, which is locked to each user's own docs.
+  Future<List<String>> fetchJobsTitles({int limit = 2000}) async {
+    final snapshot = await _db.collection('jobs').limit(limit).get();
+
+    debugPrint('[autosuggest] jobs raw doc count: ${snapshot.docs.length}');
+
+    final seen = <String>{};
+    final titles = <String>[];
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final raw = data['title'] ?? data['job_title'] ?? data['name'];
+      final title = (raw ?? '').toString().trim();
+      if (title.isEmpty) continue;
+      if (seen.add(title.toLowerCase())) titles.add(title);
+    }
+    titles.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return titles;
+  }
+
+  /// Distinct target-job titles from the *current user's own* scan history —
+  /// scoped to [userId] because resume_scans' security rules only allow a
+  /// user to read their own docs (a query without this filter is rejected
+  /// with permission-denied before it even runs). Useful to merge alongside
+  /// [fetchJobsTitles] so a user's own previously-typed titles surface
+  /// too, even if they're not in the canonical dataset.
+  Future<List<String>> fetchOwnTargetJobTitles({
+    required String userId,
+    int limit = 500,
+  }) async {
+    final snapshot = await _db
+        .collection(_collection)
+        .where('user_id', isEqualTo: userId)
+        .limit(limit)
+        .get();
+
+    final seen = <String>{};
+    final titles = <String>[];
+    for (final doc in snapshot.docs) {
+      final title = (doc.data()['target_job_title'] as String?)?.trim();
+      if (title == null || title.isEmpty) continue;
+      if (seen.add(title.toLowerCase())) titles.add(title);
+    }
+    return titles;
   }
 
   /// Update the missing-skills list on an existing scan record.

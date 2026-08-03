@@ -225,20 +225,21 @@ class _LoginScreenState extends State<LoginScreen>
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [AppTheme.teal500, AppTheme.teal300],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+              color: AppColors.of(context).brand,
               borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                  color: AppColors.of(context).cardBorder,
+                  width: AppTheme.borderWidth),
+              boxShadow: AppTheme.hardShadow(AppColors.of(context).cardBorder,
+                  dx: 4, dy: 4),
             ),
-            child: Icon(Icons.auto_awesome_rounded,
-                color: AppColors.of(context).navy900, size: 26),
+            child: const Icon(Icons.auto_awesome_rounded,
+                color: AppTheme.ink, size: 26),
           ),
           const SizedBox(height: 20),
           Text(
             _isSignUp ? 'Create account' : 'Welcome back',
-            style: GoogleFonts.fraunces(
+            style: GoogleFonts.spaceGrotesk(
               fontSize: 32,
               fontWeight: FontWeight.w700,
               color: AppColors.of(context).textPrimary,
@@ -365,7 +366,7 @@ class _LoginScreenState extends State<LoginScreen>
         decoration: BoxDecoration(
           color: AppTheme.red500.withOpacity(0.08),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppTheme.red500.withOpacity(0.3)),
+          border: Border.all(color: AppTheme.red500.withOpacity(0.3), width: 2.5),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Icon(Icons.error_outline_rounded,
@@ -386,8 +387,12 @@ class _LoginScreenState extends State<LoginScreen>
             backgroundColor: AppTheme.teal500,
             foregroundColor: AppColors.of(context).navy900,
             padding: const EdgeInsets.symmetric(vertical: 15),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                  color: AppColors.of(context).cardBorder,
+                  width: AppTheme.borderWidth),
+            ),
             disabledBackgroundColor: AppTheme.teal500.withOpacity(0.4),
           ),
           child: _isLoading
@@ -399,7 +404,7 @@ class _LoginScreenState extends State<LoginScreen>
                 )
               : Text(
                   _isSignUp ? 'Create Account' : 'Sign In',
-                  style: GoogleFonts.fraunces(
+                  style: GoogleFonts.spaceGrotesk(
                       fontSize: 15, fontWeight: FontWeight.w700),
                 ),
         ),
@@ -426,7 +431,9 @@ class _LoginScreenState extends State<LoginScreen>
           onPressed: _isLoading ? null : _signInGoogle,
           style: OutlinedButton.styleFrom(
             foregroundColor: AppColors.of(context).textPrimary,
-            side: BorderSide(color: AppColors.of(context).cardBorder),
+            side: BorderSide(
+                color: AppColors.of(context).cardBorder,
+                width: AppTheme.borderWidth),
             backgroundColor: AppColors.of(context).navy800,
             padding: const EdgeInsets.symmetric(vertical: 14),
             shape:
@@ -437,7 +444,7 @@ class _LoginScreenState extends State<LoginScreen>
             _googleIcon(),
             const SizedBox(width: 12),
             Text('Continue with Google',
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: AppColors.of(context).textPrimary)),
@@ -452,7 +459,8 @@ class _LoginScreenState extends State<LoginScreen>
           style: OutlinedButton.styleFrom(
             foregroundColor: AppColors.of(context).textSecondary,
             side: BorderSide(
-                color: AppColors.of(context).cardBorder.withOpacity(0.6)),
+                color: AppColors.of(context).cardBorder,
+                width: AppTheme.borderWidth),
             backgroundColor: Colors.transparent,
             padding: const EdgeInsets.symmetric(vertical: 14),
             shape:
@@ -461,7 +469,7 @@ class _LoginScreenState extends State<LoginScreen>
           icon: Icon(Icons.person_outline_rounded,
               color: AppColors.of(context).textTertiary, size: 18),
           label: Text('Continue as Guest',
-              style: GoogleFonts.fraunces(
+              style: GoogleFonts.spaceGrotesk(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: AppColors.of(context).textSecondary)),
@@ -480,7 +488,7 @@ class _LoginScreenState extends State<LoginScreen>
             onTap: _toggleMode,
             child: Text(
               _isSignUp ? 'Sign In' : 'Sign Up',
-              style: GoogleFonts.fraunces(
+              style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: AppTheme.teal400,
@@ -513,7 +521,7 @@ class _LoginScreenState extends State<LoginScreen>
       );
 
   Widget _label(String text) => Text(text,
-      style: GoogleFonts.fraunces(
+      style: GoogleFonts.spaceGrotesk(
           fontSize: 13,
           fontWeight: FontWeight.w600,
           color: AppColors.of(context).textSecondary));

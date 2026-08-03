@@ -212,17 +212,19 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
       decoration: BoxDecoration(
         color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.brand.withOpacity(0.25)),
+        border: Border.all(color: c.cardBorder, width: 2.5),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
       child: Row(children: [
         Container(
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: c.brand.withOpacity(0.1),
+            color: c.brand,
             borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: c.cardBorder, width: 1.75),
           ),
-          child: Icon(Icons.grid_view_rounded, color: c.brand, size: 20),
+          child: const Icon(Icons.grid_view_rounded, color: AppTheme.ink, size: 20),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -262,7 +264,7 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
       decoration: BoxDecoration(
         color: c.navy700,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: c.cardBorder),
+        border: Border.all(color: c.cardBorder, width: 2.5),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 13, color: c.textTertiary),
@@ -285,16 +287,16 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
         width: 28,
         height: 28,
         decoration: BoxDecoration(
-          color: c.brand.withOpacity(0.12),
+          color: c.brand,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: c.brand.withOpacity(0.3)),
+          border: Border.all(color: c.cardBorder, width: 2),
         ),
         child: Center(
           child: Text(number,
-              style: GoogleFonts.fraunces(
+              style: GoogleFonts.spaceGrotesk(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  color: c.brandSoft)),
+                  color: AppTheme.ink)),
         ),
       ),
       const SizedBox(width: 10),
@@ -323,7 +325,8 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
       decoration: BoxDecoration(
         color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.cardBorder),
+        border: Border.all(color: c.cardBorder, width: 2.5),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
       child: Column(children: [
         _metaRow(context, 'Source', sourceLabel),
@@ -457,19 +460,21 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
       decoration: BoxDecoration(
         color: c.navy800,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.25)),
+        border: Border.all(color: c.cardBorder, width: 2.5),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
       child: Row(children: [
         Container(
           width: 52,
           height: 52,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            shape: BoxShape.circle,
+            color: color,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: c.cardBorder, width: 1.75),
           ),
           child: Icon(
             isPassing ? Icons.verified_rounded : Icons.warning_amber_rounded,
-            color: color,
+            color: AppTheme.ink,
             size: 24,
           ),
         ),
@@ -490,7 +495,7 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
           ],
         )),
         Text(isPassing ? '✓' : '!',
-            style: GoogleFonts.fraunces(
+            style: GoogleFonts.spaceGrotesk(
                 fontSize: 22, fontWeight: FontWeight.w700, color: color)),
       ]),
     );
@@ -534,7 +539,7 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
         child: Text('Add',
-            style: GoogleFonts.fraunces(
+            style: GoogleFonts.spaceGrotesk(
                 fontSize: 13, fontWeight: FontWeight.w700)),
       ),
     ]);
@@ -552,9 +557,9 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: chipColor.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: chipColor.withOpacity(0.25)),
+        color: chipColor.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.cardBorder, width: 1.75),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Text(label,
@@ -588,7 +593,7 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
       decoration: BoxDecoration(
         color: c.navy800,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: c.cardBorder),
+        border: Border.all(color: c.cardBorder, width: 2.5),
       ),
       child: Text(msg, style: Theme.of(context).textTheme.bodyMedium),
     );
@@ -736,11 +741,13 @@ class _Top5CardState extends State<_Top5Card>
     return Container(
       decoration: BoxDecoration(
         color: c.navy800,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(AppTheme.radius),
         border: Border.all(
-          color: widget.isTop ? c.brand.withOpacity(0.35) : c.cardBorder,
-          width: widget.isTop ? 1.5 : 1,
+          color: c.cardBorder,
+          width: widget.isTop ? AppTheme.borderWidthThick : AppTheme.borderWidth,
         ),
+        boxShadow: AppTheme.hardShadow(c.cardBorder,
+            dx: widget.isTop ? 5 : 3, dy: widget.isTop ? 5 : 3),
       ),
       child: Column(children: [
         // ── Header row ────────────────────────────────────────────────
@@ -754,15 +761,16 @@ class _Top5CardState extends State<_Top5Card>
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: _rankColor.withOpacity(0.12),
+                  color: _rankColor,
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: c.cardBorder, width: 1.5),
                 ),
                 child: Center(
                   child: Text('#${m.rank}',
-                      style: GoogleFonts.fraunces(
+                      style: GoogleFonts.spaceGrotesk(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
-                          color: _rankColor)),
+                          color: AppTheme.ink)),
                 ),
               ),
               const SizedBox(width: 12),
@@ -813,9 +821,9 @@ class _Top5CardState extends State<_Top5Card>
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
-                        color: c.brand.withOpacity(0.07),
+                        color: c.brand.withOpacity(0.16),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: c.brand.withOpacity(0.2)),
+                        border: Border.all(color: c.cardBorder, width: 1.75),
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -900,9 +908,10 @@ class _Top5CardState extends State<_Top5Card>
                         decoration: BoxDecoration(
                           color: c.brand,
                           borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: c.cardBorder, width: 1.75),
                         ),
                         child: Text('Add',
-                            style: GoogleFonts.fraunces(
+                            style: GoogleFonts.spaceGrotesk(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700,
                                 color: Theme.of(context).brightness ==
@@ -939,22 +948,22 @@ class _Top5CardState extends State<_Top5Card>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: AppTheme.green500.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.green500.withOpacity(0.35)),
+        color: AppTheme.teal200,
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: AppColors.of(context).cardBorder, width: 1.5),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Text(skill,
             style: GoogleFonts.workSans(
                 fontSize: 11,
-                color: AppTheme.green400,
-                fontWeight: FontWeight.w500)),
+                color: AppTheme.tealDark,
+                fontWeight: FontWeight.w600)),
         const SizedBox(width: 5),
         // × button — moves the skill back to "Skills to develop"
         GestureDetector(
           onTap: () => _demoteSkill(skill),
           child: const Icon(Icons.close_rounded,
-              size: 13, color: AppTheme.green500),
+              size: 13, color: AppTheme.tealDark),
         ),
       ]),
     );
@@ -965,22 +974,27 @@ class _Top5CardState extends State<_Top5Card>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: AppTheme.red500.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.red500.withOpacity(0.3)),
+        color: AppTheme.red400.withOpacity(0.28),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: AppColors.of(context).cardBorder, width: 1.5),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Text(skill,
             style: GoogleFonts.workSans(
                 fontSize: 11,
-                color: AppTheme.red400,
-                fontWeight: FontWeight.w500)),
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? AppTheme.red400
+                    : const Color(0xFF8C2A1C),
+                fontWeight: FontWeight.w600)),
         const SizedBox(width: 5),
         // + button — promotes the skill to "Skills you already have"
         GestureDetector(
           onTap: () => _promoteSkill(skill),
-          child: const Icon(Icons.add_circle_rounded,
-              size: 14, color: AppTheme.red400),
+          child: Icon(Icons.add_circle_rounded,
+              size: 14,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? AppTheme.red400
+                  : const Color(0xFF8C2A1C)),
         ),
       ]),
     );
@@ -992,7 +1006,7 @@ class _Top5CardState extends State<_Top5Card>
       Icon(icon, color: color, size: 14),
       const SizedBox(width: 6),
       Text(label,
-          style: GoogleFonts.fraunces(
+          style: GoogleFonts.spaceGrotesk(
               fontSize: 12, fontWeight: FontWeight.w600, color: color)),
     ]);
   }

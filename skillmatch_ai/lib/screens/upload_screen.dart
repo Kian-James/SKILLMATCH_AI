@@ -4,7 +4,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dotted_border/dotted_border.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -50,6 +49,7 @@ class _UploadScreenState extends State<UploadScreen>
 
   // ── Form state ────────────────────────────────────────────────────────────
   final _targetJobCtrl = TextEditingController();
+  final _targetJobFocus = FocusNode();
   final _formKey = GlobalKey<FormState>();
 
   AnalysisType _analysisType = AnalysisType.targeted;
@@ -70,6 +70,15 @@ class _UploadScreenState extends State<UploadScreen>
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
+  // ── Target-career autosuggest ─────────────────────────────────────────────
+  // Job titles pulled once from Firestore's resume_scans history, then
+  // filtered client-side as the user types. Kept static so it survives
+  // across visits to this screen within the same app session instead of
+  // re-querying every time.
+  static List<String>? _cachedJobTitles;
+  List<String> _jobTitleSuggestions = [];
+  double _targetFieldWidth = 300;
+
   @override
   void initState() {
     super.initState();
@@ -82,12 +91,48 @@ class _UploadScreenState extends State<UploadScreen>
 
     // Check first launch after the first frame (keys must be laid out)
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkTutorial());
+
+    _loadJobTitleSuggestions();
+  }
+
+  Future<void> _loadJobTitleSuggestions() async {
+    if (_cachedJobTitles != null) {
+      setState(() => _jobTitleSuggestions = _cachedJobTitles!);
+      return;
+    }
+
+    final merged = <String>{};
+
+    try {
+      final dataset = await _firestore.fetchJobsTitles();
+      debugPrint('[autosuggest] jobs collection: ${dataset.length} titles');
+      merged.addAll(dataset);
+    } catch (e) {
+      debugPrint('[autosuggest] jobs collection load failed: $e');
+    }
+
+    try {
+      final own =
+          await _firestore.fetchOwnTargetJobTitles(userId: widget.user.id);
+      debugPrint('[autosuggest] own scan history: ${own.length} titles');
+      merged.addAll(own);
+    } catch (e) {
+      debugPrint('[autosuggest] own scan history load failed: $e');
+    }
+
+    final titles = merged.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    debugPrint('[autosuggest] total merged: ${titles.length} titles');
+
+    _cachedJobTitles = titles;
+    if (mounted) setState(() => _jobTitleSuggestions = titles);
   }
 
   @override
   void dispose() {
     _pulseCtrl.dispose();
     _targetJobCtrl.dispose();
+    _targetJobFocus.dispose();
     if (_isAnalyzing) WakelockPlus.disable();
     super.dispose();
   }
@@ -118,7 +163,7 @@ class _UploadScreenState extends State<UploadScreen>
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Text('Already analyzed',
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     fontWeight: FontWeight.w700, color: c.textPrimary)),
             content: Text(
               '"$fileName" has already been analyzed. '
@@ -153,7 +198,7 @@ class _UploadScreenState extends State<UploadScreen>
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Text('Show tutorial again?',
-                style: GoogleFonts.fraunces(
+                style: GoogleFonts.spaceGrotesk(
                     fontWeight: FontWeight.w700, color: c.textPrimary)),
             content: Text(
               'This will walk you through each feature of the app from the beginning.',
@@ -687,7 +732,7 @@ class _UploadScreenState extends State<UploadScreen>
           Icon(icon, size: 16, color: sel ? c.brand : c.textTertiary),
           const SizedBox(width: 6),
           Text(label,
-              style: GoogleFonts.fraunces(
+              style: GoogleFonts.spaceGrotesk(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: sel ? c.brand : c.textSecondary)),
@@ -707,7 +752,7 @@ class _UploadScreenState extends State<UploadScreen>
         decoration: BoxDecoration(
           color: c.navy800,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: c.cardBorder),
+          border: Border.all(color: c.cardBorder, width: 2.5),
         ),
         child: Row(children: [
           Icon(
@@ -737,7 +782,8 @@ class _UploadScreenState extends State<UploadScreen>
       decoration: BoxDecoration(
         color: c.navy800,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: c.cardBorder),
+        border: Border.all(color: c.cardBorder, width: 2.5),
+        boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
       ),
       padding: const EdgeInsets.all(3),
       child: Row(children: [
@@ -773,7 +819,7 @@ class _UploadScreenState extends State<UploadScreen>
               Icon(icon, size: 14, color: sel ? c.brandSoft : c.textTertiary),
               const SizedBox(width: 5),
               Text(label,
-                  style: GoogleFonts.fraunces(
+                  style: GoogleFonts.spaceGrotesk(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                       color: sel ? c.brandSoft : c.textTertiary)),
@@ -889,24 +935,32 @@ class _UploadScreenState extends State<UploadScreen>
 
   Widget _shell(bool has, Widget child) {
     final c = AppColors.of(context);
-    return DottedBorder(
-      color: has ? c.brand : c.navy500,
-      strokeWidth: has ? 1.5 : 1.3,
-      dashPattern: const [6, 5],
-      borderType: BorderType.RRect,
-      radius: const Radius.circular(14),
-      padding: EdgeInsets.zero,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 155),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: has ? c.brand.withOpacity(0.05) : Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: child,
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Base surface the tint sits on top of. Blending the brand tint onto a
+    // known, opaque base (instead of leaving it as a translucent color left
+    // to composite against whatever happens to be behind the widget) keeps
+    // the result predictably light-on-dark / dark-on-light, so the text
+    // drawn on top never ends up low-contrast against it.
+    final baseSurface = isDark ? c.navy800 : Colors.white;
+    final selectedFill = Color.alphaBlend(
+      c.brand.withOpacity(isDark ? 0.22 : 0.12),
+      baseSurface,
+    );
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: 155),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: has ? selectedFill : baseSurface,
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        border: Border.all(
+            color: has ? c.brand : c.cardBorder,
+            width: has ? AppTheme.borderWidthThick : AppTheme.borderWidth),
+        boxShadow:
+            AppTheme.hardShadow(has ? c.brand : c.cardBorder, dx: 4, dy: 4),
       ),
+      child: child,
     );
   }
 
@@ -919,12 +973,12 @@ class _UploadScreenState extends State<UploadScreen>
         decoration: BoxDecoration(
             color: c.navy700,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: c.cardBorder)),
+            border: Border.all(color: c.cardBorder, width: 2.5)),
         child: Icon(icon, color: c.textTertiary, size: 24),
       ),
       const SizedBox(height: 12),
       Text(title,
-          style: GoogleFonts.fraunces(
+          style: GoogleFonts.spaceGrotesk(
               fontSize: 15,
               fontWeight: FontWeight.w600,
               color: c.textSecondary)),
@@ -937,23 +991,58 @@ class _UploadScreenState extends State<UploadScreen>
   Widget _previewContent(
       IconData icon, Color iconColor, String name, String meta) {
     final c = AppColors.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Container(
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-            color: iconColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(14)),
-        child: Icon(icon, color: iconColor, size: 26),
+      Stack(clipBehavior: Clip.none, alignment: Alignment.center, children: [
+        Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(14)),
+          child: Icon(icon, color: iconColor, size: 26),
+        ),
+        Positioned(
+          right: -4,
+          bottom: -4,
+          child: Container(
+            width: 20,
+            height: 20,
+            decoration: BoxDecoration(
+              color: c.brand,
+              shape: BoxShape.circle,
+              border: Border.all(color: c.cardBorder, width: 1.5),
+            ),
+            child:
+                const Icon(Icons.check_rounded, size: 12, color: AppTheme.ink),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 12),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Text(name,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: c.textPrimary),
+            overflow: TextOverflow.ellipsis),
       ),
-      const SizedBox(height: 10),
-      Text(name,
-          style: GoogleFonts.fraunces(
-              fontSize: 14, fontWeight: FontWeight.w600, color: c.textPrimary),
-          overflow: TextOverflow.ellipsis),
-      const SizedBox(height: 4),
-      Text(meta,
-          style: GoogleFonts.workSans(fontSize: 12, color: c.textTertiary)),
+      const SizedBox(height: 8),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isDark ? c.navy700 : AppTheme.light100,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(meta,
+            style: GoogleFonts.workSans(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: c.textSecondary)),
+      ),
     ]);
   }
 
@@ -961,26 +1050,95 @@ class _UploadScreenState extends State<UploadScreen>
 
   Widget _targetJobField() {
     final c = AppColors.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text('Job you\'re aiming for',
-          style: GoogleFonts.fraunces(
+          style: GoogleFonts.spaceGrotesk(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               color: c.textSecondary)),
       const SizedBox(height: 8),
-      TextFormField(
-        controller: _targetJobCtrl,
-        enabled: !_isAnalyzing,
-        style: GoogleFonts.workSans(fontSize: 14, color: c.textPrimary),
-        decoration: const InputDecoration(
-          hintText: 'e.g. Data Scientist, Software Engineer',
-          prefixIcon: Icon(Icons.work_outline_rounded,
-              color: AppTheme.textTertiary, size: 18),
-        ),
-        validator: (v) => (v == null || v.trim().isEmpty)
-            ? 'Enter the target job title'
-            : null,
-      ),
+      LayoutBuilder(builder: (context, constraints) {
+        _targetFieldWidth = constraints.maxWidth;
+        return RawAutocomplete<String>(
+          textEditingController: _targetJobCtrl,
+          focusNode: _targetJobFocus,
+          optionsBuilder: (TextEditingValue value) {
+            final q = value.text.trim().toLowerCase();
+            if (q.isEmpty || _jobTitleSuggestions.isEmpty) {
+              return const Iterable<String>.empty();
+            }
+            return _jobTitleSuggestions
+                .where((t) => t.toLowerCase().contains(q))
+                .take(6);
+          },
+          fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+            return TextFormField(
+              controller: controller,
+              focusNode: focusNode,
+              enabled: !_isAnalyzing,
+              style: GoogleFonts.workSans(fontSize: 14, color: c.textPrimary),
+              decoration: const InputDecoration(
+                hintText: 'e.g. Data Scientist, Software Engineer',
+                prefixIcon: Icon(Icons.work_outline_rounded,
+                    color: AppTheme.textTertiary, size: 18),
+              ),
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Enter the target job title'
+                  : null,
+              onFieldSubmitted: (_) => onSubmitted(),
+            );
+          },
+          optionsViewBuilder: (context, onSelected, options) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  width: _targetFieldWidth,
+                  margin: const EdgeInsets.only(top: 6),
+                  constraints: const BoxConstraints(maxHeight: 230),
+                  decoration: BoxDecoration(
+                    color: isDark ? c.navy800 : Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: c.cardBorder, width: 2.5),
+                    boxShadow: AppTheme.hardShadow(c.cardBorder, dx: 4, dy: 4),
+                  ),
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    separatorBuilder: (_, __) =>
+                        Divider(height: 1, color: c.divider),
+                    itemBuilder: (context, index) {
+                      final opt = options.elementAt(index);
+                      return InkWell(
+                        onTap: () => onSelected(opt),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          child: Row(children: [
+                            Icon(Icons.history_rounded,
+                                size: 14, color: c.textTertiary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(opt,
+                                  style: GoogleFonts.workSans(
+                                      fontSize: 13, color: c.textPrimary),
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      }),
     ]);
   }
 
@@ -992,7 +1150,8 @@ class _UploadScreenState extends State<UploadScreen>
         decoration: BoxDecoration(
           color: AppTheme.red500.withOpacity(0.08),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppTheme.red500.withOpacity(0.3)),
+          border:
+              Border.all(color: AppTheme.red500.withOpacity(0.3), width: 2.5),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Icon(Icons.error_outline_rounded,
