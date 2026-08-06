@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/models.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import 'home_shell.dart';
 
 // Quick demo users — tap to go straight in
@@ -38,8 +39,11 @@ class _UserSelectScreenState extends State<UserSelectScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
+        child: ResponsiveBody(
+        maxWidth: 480,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+          padding: EdgeInsets.symmetric(
+              horizontal: responsiveGutter(context, 28), vertical: 32),
           child: Form(
             key: _form,
             child: Column(
@@ -147,6 +151,7 @@ class _UserSelectScreenState extends State<UserSelectScreen> {
               ],
             ),
           ),
+        ),
         ),
       ),
     );

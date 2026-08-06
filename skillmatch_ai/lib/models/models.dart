@@ -179,6 +179,7 @@ class TargetCareerResult {
   final SkillGapAnalysis skillGap;
   final CertGapAnalysis certGap;
   final TextAcquisition textAcquisition;
+  final String fitReason;
 
   const TargetCareerResult({
     required this.targetJob,
@@ -186,16 +187,74 @@ class TargetCareerResult {
     required this.skillGap,
     required this.certGap,
     required this.textAcquisition,
+    this.fitReason = '',
   });
 
-  factory TargetCareerResult.fromJson(Map<String, dynamic> j) =>
-      TargetCareerResult(
-        targetJob: TargetJob.fromJson(j['target_job'] ?? {}),
-        resumeSkills: ResumeSkillsMeta.fromJson(j['resume_skills'] ?? {}),
-        skillGap: SkillGapAnalysis.fromJson(j['skill_gap_analysis'] ?? {}),
-        certGap: CertGapAnalysis.fromJson(j['cert_gap_analysis'] ?? {}),
-        textAcquisition: TextAcquisition.fromJson(j['text_acquisition'] ?? {}),
-      );
+  // The backend (see app/main.py: target_career_analysis) does NOT return
+  // the flat { target_job, resume_skills, skill_gap_analysis, ... } shape
+  // this used to assume. It returns the same STAGE_1..STAGE_4 envelope as
+  // /thesis-full-analysis, with the target-job-specific data nested under
+  // STAGE_3_TARGET_JOB_MATCHING:
+  //
+  // {
+  //   "STAGE_1_TEXT_ACQUISITION": {text_source, ocr_quality, char_count, raw_text},
+  //   "STAGE_2_SKILL_EXTRACTION": {llm_model, discovered_skills, ...},
+  //   "STAGE_2_CERT_EXTRACTION": {llm_model, discovered_certificates, ...},
+  //   "STAGE_3_TARGET_JOB_MATCHING": {
+  //     "target_job": {job_id, title, industry},
+  //     "score": <hybrid score 0-100>,
+  //     "skills": {ground_truth_count, nlp_accuracy, matched_skills, unmatched_skills},
+  //     "certifications": {ground_truth_count, nlp_accuracy, matched_certs, missing_certs},
+  //     "fit_reason": "..."
+  //   },
+  //   "STAGE_4_FAISS_INTEGRITY": {score, index_total}
+  // }
+  factory TargetCareerResult.fromJson(Map<String, dynamic> j) {
+    final s1 = j['STAGE_1_TEXT_ACQUISITION'] as Map<String, dynamic>? ?? {};
+    final s2 = j['STAGE_2_SKILL_EXTRACTION'] as Map<String, dynamic>? ?? {};
+    final s2b = j['STAGE_2_CERT_EXTRACTION'] as Map<String, dynamic>? ?? {};
+    final s3 = j['STAGE_3_TARGET_JOB_MATCHING'] as Map<String, dynamic>? ?? {};
+
+    final s3Skills = s3['skills'] as Map<String, dynamic>? ?? {};
+    final s3Certs = s3['certifications'] as Map<String, dynamic>? ?? {};
+
+    final discoveredSkills = List<String>.from(s2['discovered_skills'] ?? []);
+    final discoveredCerts =
+        List<String>.from(s2b['discovered_certificates'] ?? []);
+
+    final matchedSkills = List<String>.from(s3Skills['matched_skills'] ?? []);
+    final missingSkills = List<String>.from(s3Skills['unmatched_skills'] ?? []);
+    final matchedCerts = List<String>.from(s3Certs['matched_certs'] ?? []);
+    final missingCerts = List<String>.from(s3Certs['missing_certs'] ?? []);
+
+    final requiredCount = matchedSkills.length + missingSkills.length;
+
+    return TargetCareerResult(
+      targetJob: TargetJob.fromJson(s3['target_job'] ?? {}),
+      resumeSkills: ResumeSkillsMeta(
+        discoveredSkills: discoveredSkills,
+        discoveredCerts: discoveredCerts,
+        totalSkillsFound: discoveredSkills.length,
+        totalCertsFound: discoveredCerts.length,
+      ),
+      skillGap: SkillGapAnalysis(
+        requiredSkills: [...matchedSkills, ...missingSkills],
+        matchedSkills: matchedSkills,
+        missingSkills: missingSkills,
+        nlpAccuracy: s3Skills['nlp_accuracy'] ?? '0%',
+        matchRatio:
+            requiredCount == 0 ? 0.0 : matchedSkills.length / requiredCount,
+        hybridScore: (s3['score'] ?? 0.0).toDouble(),
+      ),
+      certGap: CertGapAnalysis(
+        requiredCerts: [...matchedCerts, ...missingCerts],
+        matchedCerts: matchedCerts,
+        missingCerts: missingCerts,
+      ),
+      textAcquisition: TextAcquisition.fromJson(s1),
+      fitReason: s3['fit_reason'] ?? '',
+    );
+  }
 }
 
 // ── /thesis-full-analysis response ───────────────────────────────────────────
@@ -332,6 +391,7 @@ class ResumeScanRecord {
   final List<String> missingSkills;
   final String nlpAccuracy;
   final double hybridScore;
+  final String fitReason;
 
   // Full analysis fields
   final List<Top5Match> top5Matches;
@@ -360,6 +420,7 @@ class ResumeScanRecord {
     this.missingSkills = const [],
     this.nlpAccuracy = '0%',
     this.hybridScore = 0.0,
+    this.fitReason = '',
     // full
     this.top5Matches = const [],
     this.faissScore = '0%',
@@ -381,12 +442,25 @@ class ResumeScanRecord {
         ...missingSkills.map((s) => s.toLowerCase()),
       };
 
-  int get matchedCount {
-    final mySkillsLower = skills.map((s) => s.toLowerCase()).toSet();
-    return _requiredSkillsLower.where(mySkillsLower.contains).length;
-  }
+  /// matchedSkills/missingSkills are now the live, editable source of truth
+  /// for a targeted-analysis record — results_screen persists promote/demote
+  /// edits straight onto these two lists (see updateMatchedSkills /
+  /// updateMissingSkills), so counting them directly is what keeps History
+  /// in sync with those edits. Previously these were re-derived from the
+  /// frozen `skills` list intersected with the original snapshot, which
+  /// never reflected later promote/demote actions.
+  int get matchedCount => matchedSkills.length;
+  int get missingCount => missingSkills.length;
 
-  int get missingCount => _requiredSkillsLower.length - matchedCount;
+  /// Live match accuracy recomputed from the current matched/missing split
+  /// — updates instantly as skills are promoted/demoted, instead of staying
+  /// frozen at whatever `nlpAccuracy` was at scan time.
+  String get liveAccuracy {
+    final total = matchedCount + missingCount;
+    if (total == 0) return nlpAccuracy;
+    final pct = matchedCount / total * 100;
+    return '${pct.toStringAsFixed(2)}%';
+  }
 
   String get displayTitle =>
       analysisType == AnalysisType.targeted ? targetJobTitle : 'Full Analysis';
@@ -407,6 +481,7 @@ class ResumeScanRecord {
     List<String>? missingSkills,
     String? nlpAccuracy,
     double? hybridScore,
+    String? fitReason,
     List<Top5Match>? top5Matches,
     String? faissScore,
   }) =>
@@ -426,6 +501,7 @@ class ResumeScanRecord {
         missingSkills: missingSkills ?? this.missingSkills,
         nlpAccuracy: nlpAccuracy ?? this.nlpAccuracy,
         hybridScore: hybridScore ?? this.hybridScore,
+        fitReason: fitReason ?? this.fitReason,
         top5Matches: top5Matches ?? this.top5Matches,
         faissScore: faissScore ?? this.faissScore,
       );
@@ -450,6 +526,7 @@ class ResumeScanRecord {
         'missing_skills': missingSkills,
         'nlp_accuracy': nlpAccuracy,
         'hybrid_score': hybridScore,
+        'fit_reason': fitReason,
         // ── Full analysis ──────────────────────────────────────────────────────
         'faiss_score': faissScore,
         'top5_matches': top5Matches
@@ -492,6 +569,7 @@ class ResumeScanRecord {
       missingSkills: List<String>.from(d['missing_skills'] ?? []),
       nlpAccuracy: d['nlp_accuracy'] ?? '0%',
       hybridScore: (d['hybrid_score'] ?? 0.0).toDouble(),
+      fitReason: d['fit_reason'] ?? '',
       faissScore: d['faiss_score'] ?? '0%',
       top5Matches: top5Raw
           .map((e) => Top5Match.fromJson(e as Map<String, dynamic>))

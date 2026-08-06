@@ -7,6 +7,7 @@ import '../main.dart';
 import '../models/models.dart';
 import '../services/auth_service.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/common_widgets.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
@@ -81,6 +82,7 @@ class _HomeShellState extends State<HomeShell> {
     final c = AppColors.of(context);
     final appState = ResumeAnalyzerApp.of(context);
     final isDark = appState.isDark;
+    final useRail = context.useRailNav;
 
     return Scaffold(
       appBar: AppBar(
@@ -160,14 +162,58 @@ class _HomeShellState extends State<HomeShell> {
           const SizedBox(width: 4),
         ],
       ),
-      body: IndexedStack(
-        index: _tab,
-        children: [
-          UploadScreen(user: widget.user),
-          HistoryScreen(user: widget.user),
-        ],
-      ),
-      bottomNavigationBar: Container(
+      body: useRail
+          ? Row(
+              children: [
+                NavigationRail(
+                  selectedIndex: _tab,
+                  onDestinationSelected: (i) => setState(() => _tab = i),
+                  extended: context.isDesktop,
+                  minExtendedWidth: 180,
+                  backgroundColor: c.navy800,
+                  selectedIconTheme: IconThemeData(color: c.brand),
+                  unselectedIconTheme: IconThemeData(color: c.textTertiary),
+                  selectedLabelTextStyle: GoogleFonts.spaceGrotesk(
+                      color: c.brand,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12),
+                  unselectedLabelTextStyle: GoogleFonts.spaceGrotesk(
+                      color: c.textTertiary, fontSize: 12),
+                  destinations: const [
+                    NavigationRailDestination(
+                      icon: Icon(Icons.upload_file_outlined),
+                      selectedIcon: Icon(Icons.upload_file_rounded),
+                      label: Text('Analyze'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.timeline_outlined),
+                      selectedIcon: Icon(Icons.timeline_rounded),
+                      label: Text('History'),
+                    ),
+                  ],
+                ),
+                VerticalDivider(width: 1, thickness: 1, color: c.cardBorder),
+                Expanded(
+                  child: IndexedStack(
+                    index: _tab,
+                    children: [
+                      UploadScreen(user: widget.user),
+                      HistoryScreen(user: widget.user),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : IndexedStack(
+              index: _tab,
+              children: [
+                UploadScreen(user: widget.user),
+                HistoryScreen(user: widget.user),
+              ],
+            ),
+      bottomNavigationBar: useRail
+          ? null
+          : Container(
         decoration: BoxDecoration(
           color: c.navy800,
           border: Border(top: BorderSide(color: c.cardBorder, width: 2.5)),

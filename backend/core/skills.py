@@ -24,7 +24,11 @@ _SKILL_HEADING_RE = re.compile(
     r"|tools?\s*(?:&|and)\s*technologies?"
     r"|(?:technical\s+)?proficienc(?:ies|y)"
     r")"
-    r"\s*:?\s*$",
+    # Trailing decoration after the heading word: a colon, whitespace, or
+    # OCR-rendered underline/rule dividers (e.g. "SKILLS_", "SKILLS____",
+    # "SKILLS ---"). Anchored to end-of-line, so this still can't match
+    # mid-sentence uses like "Skills-based hiring approach".
+    r"[\s:_\-]*$",
     re.I | re.M,
     )
 
@@ -32,7 +36,15 @@ _SKILLS_END_RE = re.compile(
     r"^\s*[^\w]*(certifications?|licen[cs]es?\s*(&|and)?\s*certifications?|"
     r"professional\s+certifications?|credentials?|accreditations?|"
     r"work\s+experience|experience|education|employment|projects?|awards?|"
-    r"publications?|references?|volunteer|languages?|interests?|activities|"
+    r"publications?|references?|volunteer|"
+    # "languages?" only ends the section when it's a standalone heading
+    # line (e.g. "Languages" / "Languages:" for spoken languages) — not
+    # when it's a Skills sub-heading with content on the same line, like
+    # "Languages & Web: JavaScript..." or "Programming Languages: Python,
+    # Java". The lookahead requires nothing but an optional colon before
+    # end-of-line.
+    r"languages?(?=\s*:?\s*$)|"
+    r"interests?|activities|"
     r"summary|objective(?![\w\-]))",
     re.I | re.M,
     )

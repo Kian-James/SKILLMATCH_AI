@@ -16,12 +16,18 @@ import 'theme.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lock orientation on mobile only — not supported on web
+  // Lock orientation on phone-sized devices only — tablets and desktop
+  // should be free to rotate / resize into landscape. Not supported on web.
   if (!kIsWeb) {
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final shortestSide =
+        view.physicalSize.shortestSide / view.devicePixelRatio;
+    if (shortestSide < 600) {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
+    }
   }
 
   await Firebase.initializeApp(

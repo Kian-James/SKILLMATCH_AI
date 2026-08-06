@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/models.dart';
 import '../services/auth_service.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import 'home_shell.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -182,8 +183,11 @@ class _LoginScreenState extends State<LoginScreen>
       body: SafeArea(
         child: FadeTransition(
           opacity: _fadeAnim,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+          child: ResponsiveBody(
+            maxWidth: 480,
+            child: SingleChildScrollView(
+            padding: EdgeInsets.symmetric(
+                horizontal: responsiveGutter(context, 28), vertical: 24),
             child: Form(
               key: _formKey,
               child: Column(
@@ -209,6 +213,7 @@ class _LoginScreenState extends State<LoginScreen>
                   const SizedBox(height: 24),
                 ],
               ),
+            ),
             ),
           ),
         ),

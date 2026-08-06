@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/firestore_service.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/common_widgets.dart';
 
 class FullResultsScreen extends StatefulWidget {
@@ -155,8 +156,11 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
             ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      body: ResponsiveBody(
+        maxWidth: 800,
+        child: SingleChildScrollView(
+        padding: EdgeInsets.symmetric(
+            horizontal: responsiveGutter(context, 20), vertical: 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -198,6 +202,7 @@ class _FullResultsScreenState extends State<FullResultsScreen> {
             _buildQualityCheck(context),
             const SizedBox(height: 32),
           ],
+        ),
         ),
       ),
     );

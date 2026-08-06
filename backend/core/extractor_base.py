@@ -88,6 +88,22 @@ _BANNER_STRUCT_RE = re.compile(
 
 _BULLET_RE = re.compile(r"^\s*[\u2022\-\*\u25e6\u25aa]|\s*\d+\.\s+", re.M)
 
+# Generic technical/skill vocabulary. A Title-Case line containing any of
+# these reads as an ordinary skill phrase (e.g. "Schema Design", "Cloud
+# Architecture", "Test Automation") rather than a person-name/job-title
+# banner, even when the exact phrase isn't already in this particular job's
+# allowlist. Mirrors the title-vs-provider keyword guard in certs.py.
+_SKILL_KEYWORD_RE = re.compile(
+    r"\b(design|development|schema|database|modeling|framework|api|apis|"
+    r"security|network|networking|cloud|management|testing|automation|"
+    r"architecture|optimization|integration|analysis|analytics|engineering|"
+    r"programming|scripting|administration|server|servers|front[\s\-]?end|"
+    r"back[\s\-]?end|full[\s\-]?stack|software|systems?|web|data|query|"
+    r"queries|storage|devops|agile|scrum|deployment|version\s+control|"
+    r"responsive|tools?|technolog(?:y|ies))\b",
+    re.I,
+)
+
 
 # ---------------------------------------------------------------------------
 # Configuration dataclass — the only thing callers need to supply
@@ -145,15 +161,21 @@ def _restore_parens(text: str, pmap: dict[str, str]) -> str:
 def _is_banner_line(line: str, allowlist: list[str]) -> bool:
     """
     Return True if line looks like a personal name or job-title banner injected
-    between section content and the next heading. Three layers must all pass:
+    between section content and the next heading. Four layers must all pass:
       1. Structural: letters/spaces/hyphens only, 2+ words, length 5–60, no digits.
-      2. Word shape: every word is pure Title Case or pure ALL CAPS.
-      3. Allowlist guard: fuzzy score < 65 against all known items
+      2. Keyword guard: no generic technical/skill vocabulary (e.g. "Schema
+         Design", "Cloud Architecture") — real banners are names/job titles,
+         not skill phrases, and this vocabulary is a much broader net than
+         any single job's allowlist can be.
+      3. Word shape: every word is pure Title Case or pure ALL CAPS.
+      4. Allowlist guard: fuzzy score < 65 against all known items
          (token_set_ratio catches subset matches like "CRUD Application Development").
     """
     if not _BANNER_STRUCT_RE.match(line) or " " not in line:
         return False
     if any(ch.isdigit() for ch in line):
+        return False
+    if _SKILL_KEYWORD_RE.search(line):
         return False
     for word in line.split():
         w = word.strip("-")
@@ -699,8 +721,13 @@ def _parse_section_to_entries(
             if not para:
                 continue
             protected_para, pmap_para = _protect_parens(para)
-            for sub in re.split(r"\s*,\s*", protected_para):
-                sub = _restore_parens(sub.strip(), pmap_para).strip().strip(",").strip()
+            # Split on semicolons as well as commas: resumes commonly mix
+            # both as item separators within one sub-heading line (e.g.
+            # "Databases & CMS: MySQL; MongoDB, WordPress"), and leaving
+            # semicolon-joined items merged prevents individual terms like
+            # "MongoDB" from matching the allowlist downstream.
+            for sub in re.split(r"\s*[,;]\s*", protected_para):
+                sub = _restore_parens(sub.strip(), pmap_para).strip().strip(",;").strip()
                 if sub:
                     paragraphs.append(sub)
 
@@ -933,9 +960,15 @@ def _section_text_to_entries(
 
     entries: list[str] = []
 
-    if "," in joined:
+    if "," in joined or ";" in joined:
         protected, pmap = _protect_parens(joined)
-        for part in re.split(r"\s*,\s*|\s*\n\s*", protected):
+        # Split on semicolons as well as commas: a section commonly mixes
+        # both as separators across its sub-headings (e.g. "CMS: MySQL;
+        # MongoDB, WordPress"), and since this branch is chosen once for
+        # the whole section (via the "," in joined check below), leaving
+        # semicolons unhandled here means any semicolon-only line stays
+        # fully merged and never reaches SBERT as individual items.
+        for part in re.split(r"\s*[,;]\s*|\s*\n\s*", protected):
             part = _restore_parens(part.strip(), pmap)
             part = _strip_subheader(part, allowlist)
             if not part:
@@ -943,12 +976,6 @@ def _section_text_to_entries(
             if len(re.sub(r'\([^)]*\)', '', part).strip().split()) > 6:
                 break
             entries.extend(_expand_parentheticals([part], allowlist))
-
-    elif ";" in joined:
-        for line in lines:
-            for part in re.split(r"\s*[;\n]\s*", _strip_subheader(line, allowlist)):
-                if part.strip():
-                    entries.append(part.strip())
 
     elif "|" in joined:
         for line in lines:

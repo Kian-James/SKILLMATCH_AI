@@ -40,27 +40,26 @@ class StatCard extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Container(
-            padding: const EdgeInsets.all(6),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: valueColor.withOpacity(0.15),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: c.cardBorder, width: 1.5),
             ),
-            child: Icon(icon, color: valueColor, size: 16),
+            child: Icon(icon, color: valueColor, size: 20),
           ),
-          const SizedBox(height: 10),
           Text(value,
               style: GoogleFonts.spaceGrotesk(
-                  fontSize: 24,
+                  fontSize: 34,
                   fontWeight: FontWeight.w700,
                   color: c.textPrimary,
                   height: 1)),
-          const SizedBox(height: 4),
           Text(label,
               style: GoogleFonts.workSans(
-                  fontSize: 11,
+                  fontSize: 12,
                   color: c.textSecondary,
                   fontWeight: FontWeight.w600)),
         ],
@@ -279,9 +278,8 @@ class AvatarCircle extends StatelessWidget {
           color: c.cardBorder,
           width: isSelected ? AppTheme.borderWidthThick : AppTheme.borderWidth,
         ),
-        boxShadow: isSelected
-            ? AppTheme.hardShadow(c.cardBorder, dx: 3, dy: 3)
-            : null,
+        boxShadow:
+            isSelected ? AppTheme.hardShadow(c.cardBorder, dx: 3, dy: 3) : null,
       ),
       child: Center(
         child: Text(

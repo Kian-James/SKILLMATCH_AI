@@ -17,6 +17,7 @@ import '../services/api_service.dart';
 import '../services/firestore_service.dart';
 import '../services/tutorial_service.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/tutorial_overlay.dart';
 import 'full_results_screen.dart';
@@ -463,6 +464,7 @@ class _UploadScreenState extends State<UploadScreen>
       missingSkills: result.skillGap.missingSkills,
       nlpAccuracy: result.skillGap.nlpAccuracy,
       hybridScore: result.skillGap.hybridScore,
+      fitReason: result.fitReason,
       scannedAt: DateTime.now(),
     );
     final docId = await _firestore.upsertScanRecord(record);
@@ -594,8 +596,11 @@ class _UploadScreenState extends State<UploadScreen>
             ],
           ),
           body: SafeArea(
+            child: ResponsiveBody(
+            maxWidth: 720,
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+              padding: EdgeInsets.symmetric(
+                  horizontal: responsiveGutter(context, 22), vertical: 18),
               child: Form(
                 key: _formKey,
                 child: Column(
@@ -663,6 +668,7 @@ class _UploadScreenState extends State<UploadScreen>
                   ],
                 ),
               ),
+            ),
             ),
           ),
         ),

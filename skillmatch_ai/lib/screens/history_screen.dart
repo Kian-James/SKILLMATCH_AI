@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/firestore_service.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/progression_chart.dart';
 import 'full_results_screen.dart';
@@ -48,57 +49,61 @@ class HistoryScreen extends StatelessWidget {
             return _emptyState(context);
           }
 
-          return CustomScrollView(
-            slivers: [
-              // ── Skill Progression Chart ──────────────────────────────────
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _sectionHeader(context, 'Skill Progression',
-                          '${records.length} scan${records.length != 1 ? 's' : ''} tracked'),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: AppColors.of(context).navy800,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                              color: AppColors.of(context).cardBorder),
+          return ResponsiveBody(
+            maxWidth: 760,
+            child: CustomScrollView(
+              slivers: [
+                // ── Skill Progression Chart ──────────────────────────────────
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sectionHeader(context, 'Skill Progression',
+                            '${records.length} scan${records.length != 1 ? 's' : ''} tracked'),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            color: AppColors.of(context).navy800,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                                color: AppColors.of(context).cardBorder),
+                          ),
+                          child: ProgressionChart(history: records),
                         ),
-                        child: ProgressionChart(history: records),
-                      ),
-                      const SizedBox(height: 28),
-                      _sectionHeader(context, 'All Scans', 'Newest first'),
-                      const SizedBox(height: 4),
-                    ],
+                        const SizedBox(height: 28),
+                        _sectionHeader(context, 'All Scans', 'Newest first'),
+                        const SizedBox(height: 4),
+                      ],
+                    ),
                   ),
                 ),
-              ),
 
-              // ── Scan record list ─────────────────────────────────────────
-              SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, i) {
-                    final r = records[i];
-                    return Padding(
-                      padding: EdgeInsets.fromLTRB(20, i == 0 ? 8 : 0, 20, 12),
-                      child: _ScanCard(
-                        record: r,
-                        user: user,
-                        onDelete: () =>
-                            FirestoreService().deleteScanRecord(r.id),
-                      ),
-                    );
-                  },
-                  childCount: records.length,
+                // ── Scan record list ─────────────────────────────────────────
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) {
+                      final r = records[i];
+                      return Padding(
+                        padding:
+                            EdgeInsets.fromLTRB(20, i == 0 ? 8 : 0, 20, 12),
+                        child: _ScanCard(
+                          record: r,
+                          user: user,
+                          onDelete: () =>
+                              FirestoreService().deleteScanRecord(r.id),
+                        ),
+                      );
+                    },
+                    childCount: records.length,
+                  ),
                 ),
-              ),
 
-              const SliverToBoxAdapter(child: SizedBox(height: 32)),
-            ],
+                const SliverToBoxAdapter(child: SizedBox(height: 32)),
+              ],
+            ),
           );
         },
       ),
@@ -155,7 +160,8 @@ class HistoryScreen extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.of(ctx).navy800,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: AppColors.of(ctx).cardBorder, width: 2.5),
+              border:
+                  Border.all(color: AppColors.of(ctx).cardBorder, width: 2.5),
             ),
             child: Icon(Icons.history_rounded,
                 color: AppColors.of(ctx).textTertiary, size: 36),
@@ -187,7 +193,7 @@ class _ScanCard extends StatelessWidget {
   });
 
   double get _accuracy {
-    final c = record.nlpAccuracy.replaceAll('%', '').trim();
+    final c = record.liveAccuracy.replaceAll('%', '').trim();
     return double.tryParse(c) ?? 0;
   }
 
@@ -220,8 +226,10 @@ class _ScanCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.of(context).navy800,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.of(context).cardBorder, width: 2.5),
-          boxShadow: AppTheme.hardShadow(AppColors.of(context).cardBorder, dx: 4, dy: 4),
+          border:
+              Border.all(color: AppColors.of(context).cardBorder, width: 2.5),
+          boxShadow: AppTheme.hardShadow(AppColors.of(context).cardBorder,
+              dx: 4, dy: 4),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Top row
@@ -283,9 +291,10 @@ class _ScanCard extends StatelessWidget {
               decoration: BoxDecoration(
                 color: _accuracyColor.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _accuracyColor.withOpacity(0.3), width: 2.5),
+                border: Border.all(
+                    color: _accuracyColor.withOpacity(0.3), width: 2.5),
               ),
-              child: Text(record.nlpAccuracy,
+              child: Text(record.liveAccuracy,
                   style: GoogleFonts.spaceGrotesk(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,

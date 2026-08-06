@@ -63,20 +63,6 @@ class ApiService {
     return _parseTarget(req);
   }
 
-  /// Camera scan — ML Kit already extracted text on-device.
-  Future<TargetCareerResult> analyzeTargetCareerScanned({
-    required String scannedText,
-    required String fileName,
-    required String targetJob,
-  }) async {
-    final req = http.MultipartRequest(
-        'POST', Uri.parse('$baseUrl/scan-target-career-analysis'));
-    req.fields['scanned_text'] = scannedText;
-    req.fields['file_name'] = fileName;
-    req.fields['target_job'] = targetJob;
-    return _parseTarget(req);
-  }
-
   // ══════════════════════════════════════════════════════════════════════════
   //  /thesis-full-analysis
   // ══════════════════════════════════════════════════════════════════════════
@@ -104,18 +90,6 @@ class ApiService {
         'POST', Uri.parse('$baseUrl/thesis-full-analysis'));
     final bytes = fileBytes ?? await _readBytes(imagePath);
     req.files.add(_imageFile(bytes, fileName));
-    return _parseFull(req);
-  }
-
-  /// Camera scan — ML Kit text sent to dedicated scan endpoint.
-  Future<FullAnalysisResult> analyzeFullResumeScanned({
-    required String scannedText,
-    required String fileName,
-  }) async {
-    final req = http.MultipartRequest(
-        'POST', Uri.parse('$baseUrl/scan-thesis-full-analysis'));
-    req.fields['scanned_text'] = scannedText;
-    req.fields['file_name'] = fileName;
     return _parseFull(req);
   }
 

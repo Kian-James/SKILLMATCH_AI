@@ -162,4 +162,15 @@ class FirestoreService {
         .doc(docId)
         .update({'missing_skills': missingSkills});
   }
+
+  /// Update the matched-skills list on an existing scan record.
+  /// Used when the user promotes a missing skill to "I have this" or
+  /// removes a matched skill the AI got wrong (a hallucinated match).
+  Future<void> updateMatchedSkills(
+      String docId, List<String> matchedSkills) async {
+    await _db
+        .collection(_collection)
+        .doc(docId)
+        .update({'matched_skills': matchedSkills});
+  }
 }

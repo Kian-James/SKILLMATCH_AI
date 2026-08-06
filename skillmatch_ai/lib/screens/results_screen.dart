@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/firestore_service.dart';
 import '../theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/common_widgets.dart';
 
 class ResultsScreen extends StatefulWidget {
@@ -27,19 +28,31 @@ class ResultsScreen extends StatefulWidget {
 
 class _ResultsScreenState extends State<ResultsScreen> {
   late List<String> _missingSkills;
+  late List<String> _matchedSkills;
   final _addSkillCtrl = TextEditingController();
   final _firestore = FirestoreService();
   bool _savingSkills = false;
 
+  /// Recomputed live accuracy: matched / (matched + missing) * 100 — same
+  /// formula the backend uses. Updates instantly whenever a skill is
+  /// promoted (added) or removed, instead of staying frozen at the
+  /// original scan's value.
   double get _accuracyValue {
-    final clean = widget.record.nlpAccuracy.replaceAll('%', '').trim();
-    return double.tryParse(clean) ?? 0;
+    final total = _matchedSkills.length + _missingSkills.length;
+    if (total == 0) {
+      final clean = widget.record.nlpAccuracy.replaceAll('%', '').trim();
+      return double.tryParse(clean) ?? 0;
+    }
+    return _matchedSkills.length / total * 100;
   }
+
+  String get _accuracyLabel => '${_accuracyValue.toStringAsFixed(2)}%';
 
   @override
   void initState() {
     super.initState();
     _missingSkills = List<String>.from(widget.record.missingSkills);
+    _matchedSkills = List<String>.from(widget.record.matchedSkills);
   }
 
   @override
@@ -52,6 +65,22 @@ class _ResultsScreenState extends State<ResultsScreen> {
     setState(() => _savingSkills = true);
     try {
       await _firestore.updateMissingSkills(widget.record.id, _missingSkills);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Could not save that change — try again.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingSkills = false);
+    }
+  }
+
+  Future<void> _persistMatchedSkills() async {
+    setState(() => _savingSkills = true);
+    try {
+      await _firestore.updateMatchedSkills(widget.record.id, _matchedSkills);
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -85,6 +114,36 @@ class _ResultsScreenState extends State<ResultsScreen> {
     _persistMissingSkills();
   }
 
+  /// Move a missing skill up into "Matched Skills" — i.e. "I actually have
+  /// this skill". Updates both lists and persists the change.
+  void _promoteSkill(String skill) {
+    setState(() {
+      _missingSkills.remove(skill);
+      if (!_matchedSkills
+          .map((s) => s.toLowerCase())
+          .contains(skill.toLowerCase())) {
+        _matchedSkills.add(skill);
+      }
+    });
+    _persistMissingSkills();
+    _persistMatchedSkills();
+  }
+
+  /// Remove a matched skill the AI got wrong (a hallucinated match) and
+  /// move it back down into "Missing Skills" so it isn't silently lost.
+  void _demoteSkill(String skill) {
+    setState(() {
+      _matchedSkills.remove(skill);
+      if (!_missingSkills
+          .map((s) => s.toLowerCase())
+          .contains(skill.toLowerCase())) {
+        _missingSkills.add(skill);
+      }
+    });
+    _persistMatchedSkills();
+    _persistMissingSkills();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -101,29 +160,34 @@ class _ResultsScreenState extends State<ResultsScreen> {
             ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildJobHeader(context),
-            const SizedBox(height: 14),
-            _buildBentoGrid(context),
-            const SizedBox(height: 24),
-            _buildSkillsSection(context, 'Matched Skills',
-                widget.record.matchedSkills, SkillChipType.matched,
-                icon: Icons.check_circle_outline_rounded,
-                iconColor: AppTheme.green500),
-            const SizedBox(height: 20),
-            _buildMissingSkillsSection(context),
-            const SizedBox(height: 20),
-            _buildAllSkillsSection(context),
-            const SizedBox(height: 20),
-            if (widget.record.certCount > 0) _buildCertSection(context),
-            const SizedBox(height: 20),
-            _buildMetaCard(context),
-            const SizedBox(height: 32),
-          ],
+      body: ResponsiveBody(
+        maxWidth: 760,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.symmetric(
+              horizontal: responsiveGutter(context, 20), vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildJobHeader(context),
+              const SizedBox(height: 14),
+              _buildBentoGrid(context),
+              if (widget.record.fitReason.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                _buildFitReasonCard(context),
+              ],
+              const SizedBox(height: 24),
+              _buildMatchedSkillsSection(context),
+              const SizedBox(height: 20),
+              _buildMissingSkillsSection(context),
+              const SizedBox(height: 20),
+              _buildAllSkillsSection(context),
+              const SizedBox(height: 20),
+              if (widget.record.certCount > 0) _buildCertSection(context),
+              const SizedBox(height: 20),
+              _buildMetaCard(context),
+              const SizedBox(height: 32),
+            ],
+          ),
         ),
       ),
     );
@@ -185,50 +249,42 @@ class _ResultsScreenState extends State<ResultsScreen> {
     );
   }
 
-  /// Bento grid — one tall accuracy tile beside two stacked stat tiles,
-  /// then a wide row of two more stat tiles underneath. Deliberately
-  /// asymmetric tile sizes, thick outlines, hard offset shadows.
+  /// Bento grid — full-width accuracy tile on top, then two rows of
+  /// evenly-sized stat tiles underneath (Matched/Missing, then Total/Certs).
+  /// All stat tiles share the same compact, un-stretched card height so
+  /// nothing gets forced tall with empty space inside it.
   Widget _buildBentoGrid(BuildContext context) {
     final c = AppColors.of(context);
     return Column(
       children: [
-        SizedBox(
-          height: 176,
+        _buildAccuracyTile(context),
+        const SizedBox(height: 10),
+        IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(flex: 5, child: _buildAccuracyTile(context)),
+              Expanded(
+                child: StatCard(
+                  label: 'Matched',
+                  value: '${_matchedSkills.length}',
+                  valueColor: AppTheme.teal500,
+                  icon: Icons.check_circle_outline_rounded,
+                ),
+              ),
               const SizedBox(width: 10),
               Expanded(
-                flex: 4,
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: StatCard(
-                        label: 'Matched',
-                        value: '${widget.record.matchedCount}',
-                        valueColor: AppTheme.teal500,
-                        icon: Icons.check_circle_outline_rounded,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: StatCard(
-                        label: 'Missing',
-                        value: '${_missingSkills.length}',
-                        valueColor: AppTheme.red500,
-                        icon: Icons.remove_circle_outline_rounded,
-                      ),
-                    ),
-                  ],
+                child: StatCard(
+                  label: 'Missing',
+                  value: '${_missingSkills.length}',
+                  valueColor: AppTheme.red500,
+                  icon: Icons.remove_circle_outline_rounded,
                 ),
               ),
             ],
           ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          height: 96,
+        IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -269,12 +325,16 @@ class _ResultsScreenState extends State<ResultsScreen> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          AccuracyRing(accuracy: widget.record.nlpAccuracy, size: 64),
-          const Spacer(),
+          AccuracyRing(accuracy: _accuracyLabel, size: 64),
+          const SizedBox(height: 20),
           Text('NLP match accuracy',
               style: GoogleFonts.spaceGrotesk(
-                  fontSize: 13, fontWeight: FontWeight.w700, color: c.textPrimary)),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: c.textPrimary)),
           const SizedBox(height: 4),
           Text(
             _accuracyDescription,
@@ -288,6 +348,36 @@ class _ResultsScreenState extends State<ResultsScreen> {
               minHeight: 6,
               backgroundColor: c.navy600,
               valueColor: AlwaysStoppedAnimation<Color>(_accuracyColor),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFitReasonCard(BuildContext context) {
+    final c = AppColors.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: c.brand.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.cardBorder, width: 1.75),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.lightbulb_outline_rounded, color: c.brandSoft, size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              widget.record.fitReason,
+              style: GoogleFonts.workSans(
+                fontSize: 12,
+                color: c.brandSoft,
+                height: 1.5,
+              ),
             ),
           ),
         ],
@@ -354,6 +444,92 @@ class _ResultsScreenState extends State<ResultsScreen> {
           children: skills.map((s) => SkillChip(label: s, type: type)).toList(),
         ),
       ],
+    );
+  }
+
+  // ── Matched skills section (chips removable — clear a hallucinated match)
+
+  Widget _buildMatchedSkillsSection(BuildContext context) {
+    final c = AppColors.of(context);
+    if (_matchedSkills.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.check_circle_outline_rounded,
+                color: AppTheme.green500, size: 16),
+            const SizedBox(width: 8),
+            Text('Matched Skills',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppTheme.green500.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                '${_matchedSkills.length}',
+                style: GoogleFonts.spaceGrotesk(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.green500),
+              ),
+            ),
+            if (_savingSkills) ...[
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 11,
+                height: 11,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.6, color: c.textTertiary),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text('Tap × to remove a skill the AI matched incorrectly',
+            style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children:
+              _matchedSkills.map((s) => _matchedSkillChip(context, s)).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _matchedSkillChip(BuildContext context, String skill) {
+    final c = AppColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.green500.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.cardBorder, width: 1.75),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            skill,
+            style: GoogleFonts.workSans(
+                fontSize: 12,
+                color: AppTheme.green500,
+                fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => _demoteSkill(skill),
+            child:
+                Icon(Icons.close_rounded, size: 14, color: AppTheme.green500),
+          ),
+        ],
+      ),
     );
   }
 
@@ -492,6 +668,17 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 fontWeight: FontWeight.w500),
           ),
           const SizedBox(width: 6),
+          // "I have this skill" — promotes it into Matched Skills
+          Tooltip(
+            message: 'I have this skill',
+            child: GestureDetector(
+              onTap: () => _promoteSkill(skill),
+              child: Icon(Icons.add_circle_outline_rounded,
+                  size: 15, color: AppTheme.red400),
+            ),
+          ),
+          const SizedBox(width: 4),
+          // Remove entirely — clears a skill that shouldn't be tracked
           GestureDetector(
             onTap: () => _removeSkill(skill),
             child: Icon(Icons.close_rounded, size: 14, color: AppTheme.red400),
