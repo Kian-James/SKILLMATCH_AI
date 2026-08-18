@@ -10,6 +10,8 @@ import os
 import shutil
 import logging
 import threading
+import uuid
+from pathlib import Path
 
 import faiss
 import numpy as np
@@ -76,7 +78,10 @@ _pipeline_semaphore = threading.Semaphore(1)
 def thesis_full_analysis(file: UploadFile = File(...)) -> dict:
     """Full pipeline analysis for a single uploaded resume PDF."""
 
-    temp_path = f"temp_{file.filename}"
+    # Unique per request — see the identical fix in target_career_analysis
+    # below for why deriving this from file.filename directly is unsafe.
+    ext = Path(file.filename).suffix
+    temp_path = f"temp_{uuid.uuid4().hex}{ext}"
     with open(temp_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
 
@@ -191,7 +196,19 @@ def target_career_analysis(
     against the candidate.
     """
 
-    temp_path = f"temp_target_{file.filename}"
+    # Unique per request (not derived from file.filename) — the old
+    # f"temp_target_{file.filename}" pattern meant two uploads with the
+    # SAME filename shared one path. Since the pipeline semaphore below
+    # serializes requests, a second request with the same filename could
+    # end up queued behind a first one; when the first finished and its
+    # `finally` block deleted the (shared) temp file, the second request
+    # would then try to read a file that no longer existed —
+    # "[Errno 2] No such file or directory". A uuid-based path can never
+    # collide between requests, so this can't happen anymore. The
+    # extension is preserved because Ocr/main.py's _run_ocr() decides
+    # PDF-vs-image by checking the file extension.
+    ext = Path(file.filename).suffix
+    temp_path = f"temp_target_{uuid.uuid4().hex}{ext}"
     with open(temp_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
 

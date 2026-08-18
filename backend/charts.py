@@ -85,10 +85,23 @@ def _no_data_msg(ax, title: str, detail: str = "") -> None:
 
 
 def _hbar(ax, labels, values, colours, title, xlabel, xlim=(0, 1),
-          vlines=None, fmt=".0%", fontsize=10) -> None:
-    """Generic, larger-font horizontal bar chart with value labels."""
+          vlines=None, fmt=".0%", fontsize=10, hatches=None) -> None:
+    """
+    Generic, larger-font horizontal bar chart with value labels.
+
+    hatches: optional list, same length as labels — a matplotlib hatch
+    pattern string (e.g. "///") per bar, or None for a plain bar. Used to
+    flag bars whose underlying value isn't fully comparable to the rest
+    (e.g. a FAISS score that's cosine-only rather than skill-verified)
+    without hiding it from the ranking.
+    """
     y = range(len(labels))
     bars = ax.barh(list(y), values, color=colours, edgecolor="white", height=0.62)
+    if hatches:
+        for bar, h in zip(bars, hatches):
+            if h:
+                bar.set_hatch(h)
+                bar.set_edgecolor(_DARK)
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=fontsize)
     ax.set_xlim(*xlim)
@@ -332,14 +345,31 @@ def _chart_faiss_combined(results: list[dict], fig, top_k: int = 5) -> None:
         return
 
     # -- left: hybrid score, sorted worst-to-best --
-    s_sorted = sorted(samples, key=lambda r: r["faiss"]["best_score"])
-    labels   = [_short_name(r["file"]) for r in s_sorted]
+    # A sample's best-matched job may have had no required_skills in the
+    # corpus, in which case core/scoring.py's skill_scored=False means the
+    # score is cosine-only — no skill term contributed to it. Missing this
+    # here is exactly the trap evaluate_pipeline.py's own "Skill/Cosine
+    # Coupling" section guards against: a clean-looking score bar can hide
+    # that the skill match was never actually checked. Flag those bars with
+    # a hatch + label marker instead of blending them in with verified ones.
+    s_sorted     = sorted(samples, key=lambda r: r["faiss"]["best_score"])
+    skill_scored = [r["faiss"].get("skill_scored", True) for r in s_sorted]
+    labels   = [_short_name(r["file"]) + ("" if sv else "  †")
+                for r, sv in zip(s_sorted, skill_scored)]
     scores   = [r["faiss"]["best_score"] / 100 for r in s_sorted]
     min_sc   = [r["faiss"]["min_score"] / 100 for r in s_sorted]
     avg_min  = sum(min_sc) / len(min_sc) if min_sc else 0.5
     colours  = [_score_colour(v, avg_min, 0.75) for v in scores]
+    hatches  = [None if sv else "///" for sv in skill_scored]
     _hbar(ax_score, labels, scores, colours, "Hybrid Match Score per Sample",
-          "Score (0-1)", vlines=[(avg_min, f"avg min_score ({avg_min:.0%})", _RED)])
+          "Score (0-1)", vlines=[(avg_min, f"avg min_score ({avg_min:.0%})", _RED)],
+          hatches=hatches)
+    if not all(skill_scored):
+        ax_score.text(0.5, -0.13,
+                      "† cosine-only — best-matched job had no required_skills in the "
+                      "corpus, so this score has no skill term in it",
+                      transform=ax_score.transAxes, ha="center", fontsize=8,
+                      color=_GREY, style="italic")
 
     # -- right: rank of expected title, sorted worst-to-best --
     r_sorted = sorted(samples, key=lambda r: r["faiss"]["expected_title_rank"] or top_k + 1)
@@ -383,9 +413,22 @@ def _chart_pass_rate(results: list[dict], ax, mode: str = "pipeline", top_k: int
 
     fais = [r for r in results if r.get("faiss") and not r["faiss"].get("error")]
     if fais and mode in ("faiss", "pipeline"):
-        rate_score = sum(1 for r in fais if r["faiss"]["score_pass"]) / len(fais)
-        rate_found = sum(1 for r in fais if r["faiss"]["expected_title_found"]) / len(fais)
-        slices.append(("FAISS score passes threshold", rate_score, _TEAL))
+        n_total        = len(fais)
+        n_skill_scored = sum(1 for r in fais if r["faiss"].get("skill_scored", True))
+        n_pass_all     = sum(1 for r in fais if r["faiss"]["score_pass"])
+        n_pass_verif   = sum(1 for r in fais
+                             if r["faiss"]["score_pass"] and r["faiss"].get("skill_scored", True))
+        rate_found     = sum(1 for r in fais if r["faiss"]["expected_title_found"]) / n_total
+
+        # Surfaced separately (not just baked into the pass-rate bar) for the
+        # same reason evaluate_pipeline.py's terminal report calls this out
+        # as its own block: a 100% score-pass rate is meaningless if most of
+        # it came from jobs with no required_skills to actually check.
+        slices.append(("FAISS best-match skill-verified", n_skill_scored / n_total, _BLUE))
+        slices.append(("FAISS score passes (all samples)", n_pass_all / n_total, _TEAL))
+        if n_skill_scored:
+            slices.append(("FAISS score passes (skill-verified only)",
+                           n_pass_verif / n_skill_scored, _GREEN))
         slices.append((f"Correct job in top-{top_k}", rate_found, _ORANGE))
 
     if not slices:
@@ -467,15 +510,40 @@ def _chart_aggregate_table(results: list[dict], ax, mode: str = "pipeline") -> N
         rows.append(("FAISS — Job Retrieval", "", ""))
         rr   = np.array([r["faiss"].get("reciprocal_rank", 0.0) for r in fais])
         ndcg = np.array([r["faiss"].get("ndcg_at_k",       0.0) for r in fais])
-        h1   = np.array([r["faiss"].get("hit_at_1",        0)   for r in fais], dtype=float)
+        fnd   = sum(1 for r in fais if r["faiss"]["expected_title_found"])
+        # Recall@K: for one relevant job per query, this is exactly
+        # "found in top-K or not" averaged across queries — listed under
+        # its formal IR name so it sits alongside MRR/NDCG the way a
+        # thesis would cite it. (No separate "title found" row — same
+        # number, would just repeat this line.)
+        rows.append(("  Recall@K", f"{fnd/len(fais):.3f}  ({fnd}/{len(fais)})", ""))
         rows.append(("  MRR", f"{rr.mean():.3f}", f"±{rr.std():.3f}"))
         rows.append(("  Mean NDCG@K", f"{ndcg.mean():.3f}", f"±{ndcg.std():.3f}"))
-        rows.append(("  Mean Hit@1", f"{h1.mean():.1%}", ""))
-        fnd   = sum(1 for r in fais if r["faiss"]["expected_title_found"])
         spass = sum(1 for r in fais if r["faiss"]["score_pass"])
         hyb   = np.array([r["faiss"]["best_score"] for r in fais])
-        rows.append(("  Title found in top-K", f"{fnd/len(fais):.1%}", ""))
-        rows.append(("  Score-pass rate", f"{spass/len(fais):.1%}", ""))
+
+        # Skill/cosine coupling — same fields evaluate_pipeline.py reports
+        # in its "Skill/Cosine Coupling" block and JSON aggregates
+        # (skill_scored_rate, cosine_only_count, score_pass_rate_skill_verified).
+        # Without these, "Score-pass rate" below can look perfect while a
+        # chunk of it never had a skill term in the score at all.
+        n_skill_scored = sum(1 for r in fais if r["faiss"].get("skill_scored", True))
+        n_cosine_only  = len(fais) - n_skill_scored
+        n_pass_verif   = sum(1 for r in fais
+                             if r["faiss"]["score_pass"] and r["faiss"].get("skill_scored", True))
+        match_ratios   = [r["faiss"]["best_match_ratio"] for r in fais
+                          if r["faiss"].get("best_match_ratio") is not None]
+        rows.append(("  Best-match skill-verified",
+                     f"{n_skill_scored/len(fais):.1%}", f"({n_skill_scored}/{len(fais)})"))
+        rows.append(("  Best-match cosine-only (no required_skills)",
+                     f"{n_cosine_only/len(fais):.1%}", f"({n_cosine_only}/{len(fais)})"))
+
+        rows.append(("  Score-pass rate (all samples)", f"{spass/len(fais):.1%}", ""))
+        rows.append(("  Score-pass rate (skill-verified only)",
+                     f"{n_pass_verif/n_skill_scored:.1%}" if n_skill_scored else "N/A", ""))
+        if match_ratios:
+            rows.append(("  Avg skill match ratio (skill-verified only)",
+                         f"{sum(match_ratios)/len(match_ratios):.1%}", ""))
         rows.append(("  Avg hybrid score", f"{hyb.mean():.1f}/100", f"±{hyb.std():.1f}"))
         rows.append(("  n samples", str(len(fais)), ""))
 
@@ -568,11 +636,14 @@ def generate_charts(
                          f"(support: {n.get('total_support', 0)})")
         if agg.get("faiss"):
             fa = agg["faiss"]
-            line = (f"FAISS — title-found: {fa['title_found_rate']:.0%}    "
+            recall_k = fa.get("recall_at_k", fa.get("title_found_rate", 0))
+            line = (f"FAISS — recall@k: {recall_k:.0%}    "
                     f"score-pass: {fa['score_pass_rate']:.0%}    "
                     f"avg score: {fa['avg_hybrid_score']:.1f}/100")
             if fa.get("mrr") is not None:
                 line += f"    MRR: {fa['mrr']:.3f}"
+            if fa.get("skill_scored_rate") is not None:
+                line += f"    skill-verified: {fa['skill_scored_rate']:.0%}"
             lines.append(line)
         ax_cover.text(0.5, 0.35, "\n".join(lines), ha="center", va="center",
                       fontsize=12, color=_DARK, transform=ax_cover.transAxes, linespacing=2.0)

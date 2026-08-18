@@ -43,6 +43,23 @@ labels.json schema (per file)
 
 NOTE: expected_certs is optional. If omitted, cert metrics simply report as
 N/A for that sample (same convention as expected_skills/expected_text).
+
+Skill/cosine coupling (skill_scored)
+-------------------------------------
+core/scoring.py's calculate_cosine_similarity() tags every result with a
+`skill_scored` flag. True means the job had real required_skills data and
+the skill term genuinely contributed to the hybrid score. False means the
+job had no required_skills (a corpus data-quality gap), the skill term was
+excluded from the blend, and the score is cosine-only for that job —
+match_ratio/gap_ratio come back as None rather than a faked perfect match.
+
+This evaluator surfaces that flag everywhere a score is shown so a
+"100% score-pass" or "correct job in top-5" number can't quietly include
+matches that were never actually skill-verified. See:
+  - _display_faiss_result: per-sample "Skill-verified" line
+  - _aggregate_summary: skill-verified vs cosine-only counts, and a
+    separate score-pass rate restricted to skill-verified samples
+  - the per-sample mini table's "SkVer" column
 """
 
 from __future__ import annotations
@@ -439,17 +456,17 @@ def _item_metrics(predicted: list[str], expected: list[str]) -> dict:
                     matched=[], missed=[], extra=[],
                     tp=0, fp=0, fn=0)
 
-    from core.scoring import _semantic_item_match, _encode_norm
+    from core.scoring import _semantic_item_match, _encode_norm, _build_index
     from core.utils    import normalize
 
     pred_norms = [normalize(p) for p in predicted]
-    pred_vecs  = _encode_norm(pred_norms)
+    pred_index = _build_index(_encode_norm(pred_norms))
     exp_norms  = [normalize(e) for e in expected]
-    exp_vecs   = _encode_norm(exp_norms)
+    exp_index  = _build_index(_encode_norm(exp_norms))
 
-    matched = [e for e in expected  if     _semantic_item_match(e, pred_norms, pred_vecs)]
-    missed  = [e for e in expected  if not _semantic_item_match(e, pred_norms, pred_vecs)]
-    extra   = [p for p in predicted if not _semantic_item_match(p, exp_norms,  exp_vecs)]
+    matched = [e for e in expected  if     _semantic_item_match(e, pred_norms, pred_index)]
+    missed  = [e for e in expected  if not _semantic_item_match(e, pred_norms, pred_index)]
+    extra   = [p for p in predicted if not _semantic_item_match(p, exp_norms,  exp_index)]
 
     tp = len(matched)
     fp = len(extra)
@@ -522,35 +539,26 @@ def _title_in_topk(
 # (Manning, Raghavan & Schütze, 2008 -- "Introduction to Information
 # Retrieval"; Järvelin & Kekäläinen, 2002 -- NDCG):
 #
-#   Hit@1 -- Whether the relevant item was retrieved at exactly rank 1.
-#             Binary (0 or 1) per query. Mean Hit@1 across queries =
-#             fraction of resumes where the system ranked the correct job
-#             first. The most direct measure of this system's goal.
-#             Equivalent to P@1.
-#
 #   MRR   -- Mean Reciprocal Rank: average of 1/rank over all queries where
 #             the relevant item was found. Measures how highly the ONE correct
 #             answer is ranked. Standard for single-answer retrieval tasks.
-#             MRR ∈ (0, 1]; higher is better.
+#             MRR ∈ (0, 1]; higher is better. A resume whose correct job
+#             landed at rank 1 contributes 1.0; rank 2 contributes 0.5; and
+#             so on -- so MRR already captures "found at rank 1" as its
+#             upper bound, without needing a separate Hit@1 metric.
 #
 #   NDCG@K -- Normalised Discounted Cumulative Gain at K: rewards finding
 #             the relevant item earlier in the ranked list, discounting gains
 #             logarithmically with rank. NDCG@K ∈ [0, 1]; 1 = perfect.
 #             Appropriate because rank 1 is far more useful than rank 5.
 #
-# All three are computed PER SAMPLE here (where the "query" = one resume and
+# Both are computed PER SAMPLE here (where the "query" = one resume and
 # the "relevant document" = its expected_job_title), and then macro-averaged
 # across samples in the aggregate summary, exactly as done in IR benchmarks.
 
 def _reciprocal_rank(rank: Optional[int]) -> float:
     """1 / rank if found, else 0. Contribution to MRR from one query."""
     return round(1.0 / rank, 4) if rank else 0.0
-
-
-def _hit_at_1(rank: Optional[int]) -> int:
-    """Hit@1: 1 if the correct job is at rank 1, else 0.
-    The most direct measure of this system's goal — rank the right job first."""
-    return 1 if rank == 1 else 0
 
 
 def _ndcg_at_k(rank: Optional[int], top_k: int) -> float:
@@ -797,11 +805,18 @@ def _print_methodology(mode: str) -> None:
 
           IR RETRIEVAL METRICS
           --------------------
-          Hit@1
-                        1 if the expected job title was returned at rank 1,
-                        else 0.  Mean Hit@1 across all resumes = the fraction
-                        where the system ranked the correct job first.  The
-                        most direct measure of this system's goal.
+          Recall@K
+                        Recall@K = (# relevant items retrieved in top-K) /
+                                   (# relevant items that exist)
+                        Here each resume has exactly one relevant job (its
+                        expected_job_title), so this collapses to: 1 if that
+                        title appears anywhere in the top-K results, else 0,
+                        averaged across resumes. Answers "does the correct
+                        job show up at all" -- doesn't care where within the
+                        top-K. (Same underlying count as "Expected title in
+                        top-K" in the Retrieval Counts section below --
+                        listed here too under its standard IR name since
+                        that's what MRR and NDCG@K are named after.)
 
           MRR  (Mean Reciprocal Rank)
                         MRR = (1/N) · Σ (1 / rank_i)
@@ -835,6 +850,20 @@ def _print_methodology(mode: str) -> None:
           Skill / cert  Fraction of the job's required skills (or certs) that
           match ratio   were semantically matched by the resume's extracted
                         items, as computed by the live pipeline.
+
+          Skill-verified  Whether the best-matched job actually had
+                        required_skills data for the skill term to be
+                        computed against (skill_scored=True in
+                        core/scoring.py). When False, that job had no
+                        required_skills (a corpus data-quality gap), the
+                        skill term was excluded from the blend, and the
+                        score is cosine-only for that sample -- it did NOT
+                        verify anything about the resume's extracted skills.
+                        Treating skill_scored=False the same as a real skill
+                        match is exactly the bug this flag exists to catch:
+                        it previously let 0-skill extractions score
+                        identically to perfect ones whenever the matched job
+                        had incomplete corpus data.
         """))
 
     print()
@@ -953,9 +982,16 @@ def run_faiss_stage(
                      if req_certs else None)
     cert_accuracy = best.get("nlp_validation_certs", {}).get("NLP_ACCURACY", "N/A")
 
+    # Whether the best-matched job's score genuinely includes a computed
+    # skill term (skill_scored=True) or is cosine-only because that job had
+    # no required_skills in the corpus (skill_scored=False). Defaults to
+    # True for older core/scoring.py builds that don't emit this key yet,
+    # so this evaluator degrades gracefully rather than mislabeling
+    # everything as unverified against a pipeline that predates the flag.
+    skill_scored = best.get("skill_scored", True)
+
     # Standard IR metrics (per-query values; averaged across queries in aggregate)
     rr    = _reciprocal_rank(rank)
-    h1    = _hit_at_1(rank)
     ndcg  = _ndcg_at_k(rank, top_k)
 
     return dict(
@@ -963,9 +999,10 @@ def run_faiss_stage(
         best_title=best.get("title", ""),
         best_score=best.get("score", 0.0),
         best_cosine=best.get("cosine_score", 0.0),
-        best_match_ratio=best.get("match_ratio", 0.0),
+        best_match_ratio=best.get("match_ratio"),
         best_cert_match_ratio=cert_ratio,
         best_cert_accuracy=cert_accuracy,
+        skill_scored=skill_scored,
         expected_title_found=found,
         expected_title_rank=rank,
         title_similarity=title_similarity,
@@ -973,7 +1010,6 @@ def run_faiss_stage(
         min_score=min_score,
         # IR metrics
         reciprocal_rank=rr,
-        hit_at_1=h1,
         ndcg_at_k=ndcg,
         elapsed_s=round(elapsed, 2),
         error=None,
@@ -983,11 +1019,12 @@ def run_faiss_stage(
 _FAISS_ERROR_FALLBACK = dict(
     error="no_input", top_matches=[],
     best_title="", best_score=0.0, best_cosine=0.0,
-    best_match_ratio=0.0, best_cert_match_ratio=None, best_cert_accuracy="N/A",
+    best_match_ratio=None, best_cert_match_ratio=None, best_cert_accuracy="N/A",
+    skill_scored=None,
     expected_title_found=False,
     expected_title_rank=None, title_similarity=0.0,
     score_pass=False, min_score=0,
-    reciprocal_rank=0.0, hit_at_1=0, ndcg_at_k=0.0,
+    reciprocal_rank=0.0, ndcg_at_k=0.0,
     elapsed_s=0,
 )
 
@@ -1184,6 +1221,7 @@ def _display_faiss_result(name: str, faiss_r: dict, label: dict, top_k: int) -> 
     _section(f"FAISS  >  {name}")
     expected_title = label.get("expected_job_title", "N/A")
     score_pct      = faiss_r["best_score"]
+    skill_scored   = faiss_r.get("skill_scored")
 
     # ── Retrieval result (did we find the right job?) ─────────────────────
     print(f"  {_c('BOLD', '-- Retrieval Result --')}")
@@ -1199,9 +1237,7 @@ def _display_faiss_result(name: str, faiss_r: dict, label: dict, top_k: int) -> 
     # ── IR metrics (standard retrieval evaluation) ────────────────────────
     print(f"\n  {_c('BOLD', '-- IR Metrics (standard retrieval evaluation) --')}")
     rr   = faiss_r.get("reciprocal_rank", 0.0)
-    h1   = faiss_r.get("hit_at_1",        0)
     ndcg = faiss_r.get("ndcg_at_k",       0.0)
-    _kv(f"Hit@1          (rank == 1?)",         _c("GREEN", "YES") if h1 else _c("RED", "NO"))
     _kv(f"Reciprocal Rank  (1/rank)",           f"{rr:.4f}",
         "GREEN" if rr >= 0.5 else ("YELLOW" if rr > 0 else "RED"))
     _kv(f"NDCG@{top_k}       (rank-discounted)",f"{ndcg:.4f}",
@@ -1216,6 +1252,13 @@ def _display_faiss_result(name: str, faiss_r: dict, label: dict, top_k: int) -> 
     _kv("  — Skill match ratio",  _pct(faiss_r["best_match_ratio"]))
     _kv("  — Cert match ratio",   _pct(faiss_r.get("best_cert_match_ratio")))
     _kv("  — Cert NLP accuracy",  faiss_r.get("best_cert_accuracy", "N/A"))
+    if skill_scored is False:
+        _kv("  Skill-verified?", "NO — best job had no required_skills in the corpus; "
+                                 "score above is COSINE-ONLY, not a verified skill match", "YELLOW")
+    elif skill_scored is True:
+        _kv("  Skill-verified?", "YES — skill match ratio genuinely contributed to the score", "GREEN")
+    else:
+        _kv("  Skill-verified?", _c("DIM", "unknown (older scoring.py without skill_scored flag)"))
     _kv("Min score threshold",    f"{faiss_r['min_score']}")
     _kv("Score pass",             _pass_fail(faiss_r["score_pass"]))
     _kv("Time",                   f"{faiss_r['elapsed_s']}s")
@@ -1226,7 +1269,8 @@ def _display_faiss_result(name: str, faiss_r: dict, label: dict, top_k: int) -> 
         marker = _c("GREEN", "►") if i == faiss_r["expected_title_rank"] else " "
         score  = job.get("score", 0.0)
         scol   = "GREEN" if score >= 75 else ("YELLOW" if score >= 50 else "RED")
-        print(f"    {marker} {i}. {_c(scol, f'{score:5.1f}')}  {job.get('title','')}")
+        sk_tag = "" if job.get("skill_scored", True) else _c("YELLOW", "  [cosine-only]")
+        print(f"    {marker} {i}. {_c(scol, f'{score:5.1f}')}  {job.get('title','')}{sk_tag}")
     print()
 
 
@@ -1373,16 +1417,38 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
             avg_score   = sum(f["best_score"] for f in faiss_rs) / len(faiss_rs)
             avg_cosine  = sum(f["best_cosine"] for f in faiss_rs) / len(faiss_rs)
             rank_1      = sum(1 for f in faiss_rs if f.get("expected_title_rank") == 1)
-            rank_top3   = sum(1 for f in faiss_rs if (f.get("expected_title_rank") or 99) <= 3)
+            # "top-3" is a fixed intermediate IR checkpoint (distinct from
+            # top_k itself — it answers "found early" vs. Recall@K's
+            # "found at all"). Only meaningful when top_k > 3: at top_k<=3
+            # a rank can never exceed top_k, so "top-3" would either be
+            # identical to Recall@K (redundant) or claim a rank position
+            # that was never actually retrievable (misleading).
+            show_top3   = top_k > 3
+            rank_top3   = (sum(1 for f in faiss_rs if (f.get("expected_title_rank") or 99) <= 3)
+                           if show_top3 else None)
 
             # Standard IR aggregate metrics
-            mrr       = sum(f.get("reciprocal_rank", 0.0) for f in faiss_rs) / len(faiss_rs)
-            mean_h1   = sum(f.get("hit_at_1",        0)   for f in faiss_rs) / len(faiss_rs)
-            mean_ndcg = sum(f.get("ndcg_at_k",       0.0) for f in faiss_rs) / len(faiss_rs)
+            recall_at_k = n_found / len(faiss_rs)
+            mrr         = sum(f.get("reciprocal_rank", 0.0) for f in faiss_rs) / len(faiss_rs)
+            mean_ndcg   = sum(f.get("ndcg_at_k",       0.0) for f in faiss_rs) / len(faiss_rs)
 
             cert_ratios = [f["best_cert_match_ratio"] for f in faiss_rs
                            if f.get("best_cert_match_ratio") is not None]
             avg_cert_ratio = sum(cert_ratios) / len(cert_ratios) if cert_ratios else None
+
+            # Skill/cosine coupling: how many best-matches were genuinely
+            # skill-verified vs. cosine-only because the corpus was missing
+            # required_skills for that job. Treat None (older scoring.py, no
+            # flag emitted) as verified, matching run_faiss_stage's default,
+            # so this evaluator degrades gracefully against older pipelines.
+            n_skill_scored = sum(1 for f in faiss_rs if f.get("skill_scored", True))
+            n_cosine_only  = len(faiss_rs) - n_skill_scored
+            n_pass_verified = sum(1 for f in faiss_rs
+                                  if f["score_pass"] and f.get("skill_scored", True))
+
+            match_ratios = [f["best_match_ratio"] for f in faiss_rs
+                            if f.get("best_match_ratio") is not None]
+            avg_match_ratio = sum(match_ratios) / len(match_ratios) if match_ratios else None
 
             _section(f"FAISS — Job Retrieval Aggregates (Top-{top_k})")
             _kv("Samples evaluated",                  len(faiss_rs))
@@ -1390,31 +1456,55 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
 
             # IR metrics block
             print(f"  {_c('BOLD', '-- Standard IR Retrieval Metrics --')}")
+            _kv(f"Recall@{top_k}   (correct job found at all)",
+                f"{recall_at_k:.4f}  ({n_found}/{len(faiss_rs)})",
+                "GREEN" if recall_at_k >= 0.8 else ("YELLOW" if recall_at_k >= 0.5 else "RED"))
             _kv("MRR   (Mean Reciprocal Rank)",
                 f"{mrr:.4f}",
                 "GREEN" if mrr >= 0.7 else ("YELLOW" if mrr >= 0.4 else "RED"))
-            _kv(f"Mean Hit@1  (fraction ranked #1)",
-                f"{mean_h1:.4f}",
-                "GREEN" if mean_h1 >= 0.7 else ("YELLOW" if mean_h1 >= 0.4 else "RED"))
             _kv(f"Mean NDCG@{top_k} (rank-discounted gain)",
                 f"{mean_ndcg:.4f}",
                 "GREEN" if mean_ndcg >= 0.7 else ("YELLOW" if mean_ndcg >= 0.4 else "RED"))
             print()
 
-            # Retrieval counts block
-            print(f"  {_c('BOLD', '-- Retrieval Counts --')}")
-            _kv(f"Expected title in top-{top_k}",
-                f"{n_found}/{len(faiss_rs)}  ({n_found/len(faiss_rs)*100:.0f}%)",
-                "GREEN" if n_found/len(faiss_rs) >= 0.8 else "YELLOW")
+            # Rank distribution block — WHERE within top-K the correct job
+            # landed, for samples Recall@K above already counted as "found."
+            # (Deliberately doesn't repeat the "found at all" count itself —
+            # that's Recall@K above.)
+            print(f"  {_c('BOLD', '-- Rank Distribution --')}")
             _kv("Expected title ranked #1",           f"{rank_1}/{len(faiss_rs)}")
-            _kv("Expected title ranked top-3",        f"{rank_top3}/{len(faiss_rs)}")
+            if show_top3:
+                _kv("Expected title ranked top-3",    f"{rank_top3}/{len(faiss_rs)}")
+            print()
+
+            # Skill/cosine coupling block — this is the cross-check that
+            # catches "100% pass rate but nobody's skills were actually
+            # verified" before it reaches the headline numbers.
+            print(f"  {_c('BOLD', '-- Skill/Cosine Coupling --')}")
+            coupling_col = "GREEN" if n_cosine_only == 0 else (
+                "YELLOW" if n_cosine_only / len(faiss_rs) < 0.2 else "RED")
+            _kv("Best-match skill-verified (skill_scored=True)",
+                f"{n_skill_scored}/{len(faiss_rs)}  ({n_skill_scored/len(faiss_rs)*100:.0f}%)",
+                coupling_col)
+            _kv("Best-match cosine-only (missing corpus required_skills)",
+                f"{n_cosine_only}/{len(faiss_rs)}  ({n_cosine_only/len(faiss_rs)*100:.0f}%)",
+                "RED" if n_cosine_only > 0 else "GREEN")
+            if avg_match_ratio is not None:
+                _kv("Avg skill match ratio (skill-verified samples only)", _pct(avg_match_ratio))
+            if n_cosine_only > 0:
+                _kv("  Note", "cosine-only samples had NO skill term in their score — "
+                              "do not read their score_pass as a verified skill match", "YELLOW")
             print()
 
             # Scoring block
             print(f"  {_c('BOLD', '-- Scoring --')}")
-            _kv("Score >= min_match_score",
+            _kv("Score >= min_match_score (all samples)",
                 f"{n_pass}/{len(faiss_rs)}  ({n_pass/len(faiss_rs)*100:.0f}%)",
                 "GREEN" if n_pass/len(faiss_rs) >= 0.8 else ("YELLOW" if n_pass/len(faiss_rs) >= 0.5 else "RED"))
+            _kv("Score >= min_match_score (skill-verified only)",
+                f"{n_pass_verified}/{n_skill_scored}  "
+                f"({(n_pass_verified/n_skill_scored*100) if n_skill_scored else 0:.0f}%)"
+                if n_skill_scored else "N/A (no skill-verified samples)")
             _kv("Avg hybrid score",    f"{avg_score:.1f} / 100",
                 "GREEN" if avg_score >= 70 else ("YELLOW" if avg_score >= 50 else "RED"))
             _kv("Avg cosine similarity",f"{avg_cosine:.4f}")
@@ -1425,31 +1515,31 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
 
             # Per-sample mini table
             print()
-            hdr = (f"  {'File':<35} {'Score':>7} {'Cos':>7} {'Rank':>5}  "
-                   f"{'RR':>6} {'H@1':>5} {'NDCG':>6}  Result")
+            hdr = (f"  {'File':<33} {'Score':>7} {'Cos':>7} {'Rank':>5}  "
+                   f"{'RR':>6} {'NDCG':>6}  {'SkVer':>5}  Result")
             print(_c("BOLD", hdr))
-            print(_c("DIM", "  " + "-" * 86))
+            print(_c("DIM", "  " + "-" * 94))
             for r in results:
                 f = r.get("faiss", {})
                 if not f or f.get("error"):
                     continue
-                name   = Path(r["file"]).name[:34]
+                name   = Path(r["file"]).name[:32]
                 score  = f["best_score"]
                 scol   = "GREEN" if score >= 75 else ("YELLOW" if score >= 50 else "RED")
                 rank   = str(f["expected_title_rank"]) if f["expected_title_rank"] else f">{top_k}"
                 result = _pass_fail(f["score_pass"])
                 rr_v   = f.get("reciprocal_rank", 0.0)
-                h1_v   = f.get("hit_at_1",        0)
                 nd_v   = f.get("ndcg_at_k",       0.0)
-                h1_str = _c("GREEN", "  1") if h1_v else _c("RED", "  0")
+                sv     = f.get("skill_scored", True)
+                sv_str = _c("GREEN", "  Y") if sv else _c("YELLOW", "  N")
                 print(
-                    f"  {name:<35}"
+                    f"  {name:<33}"
                     f" {_c(scol, f'{score:6.1f}')}"
                     f" {f['best_cosine']:7.4f}"
                     f" {rank:>5}"
                     f"  {rr_v:6.4f}"
-                    f" {h1_str}"
                     f" {nd_v:6.4f}"
+                    f"  {sv_str:>5}"
                     f"  {result}"
                 )
 
@@ -1495,16 +1585,21 @@ def _aggregate_summary(mode: str, results: list[dict], top_k: int) -> dict:
         agg["faiss"] = dict(
             samples=len(faiss_rs),
             # IR metrics
+            recall_at_k=round(recall_at_k, 4),
             mrr=round(mrr, 4),
-            mean_hit_at_1=round(mean_h1, 4),
             mean_ndcg_at_k=round(mean_ndcg, 4),
             top_k=top_k,
-            # Retrieval counts
-            title_found_rate=round(n_found / len(faiss_rs), 4),
+            # Rank distribution (of samples recall_at_k above counted as found)
             rank_1_rate=round(rank_1 / len(faiss_rs), 4),
-            rank_top3_rate=round(rank_top3 / len(faiss_rs), 4),
+            rank_top3_rate=(round(rank_top3 / len(faiss_rs), 4) if show_top3 else None),
+            # Skill/cosine coupling
+            skill_scored_rate=round(n_skill_scored / len(faiss_rs), 4),
+            cosine_only_count=n_cosine_only,
+            avg_match_ratio_skill_verified=round(avg_match_ratio, 4) if avg_match_ratio is not None else None,
             # Scoring
             score_pass_rate=round(n_pass / len(faiss_rs), 4),
+            score_pass_rate_skill_verified=(round(n_pass_verified / n_skill_scored, 4)
+                                            if n_skill_scored else None),
             avg_hybrid_score=round(avg_score, 2),
             avg_cosine=round(avg_cosine, 4),
             avg_cert_match_ratio=round(avg_cert_ratio, 4) if avg_cert_ratio is not None else None,
@@ -1634,6 +1729,21 @@ def evaluate(
     if corpus_needed:
         firestore_skills, jobs_corpus, firestore_certs = _load_corpus()
         log.info(f"Corpus loaded: {len(jobs_corpus)} jobs, {len(firestore_skills)} skills")
+
+        # Warn up front if the corpus itself has jobs missing required_skills
+        # -- this is precisely the condition that forces skill_scored=False
+        # (cosine-only) matches downstream in core/scoring.py, so it's worth
+        # surfacing before any per-sample results come in.
+        jobs_missing_skills = [j.get("title", j.get("id", "?"))
+                               for j in jobs_corpus if not j.get("required_skills")]
+        if jobs_missing_skills:
+            log.warning(
+                f"{len(jobs_missing_skills)}/{len(jobs_corpus)} jobs in the corpus have no "
+                f"required_skills — any resume whose best match lands on one of these will be "
+                f"scored cosine-only (skill_scored=False). First few: "
+                + ", ".join(str(t) for t in jobs_missing_skills[:5])
+                + ("..." if len(jobs_missing_skills) > 5 else "")
+            )
 
     all_results: list[dict] = []
 
@@ -1879,28 +1989,38 @@ def summarize_report(report_path: str) -> None:
         _kv("Samples evaluated", fa.get("samples", 0))
         print()
         print(f"  {_c('BOLD', '-- IR Retrieval Metrics --')}")
+        recall_k = fa.get("recall_at_k", fa.get("title_found_rate", 0))
+        _kv(f"Recall@{top_k}",
+            f"{recall_k:.4f}",
+            "GREEN" if recall_k >= 0.8 else ("YELLOW" if recall_k >= 0.5 else "RED"))
         _kv("MRR  (Mean Reciprocal Rank)",
             f"{fa.get('mrr', 0):.4f}",
             "GREEN" if fa.get("mrr", 0) >= 0.7 else ("YELLOW" if fa.get("mrr", 0) >= 0.4 else "RED"))
-        _kv(f"Mean Hit@1  (fraction ranked #1)",
-            f"{fa.get('mean_hit_at_1', 0):.4f}",
-            "GREEN" if fa.get("mean_hit_at_1", 0) >= 0.7 else "YELLOW")
         _kv(f"Mean NDCG@{top_k}",
             f"{fa.get('mean_ndcg_at_k', 0):.4f}",
             "GREEN" if fa.get("mean_ndcg_at_k", 0) >= 0.7 else "YELLOW")
         print()
-        print(f"  {_c('BOLD', '-- Retrieval Counts --')}")
-        _kv(f"Expected title in top-{top_k}",
-            f"{fa.get('title_found_rate', 0)*100:.0f}%",
-            "GREEN" if fa.get("title_found_rate", 0) >= 0.8 else "YELLOW")
+        print(f"  {_c('BOLD', '-- Skill/Cosine Coupling --')}")
+        _kv("Best-match skill-verified rate", _pct(fa.get("skill_scored_rate")))
+        _kv("Best-match cosine-only count",   fa.get("cosine_only_count", 0),
+            "RED" if fa.get("cosine_only_count", 0) > 0 else "GREEN")
+        if fa.get("avg_match_ratio_skill_verified") is not None:
+            _kv("Avg skill match ratio (skill-verified only)",
+                _pct(fa.get("avg_match_ratio_skill_verified")))
+        print()
+        print(f"  {_c('BOLD', '-- Rank Distribution --')}")
         _kv("Expected title ranked #1",    f"{fa.get('rank_1_rate', 0)*100:.0f}%")
-        _kv("Expected title ranked top-3", f"{fa.get('rank_top3_rate', 0)*100:.0f}%")
+        if fa.get("rank_top3_rate") is not None:
+            _kv("Expected title ranked top-3", f"{fa.get('rank_top3_rate', 0)*100:.0f}%")
         print()
         print(f"  {_c('BOLD', '-- Scoring --')}")
-        _kv("Score >= min_match_score",
+        _kv("Score >= min_match_score (all samples)",
             f"{fa.get('score_pass_rate', 0)*100:.0f}%",
             "GREEN" if fa.get("score_pass_rate", 0) >= 0.8 else
             ("YELLOW" if fa.get("score_pass_rate", 0) >= 0.5 else "RED"))
+        if fa.get("score_pass_rate_skill_verified") is not None:
+            _kv("Score >= min_match_score (skill-verified only)",
+                f"{fa.get('score_pass_rate_skill_verified', 0)*100:.0f}%")
         _kv("Avg hybrid score",  f"{fa.get('avg_hybrid_score', 0):.1f} / 100")
         _kv("Avg cosine sim.",   f"{fa.get('avg_cosine', 0):.4f}")
         cert_ratio = fa.get("avg_cert_match_ratio")
