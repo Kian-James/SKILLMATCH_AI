@@ -243,7 +243,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           const SizedBox(height: 20),
           Text(
-            _isSignUp ? 'Create account' : 'Welcome back',
+            _isSignUp ? 'Create account' : 'Welcome',
             style: GoogleFonts.spaceGrotesk(
               fontSize: 32,
               fontWeight: FontWeight.w700,

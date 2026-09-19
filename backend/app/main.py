@@ -17,6 +17,7 @@ import faiss
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
@@ -72,6 +73,63 @@ _integrity_index = faiss.IndexFlatL2(384)
 # requests wait briefly (without freezing the server) instead of piling on
 # memory pressure. Raise this only if you move to a bigger Render plan.
 _pipeline_semaphore = threading.Semaphore(1)
+
+
+# ── /refresh-fit-reason request body ────────────────────────────────────────
+class FitReasonRefreshRequest(BaseModel):
+    """
+    Everything generate_fit_reason() needs, EXCEPT a resume file — the
+    results screen already has all of this in local state after the user
+    promotes/demotes a skill chip, so there's no reason to re-run
+    OCR/NLP/FAISS just to reword the insight card.
+    """
+    title:          str
+    industry:       str       = ""
+    resume_skills:  list[str] = Field(default_factory=list)
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    # 0-1 scale, same convention as elsewhere in scoring.py. Optional because
+    # the results screen doesn't retain the original per-job cosine score —
+    # it only affects the rule-based fallback's wording when there are zero
+    # matched skills, never the LLM prompt, so 0.0 is a safe default.
+    cosine_score:   float     = 0.0
+
+
+@app.post("/refresh-fit-reason")
+def refresh_fit_reason(payload: FitReasonRefreshRequest) -> dict:
+    """
+    Regenerate the fit_reason narrative from an updated matched/missing
+    skill split.
+
+    Without this, fit_reason is written once at scan time and frozen in
+    Firestore — if the user later promotes a missing skill to "matched" or
+    demotes a hallucinated match, the numeric tiles on the results screen
+    recompute live but the AI insight text keeps quoting the original,
+    now-stale percentage. This endpoint lets the client ask for a fresh
+    fit_reason using the *current* matched/missing lists, so the two stay
+    in sync after an edit.
+    """
+    from core.scoring import generate_fit_reason
+
+    total       = len(payload.matched_skills) + len(payload.missing_skills)
+    match_ratio = (len(payload.matched_skills) / total) if total else 0.0
+
+    fit_reason = generate_fit_reason(
+        title           = payload.title,
+        matched_skills  = payload.matched_skills,
+        missing_skills  = payload.missing_skills,
+        resume_skills   = payload.resume_skills,
+        resume_text     = "",
+        job_description = "",
+        cosine_score    = payload.cosine_score,
+        match_ratio     = match_ratio,
+        industry        = payload.industry,
+    )
+
+    return {
+        "fit_reason":  fit_reason,
+        "match_ratio": round(match_ratio, 4),
+    }
 
 
 @app.post("/thesis-full-analysis")

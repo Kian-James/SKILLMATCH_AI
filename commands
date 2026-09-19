@@ -15,3 +15,9 @@ python evaluate_pipeline.py --labels labels-2.json --samples-img ./resumes-image
 
 python evaluate_pipeline.py --labels labels-2.json --samples-img ./resumes-images/ --type img \
   --output report_img.json --charts --charts-dir ./eval_charts2
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+
+uvicorn main:app --host 0.0.0.0 --port 8001 --workers 2
+
+python evaluate_threshold_sweep.py --labels labels.json --thresholds 0.60:0.95:0.05 --output sweep_report.json --charts

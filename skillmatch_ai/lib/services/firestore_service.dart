@@ -173,4 +173,15 @@ class FirestoreService {
         .doc(docId)
         .update({'matched_skills': matchedSkills});
   }
+
+  /// Update the stored fit_reason narrative on an existing scan record.
+  /// Called after /refresh-fit-reason returns fresh text following a
+  /// promote/demote/add/remove skill edit, so the insight card doesn't
+  /// revert to the stale, scan-time text next time this record loads.
+  Future<void> updateFitReason(String docId, String fitReason) async {
+    await _db
+        .collection(_collection)
+        .doc(docId)
+        .update({'fit_reason': fitReason});
+  }
 }

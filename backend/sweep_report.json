@@ -1,0 +1,2655 @@
+{
+  "meta": {
+    "n_samples": 150,
+    "n_labeled": 150,
+    "production": {
+      "discovery": 0.8,
+      "scoring": 0.8,
+      "validation": 0.8
+    }
+  },
+  "discovery_sweep": [
+    {
+      "threshold": 0.6,
+      "precision": 0.9724,
+      "recall": 0.9918,
+      "f1": 0.982,
+      "nlp_accuracy": 0.9811,
+      "tp": 1092,
+      "fp": 31,
+      "fn": 9,
+      "avg_discovered": 7.49,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.65,
+      "precision": 0.982,
+      "recall": 0.9909,
+      "f1": 0.9864,
+      "nlp_accuracy": 0.9794,
+      "tp": 1091,
+      "fp": 20,
+      "fn": 10,
+      "avg_discovered": 7.39,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.7,
+      "precision": 0.9873,
+      "recall": 0.9909,
+      "f1": 0.9891,
+      "nlp_accuracy": 0.9819,
+      "tp": 1091,
+      "fp": 14,
+      "fn": 10,
+      "avg_discovered": 7.37,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.75,
+      "precision": 0.9909,
+      "recall": 0.9891,
+      "f1": 0.99,
+      "nlp_accuracy": 0.9768,
+      "tp": 1089,
+      "fp": 10,
+      "fn": 12,
+      "avg_discovered": 7.31,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.8,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9741,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.85,
+      "precision": 0.9936,
+      "recall": 0.9818,
+      "f1": 0.9877,
+      "nlp_accuracy": 0.9686,
+      "tp": 1081,
+      "fp": 7,
+      "fn": 20,
+      "avg_discovered": 7.24,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.9,
+      "precision": 0.9935,
+      "recall": 0.9773,
+      "f1": 0.9853,
+      "nlp_accuracy": 0.9643,
+      "tp": 1076,
+      "fp": 7,
+      "fn": 25,
+      "avg_discovered": 7.19,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.95,
+      "precision": 0.9935,
+      "recall": 0.9664,
+      "f1": 0.9797,
+      "nlp_accuracy": 0.9532,
+      "tp": 1064,
+      "fp": 7,
+      "fn": 37,
+      "avg_discovered": 7.11,
+      "zero_discovered": 0
+    }
+  ],
+  "matching_sweep": [
+    {
+      "threshold": 0.6,
+      "precision": 0.9936,
+      "recall": 0.9864,
+      "f1": 0.99,
+      "nlp_accuracy": 0.9748,
+      "tp": 1086,
+      "fp": 7,
+      "fn": 15,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.65,
+      "precision": 0.9918,
+      "recall": 0.9864,
+      "f1": 0.9891,
+      "nlp_accuracy": 0.9748,
+      "tp": 1086,
+      "fp": 9,
+      "fn": 15,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.7,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9748,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.75,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9748,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.8,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9741,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.85,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9723,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.9,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9713,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    },
+    {
+      "threshold": 0.95,
+      "precision": 0.9918,
+      "recall": 0.9855,
+      "f1": 0.9886,
+      "nlp_accuracy": 0.9713,
+      "tp": 1085,
+      "fp": 9,
+      "fn": 16,
+      "avg_discovered": 7.28,
+      "zero_discovered": 0
+    }
+  ],
+  "production_samples": [
+    {
+      "name": "Com - Aaron Villareal.pdf",
+      "discovered": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "Pandas",
+        "Docker",
+        "AWS",
+        "SQL"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Adrian Velasco.pdf",
+      "discovered": [
+        "Node.js",
+        "Express.js",
+        "MongoDB",
+        "JWT",
+        "REST APIs",
+        "Docker",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Amirah Salazar.pdf",
+      "discovered": [
+        "Unreal Engine",
+        "C++",
+        "Blueprints",
+        "3D Game Development",
+        "Level Design",
+        "Git",
+        "Game Optimization"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Angela Soriano.pdf",
+      "discovered": [
+        "Jenkins",
+        "GitHub Actions",
+        "Docker",
+        "Linux",
+        "AWS",
+        "Git",
+        "CI/CD"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Angelica Mae Soriano.pdf",
+      "discovered": [
+        "Next.js",
+        "React.js",
+        "TypeScript",
+        "Tailwind CSS",
+        "GraphQL",
+        "Vercel",
+        "SEO Optimization"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Arianne Solis.pdf",
+      "discovered": [
+        "Figma",
+        "UI Design",
+        "Design Systems",
+        "Wireframing",
+        "Prototyping",
+        "Adobe XD",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Benedict Lao.pdf",
+      "discovered": [
+        "Game Testing",
+        "Bug Tracking",
+        "Regression Testing",
+        "Jira",
+        "Gameplay Analysis",
+        "Test Documentation",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Bianca Estrella.pdf",
+      "discovered": [
+        "Incident Response",
+        "SIEM",
+        "Splunk",
+        "Firewall Monitoring",
+        "Threat Analysis",
+        "Linux",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Bianca Torres.pdf",
+      "discovered": [
+        "Shopify",
+        "Liquid",
+        "JavaScript",
+        "HTML/CSS",
+        "SEO",
+        "REST APIs",
+        "Git"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Brendon Lucero.pdf",
+      "discovered": [
+        "Figma",
+        "After Effects",
+        "Motion Design",
+        "UI Animation",
+        "Adobe Premiere Pro",
+        "Prototyping",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Camille Reyes.pdf",
+      "discovered": [
+        "Python",
+        "PyTorch",
+        "Hugging Face",
+        "NLTK",
+        "Transformers",
+        "REST APIs",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Carlo Mendoza.pdf",
+      "discovered": [
+        "Svelte",
+        "SvelteKit",
+        "JavaScript",
+        "Tailwind CSS",
+        "REST APIs",
+        "Git",
+        "Firebase"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Cassandra Velarde.pdf",
+      "discovered": [
+        "Blender",
+        "Figma",
+        "3D Design",
+        "UI Design",
+        "Adobe Photoshop",
+        "Animation",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Cedric Flores.pdf",
+      "discovered": [
+        "REST APIs",
+        "Node.js",
+        "Postman",
+        "OAuth2",
+        "MySQL",
+        "Dockerment",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Cedric Tolentino.pdf",
+      "discovered": [
+        "Nessus",
+        "Vulnerability Scanning",
+        "Risk Assessment",
+        "Linux",
+        "OWASP",
+        "Python",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Cedrick Montemayor.pdf",
+      "discovered": [
+        "Kubernetes",
+        "Docker",
+        "Helm",
+        "Linux",
+        "AWS",
+        "Terraform",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Celestine Arriola.pdf",
+      "discovered": [
+        "Figma",
+        "Game UI Design",
+        "UX Design",
+        "Wireframing",
+        "Adobe Photoshop",
+        "Prototyping",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Christian Valdez.pdf",
+      "discovered": [
+        "Flutter",
+        "Dart",
+        "Firebase",
+        "REST APIs",
+        "Provider",
+        "SQLite",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Clarence Fabian.pdf",
+      "discovered": [
+        "Python",
+        "Pandas",
+        "NumPy",
+        "SQL",
+        "Matplotlib",
+        "Excel",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Clarisse Benitez.pdf",
+      "discovered": [
+        "Linux",
+        "Prometheus",
+        "Grafana",
+        "Kubernetes",
+        "AWS",
+        "Python",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Danielle Vergara.pdf",
+      "discovered": [
+        "Firewall Configuration",
+        "VPN",
+        "Cisco Networking",
+        "IDS/IPS",
+        "Wireshark",
+        "Linux",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Darius Villaflor.pdf",
+      "discovered": [
+        "Blockchain",
+        "Ethereum",
+        "Solidity",
+        "Node.js",
+        "Smart Contracts",
+        "Web3.js",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Denise Aquino.pdf",
+      "discovered": [
+        "Progressive Web Apps",
+        "JavaScript",
+        "React",
+        "REST APIs",
+        "Lighthouse",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Dominic Alvarado.pdf",
+      "discovered": [
+        "SQL",
+        "ETL",
+        "Data Warehousing",
+        "Snowflake",
+        "AWS",
+        "Python",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Dominic Peralta.pdf",
+      "discovered": [
+        "Figma",
+        "Adobe XD",
+        "Responsive Design",
+        "UI Design",
+        "Wireframing",
+        "Git",
+        "HTML/CSS"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Elaine Cruz.pdf",
+      "discovered": [
+        "WordPress",
+        "WooCommerce",
+        "PHP",
+        "Elementor",
+        "SEO",
+        "CSS",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Elaine Montero.pdf",
+      "discovered": [
+        "Figma",
+        "Mobile UI Design",
+        "Prototyping",
+        "Design Systems",
+        "Adobe XD",
+        "User Flows",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Elijah Santos.pdf",
+      "discovered": [
+        "React Native",
+        "JavaScript",
+        "TypeScript",
+        "Firebase",
+        "REST APIs",
+        "Redux",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Elijah Zamora.pdf",
+      "discovered": [
+        "OWASP",
+        "Burp Suite",
+        "Secure Code Review",
+        "CI Security",
+        "Python",
+        "Java",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Com - Elisse Navarro.pdf",
+      "discovered": [
+        "Solidity",
+        "Ethereum",
+        "Smart Contracts",
+        "Hardhat",
+        "Web3.js",
+        "Ethers.js",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Ethan Villanueva.pdf",
+      "discovered": [
+        "TypeScript",
+        "React",
+        "Node.js",
+        "REST APIs",
+        "Docker",
+        "AWS",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Finn Aurelio.pdf",
+      "discovered": [
+        "Web3.js",
+        "React",
+        "Ethereum",
+        "Solidity",
+        "JavaScript",
+        "Ethers.js",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Fiona Madrigal.pdf",
+      "discovered": [
+        "Digital Forensics",
+        "Autopsy",
+        "FTK",
+        "Incident Investigation",
+        "Linux",
+        "Wireshark",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Francesca Dizon.pdf",
+      "discovered": [
+        "Python",
+        "Pandas",
+        "Scikit-learn",
+        "Data Visualization",
+        "SQL",
+        "Git",
+        "Data Analysis",
+        "Machine Learning"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 0
+    },
+    {
+      "name": "Com - Francis Aguila.pdf",
+      "discovered": [
+        "UX Research",
+        "Usability Testing",
+        "Figma",
+        "User Interviews",
+        "Analytics",
+        "Wireframing",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Gabriel Navarro.pdf",
+      "discovered": [
+        "Xamarin",
+        "C#",
+        "REST APIs",
+        "Azure",
+        "SQLite",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Com - Gabriel Sison.pdf",
+      "discovered": [
+        "Malware Analysis",
+        "Reverse Engineering",
+        "Wireshark",
+        "Sandboxing",
+        "Python",
+        "YARA",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Gideon Marcial.pdf",
+      "discovered": [
+        "C++",
+        "Microcontrollers",
+        "UART",
+        "SPI",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Com - Giselle Bautista.pdf",
+      "discovered": [
+        "Interaction Design",
+        "Figma",
+        "Prototyping",
+        "User Flows",
+        "Adobe XD",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Com - Harold Villacorta.pdf",
+      "discovered": [
+        "Wireframing",
+        "Figma",
+        "Adobe XD",
+        "UI Layout Design",
+        "Prototyping",
+        "User Flows",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Helena Villareal.pdf",
+      "discovered": [
+        "Firmware Development",
+        "C",
+        "RTOS",
+        "Microcontrollers",
+        "I2C",
+        "UART",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Icarus Del Mundo.pdf",
+      "discovered": [
+        "Circuit Design",
+        "Hardware Testing",
+        "PCB Schematics",
+        "Microcontrollers",
+        "Oscilloscope",
+        "Embedded Systems",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Isabelle De Leon.pdf",
+      "discovered": [
+        "Figma",
+        "Adobe XD",
+        "Prototyping",
+        "User Flows",
+        "Wireframing",
+        "UI Design",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Isabelle Navarro.pdf",
+      "discovered": [
+        "MongoDB",
+        "NoSQL",
+        "Database Replication",
+        "Cloud Databases",
+        "Performance Monitoring",
+        "Git",
+        "Python"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - James Reyes.pdf",
+      "discovered": [
+        "React.js",
+        "Redux Toolkit",
+        "JavaScript",
+        "HTML",
+        "CSS3",
+        "Tailwind CSS",
+        "Jest",
+        "Enzyme",
+        "Git"
+      ],
+      "tp": 9,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Jerome Casimiro.pdf",
+      "discovered": [
+        "Visual Design",
+        "Figma",
+        "Typography",
+        "UI Design",
+        "Adobe Photoshop",
+        "Design Systems",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Joshua Lim.pdf",
+      "discovered": [
+        "Python",
+        "OpenCV",
+        "TensorFlow",
+        "PyTorch",
+        "CNN",
+        "Docker",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Joshua Navarro.pdf",
+      "discovered": [
+        "Laravel",
+        "PHP",
+        "MySQL",
+        "Blade",
+        "REST APIs",
+        "Bootstrap",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Julienne Ortega.pdf",
+      "discovered": [
+        "FPGA",
+        "Verilog",
+        "Digital Logic Design",
+        "Signal Processing",
+        "VHDL",
+        "Hardware Simulation",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Kael Navarro.pdf",
+      "discovered": [
+        "PCB Design",
+        "Altium Designer",
+        "Circuit Schematics",
+        "Hardware Testing",
+        "signal integrity",
+        "CAD Tools",
+        "Git",
+        "Prototyping"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 0
+    },
+    {
+      "name": "Com - Kenneth Ramos.pdf",
+      "discovered": [
+        "C#",
+        ".NET Core",
+        "SQL Server",
+        "Entity Framework",
+        "REST APIs",
+        "Azure",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Kevin Bautista.pdf",
+      "discovered": [
+        "Python",
+        "Automation Tools",
+        "OCR",
+        "REST APIs",
+        "OpenAI APIs",
+        "Docker",
+        "Git",
+        "C"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Kian Rosario.pdf",
+      "discovered": [
+        "Manual Testing",
+        "Regression Testing",
+        "Jira",
+        "Test Cases",
+        "Usability Testing",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Com - Leonard Gutierrez.pdf",
+      "discovered": [
+        "DAX",
+        "SQL",
+        "Excel",
+        "Data Visualization",
+        "Power Query",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Com - Lyra Mendoza.pdf",
+      "discovered": [
+        "Selenium",
+        "Java",
+        "Test Automation",
+        "JUnit",
+        "Jira",
+        "Git",
+        "CI/CD"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Lysander Aquino.pdf",
+      "discovered": [
+        "MQTT",
+        "Embedded Systems",
+        "Python",
+        "Microcontrollers",
+        "Cloud Integration",
+        "Git",
+        "IoT"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Marco Del Rosario.pdf",
+      "discovered": [
+        "Objective-C",
+        "Xcode",
+        "REST APIs",
+        "SQLite",
+        "Firebase",
+        "Git",
+        "UIKit"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Marcus Evangelista.pdf",
+      "discovered": [
+        "Docker",
+        "Kubernetes",
+        "Jenkins",
+        "Terraform",
+        "Linux",
+        "AWS",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Marvin Santos.pdf",
+      "discovered": [
+        "PHP",
+        "MySQL",
+        "JavaScript",
+        "Bootstrap",
+        "Git",
+        "REST APIs",
+        "CodeIgniter"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Matteo Cabreros.pdf",
+      "discovered": [
+        "Cypress",
+        "JavaScript",
+        "Automation Testing",
+        "API Testing",
+        "Jira",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 2
+    },
+    {
+      "name": "Com - Miguel Serrano.pdf",
+      "discovered": [
+        "SQL Server",
+        "Database Administration",
+        "Performance Tuning",
+        "Backup",
+        "Recovery",
+        "T-SQL",
+        "Security Management",
+        "Git"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Nathan Cruz.pdf",
+      "discovered": [
+        "Kotlin",
+        "Android Studio",
+        "Firebase",
+        "REST APIs",
+        "MVVM",
+        "SQLite",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Nerissa Tolentino.pdf",
+      "discovered": [
+        "Technical Troubleshooting",
+        "Windows Server",
+        "Networking",
+        "Active Directory",
+        "Incident Management",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Nicole Bautista.pdf",
+      "discovered": [
+        "Python",
+        "Django",
+        "Django REST Framework",
+        "PostgreSQL",
+        "Docker",
+        "REST APIs",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Nicole Fernandez.pdf",
+      "discovered": [
+        "Data Annotation",
+        "Computer Vision Labeling",
+        "NLP Tagging",
+        "Quality Assurance",
+        "Python",
+        "Excel",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Odessa Marquez.pdf",
+      "discovered": [
+        "Programming",
+        "Teaching",
+        "Python",
+        "Java",
+        "Database Management",
+        "Public Speaking",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Orion Salcedo.pdf",
+      "discovered": [
+        "Mobile Testing",
+        "Android Testing",
+        "iOS Testing",
+        "Regression Testing",
+        "Jira",
+        "Usability Testing",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Priam Villanueva.pdf",
+      "discovered": [
+        "Postman",
+        "API Testing",
+        "REST APIs",
+        "JSON",
+        "Automation Testing",
+        "Jira",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Quentin Ramirez.pdf",
+      "discovered": [
+        "Linux",
+        "Bash Scripting",
+        "Server Administration",
+        "Docker",
+        "System Monitoring",
+        "AWS",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Quinzel Abad.pdf",
+      "discovered": [
+        "Technical Documentation",
+        "API Documentation",
+        "Markdown",
+        "Content Writing",
+        "Microsoft Office",
+        "Knowledge Base Management",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Rafael De Guzman.pdf",
+      "discovered": [
+        "Docker",
+        "Containerization",
+        "Linux",
+        "Kubernetes",
+        "AWS",
+        "Git",
+        "CI/CD"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Renzo Castillo.pdf",
+      "discovered": [
+        "PostgreSQL",
+        "SQL",
+        "Database Optimization",
+        "Backup",
+        "Recovery",
+        "Linux",
+        "Performance Tuning",
+        "Git"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Rhea Domingo.pdf",
+      "discovered": [
+        "Windows Server",
+        "Active Directory",
+        "PowerShell",
+        "System Administration",
+        "Networking",
+        "Troubleshooting",
+        "Office 365",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 0
+    },
+    {
+      "name": "Com - Riven Sarmiento.pdf",
+      "discovered": [
+        "Procurement Management",
+        "Vendor Coordination",
+        "Inventory Management",
+        "Microsoft Excel",
+        "Asset Tracking",
+        "Git"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Samantha Rojas.pdf",
+      "discovered": [
+        "Microsoft Azure",
+        "Terraform",
+        "ARM Templates",
+        "Docker",
+        "Kubernetes",
+        "Linux",
+        "Git",
+        "Monitoring"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 0
+    },
+    {
+      "name": "Com - Sophia Lim.pdf",
+      "discovered": [
+        "Ruby on Rails",
+        "Ruby",
+        "PostgreSQL",
+        "RSpec",
+        "Docker",
+        "REST APIs",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Sophia Mendoza.pdf",
+      "discovered": [
+        "Prompt Engineering",
+        "OpenAI APIs",
+        "Python",
+        "AI Chatbots",
+        "Workflow Automation",
+        "Natural Language Processing",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Sophia Ramirez.pdf",
+      "discovered": [
+        "Swift",
+        "Xcode",
+        "Firebase",
+        "REST APIs",
+        "Core Data",
+        "Git",
+        "SwiftUI"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Stephanie Aguilar.pdf",
+      "discovered": [
+        "R Programming",
+        "ggplot2",
+        "Statistical Analysis",
+        "R",
+        "R Markdown",
+        "Data Visualization",
+        "SQL",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Sterling Navarro.pdf",
+      "discovered": [
+        "Cisco Networking",
+        "Switching",
+        "Routing",
+        "VPN",
+        "Firewall Configuration",
+        "Network Monitoring",
+        "Wireshark",
+        "Git"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Taliah Espinoza.pdf",
+      "discovered": [
+        "Active Directory",
+        "Windows Server",
+        "Group Policy",
+        "PowerShell",
+        "Office 365",
+        "System Administration",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Tristan Navarro.pdf",
+      "discovered": [
+        "Python",
+        "LLM APIs",
+        "LangChain",
+        "Vector Databases",
+        "REST APIs",
+        "Docker",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Ulric Mendoza.pdf",
+      "discovered": [
+        "Technical Support",
+        "Ticketing Systems",
+        "Windows OS",
+        "Hardware Troubleshooting",
+        "Customer Service",
+        "Networking Basics",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Vincent Herrera.pdf",
+      "discovered": [
+        "ASP.NET",
+        "C#",
+        "SQL Server",
+        "MVC",
+        "Entity Framework",
+        "Azure",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Vincent Morales.pdf",
+      "discovered": [
+        "Java",
+        "Android Studio",
+        "SQLite",
+        "Firebase",
+        "REST APIs",
+        "XML",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Winston Alonzo.pdf",
+      "discovered": [
+        "Network Monitoring",
+        "Linux",
+        "Routing",
+        "Switching",
+        "Incident Management",
+        "Wireshark",
+        "Zabbix",
+        "Git"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Xandria Flores.pdf",
+      "discovered": [
+        "VoIP",
+        "SIP",
+        "Cisco Networking",
+        "Networking",
+        "Network Troubleshooting",
+        "Linux",
+        "PBX Systems",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Com - Xavier Manalo.pdf",
+      "discovered": [
+        "Kali Linux",
+        "Metasploit",
+        "Burp Suite",
+        "OWASP",
+        "Nmap",
+        "Python",
+        "Git"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Adrian Navarro.pdf",
+      "discovered": [
+        "AutoCAD Civil 3D",
+        "Topographic Mapping",
+        "GIS",
+        "GNSS",
+        "Remote Sensing",
+        "Land Surveying",
+        "ArcGIS",
+        "Technical Reporting"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Hannah Lopez.pdf",
+      "discovered": [
+        "Irrigation Design",
+        "Farm Mechanization",
+        "AutoCAD",
+        "Sustainable Agriculture Practices",
+        "Post-Harvest Technology",
+        "Technical Reporting",
+        "Equipment Testing"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Kenneth Ramos.pdf",
+      "discovered": [
+        "Marine Propulsion Systems",
+        "Engine Maintenance",
+        "Hydraulic Systems",
+        "Safety Compliance",
+        "Ship Machinery",
+        "Preventive Maintenance",
+        "Troubleshooting",
+        "Technical Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Sophia Martinez.pdf",
+      "discovered": [
+        "Aircraft Maintenance",
+        "Aviation Safety",
+        "CAD Software",
+        "Mechanical Systems",
+        "Aircraft Inspection",
+        "Technical Documentation",
+        "Troubleshooting",
+        "Engineering Analysis"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Vincent Torres.pdf",
+      "discovered": [
+        "Material Testing",
+        "Concrete Technology",
+        "Quality Assurance",
+        "Laboratory Analysis",
+        "ASTM Standards",
+        "AutoCAD",
+        "Technical Reporting",
+        "Construction Materials"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Claire Dizon.pdf",
+      "discovered": [
+        "Wastewater Treatment",
+        "Environmental Compliance",
+        "Water Quality Analysis",
+        "AutoCAD",
+        "Sanitation Systems",
+        "Technical Reporting",
+        "Environmental Impact Assessment",
+        "Safety Regulations"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Erica Velasco.pdf",
+      "discovered": [
+        "Medical Equipment Maintenance",
+        "Biomedical Instrumentation",
+        "Preventive Maintenance",
+        "Technical Troubleshooting",
+        "Healthcare Technology",
+        "Calibration",
+        "Safety Compliance",
+        "Technical Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Daniel Cruz.pdf",
+      "discovered": [
+        "Computer Hardware",
+        "Server Maintenance",
+        "Troubleshooting",
+        "RAID Configuration",
+        "Hardware Diagnostics",
+        "Windows Server",
+        "Linux",
+        "Technical Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Patricia Mendoza.pdf",
+      "discovered": [
+        "Systems Integration",
+        "API Integration",
+        "Middleware",
+        "Linux",
+        "Network Configuration",
+        "Automation Scripts",
+        "SQL",
+        "Technical Troubleshooting"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Kevin Flores.pdf",
+      "discovered": [
+        "TCP/IP",
+        "LAN/WAN Technologies",
+        "Cisco Networking",
+        "Switch Configuration",
+        "Router Setup",
+        "Firewall Management",
+        "Network Troubleshooting",
+        "Hardware Diagnostics"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Sophia Ramirez.pdf",
+      "discovered": [
+        "Docker",
+        "Kubernetes",
+        "Edge Computing",
+        "Cloud Infrastructure",
+        "Linux",
+        "Network Architecture",
+        "Python"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Nathaniel Garcia.pdf",
+      "discovered": [
+        "Robotics",
+        "Sensor Integration",
+        "Automation Systems",
+        "Arduino",
+        "Embedded Systems",
+        "Python",
+        "PLC",
+        "Industrial Robotics"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Claire Aquino.pdf",
+      "discovered": [
+        "PLC Programming",
+        "CAD Software",
+        "CAD Software (SolidWorks, AutoCAD)",
+        "Mechatronics",
+        "Automation Systems",
+        "Sensor Technology",
+        "Embedded Systems",
+        "Control Systems",
+        "Technical Troubleshooting"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Aaron Villanueva.pdf",
+      "discovered": [
+        "Process Engineering",
+        "Chemical Processing",
+        "Plant Operations",
+        "Simulation Software",
+        "Safety Compliance",
+        "P&ID Interpretation",
+        "Technical Reporting",
+        "Troubleshooting"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Bianca Mendoza.pdf",
+      "discovered": [
+        "Process Optimization",
+        "GMP Compliance",
+        "Pharmaceutical Manufacturing",
+        "Equipment Validation",
+        "Production Monitoring",
+        "Quality Assurance",
+        "Technical Documentation",
+        "Troubleshooting"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Jerome Santos.pdf",
+      "discovered": [
+        "Food Processing Technologies",
+        "Food Safety Regulations",
+        "Food Quality Assurance",
+        "Product Development",
+        "Sanitation Inspection",
+        "Laboratory Testing",
+        "HACCP",
+        "Technical Reporting"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Danica Flores.pdf",
+      "discovered": [
+        "Environmental Compliance",
+        "Pollution Control",
+        "Environmental Auditing",
+        "Waste Management",
+        "Technical Reporting",
+        "Environmental Impact Assessment",
+        "Regulatory Compliance",
+        "Safety Standards"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Nicole Reyes.pdf",
+      "discovered": [
+        "Polymer Processing",
+        "Plastic Manufacturing",
+        "Material Testing",
+        "Quality Assurance",
+        "Packaging Technology",
+        "Laboratory Analysis",
+        "Process Optimization",
+        "Technical Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Rachel Santos.pdf",
+      "discovered": [
+        "Biomedical Instrumentation",
+        "Medical Device Calibration",
+        "Equipment Maintenance",
+        "Hospital Safety Standards",
+        "Technical Troubleshooting",
+        "Diagnostic Systems",
+        "Healthcare Technology",
+        "Quality Assurance"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Rafael Torres.pdf",
+      "discovered": [
+        "Laboratory Testing",
+        "Quality Control",
+        "Chemical Analysis",
+        "Quality Assurance",
+        "Instrumentation",
+        "Documentation",
+        "Safety Standards",
+        "Problem Solving"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Nathan Reyes.pdf",
+      "discovered": [
+        "RF Engineering",
+        "Signal Analysis",
+        "Telecommunications Systems",
+        "Network Optimization",
+        "Spectrum Analysis",
+        "Drive Testing",
+        "Technical Reporting",
+        "LTE/5G Networks"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Patricia Gomez (1).pdf",
+      "discovered": [
+        "Telecommunication Systems",
+        "Network Infrastructure",
+        "Fiber Optics",
+        "Signal Troubleshooting",
+        "VoIP Technology",
+        "Data Communication",
+        "Technical Documentation"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Jericho Santos.pdf",
+      "discovered": [
+        "Wireless Communication Standards",
+        "LTE",
+        "Antenna Design",
+        "Electromagnetic Simulation",
+        "HFSS",
+        "RF simulation",
+        "PCB Antenna Design",
+        "Electromagnetic Analysis",
+        "Technical Documentation",
+        "Signal Testing"
+      ],
+      "tp": 8,
+      "fp": 2,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Rica Mendoza.pdf",
+      "discovered": [
+        "Schematic Review",
+        "signal integrity",
+        "Eagle PCB Design",
+        "Electronic Components",
+        "Altium Designer",
+        "Hardware Debugging",
+        "Technical Documentation",
+        "Circuit Design"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Michelle Flores.pdf",
+      "discovered": [
+        "Automated Test Equipment",
+        "Test Automation",
+        "Electronics Testing",
+        "Production Support",
+        "Calibration",
+        "Technical Documentation",
+        "Troubleshooting"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Kevin Aquino.pdf",
+      "discovered": [
+        "Semiconductor",
+        "Yield Improvement",
+        "Wafer Fabrication",
+        "Equipment Calibration",
+        "Process Optimization",
+        "Root Cause Analysis",
+        "Quality Control",
+        "Failure Analysis"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Adrian Navarro (1).pdf",
+      "discovered": [
+        "Signal Analysis",
+        "Digital Signal Processing",
+        "DSP",
+        "MATLAB",
+        "Filtering Techniques",
+        "Wireless Communication",
+        "Algorithm Development",
+        "Data Analysis",
+        "Simulation Tools"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Sophia Cruz.pdf",
+      "discovered": [
+        "Fiber Optic Systems",
+        "Fiber Splicing",
+        "Optical Time Domain Reflectometry (OTDR)",
+        "Network Troubleshooting",
+        "Telecommunications",
+        "Cable Installation",
+        "Signal Testing",
+        "Technical Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Christian Ramos.pdf",
+      "discovered": [
+        "IP Cameras",
+        "Network Configuration",
+        "CCTV Systems",
+        "Surveillance System Design",
+        "Troubleshooting",
+        "Video Management Systems",
+        "Security Systems Installation",
+        "Technical Support"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Angela Villanueva.pdf",
+      "discovered": [
+        "C Programming",
+        "Microcontroller programming",
+        "Arduino",
+        "Firmware Development",
+        "Circuit Design",
+        "Hardware Integration",
+        "PCB Design",
+        "Layout"
+      ],
+      "tp": 9,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Mark Flores.pdf",
+      "discovered": [
+        "AutoCAD",
+        "Process Improvement",
+        "Data Analysis",
+        "Warehouse Operations",
+        "Logistics Coordination",
+        "Space Optimization",
+        "Inventory Flow Analysis",
+        "Warehouse Layout Design"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Angela Navarro.pdf",
+      "discovered": [
+        "Continuous Improvement",
+        "Kaizen",
+        "Lean Manufacturing",
+        "Root Cause Analysis",
+        "Process Analysis",
+        "Operational Efficiency",
+        "Data Reporting",
+        "Workflow Optimization"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Patrick Villanueva.pdf",
+      "discovered": [
+        "Logistics Management",
+        "Distribution Planning",
+        "Inventory Control",
+        "Warehouse Operations",
+        "Transportation Analysis",
+        "Supply Chain Coordination",
+        "Data Reporting",
+        "Process Improvement"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Joshua Ramirez.pdf",
+      "discovered": [
+        "Time Study",
+        "Workflow Analysis",
+        "Productivity Improvement",
+        "Lean Manufacturing",
+        "Process Optimization",
+        "Data Analysis",
+        "Operational Planning",
+        "Technical Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Rica Fernandez.pdf",
+      "discovered": [
+        "Quality Assurance",
+        "Auditing",
+        "Inspection Procedures",
+        "Root Cause Analysis",
+        "Documentation",
+        "Quality Control",
+        "Corrective Actions",
+        "Statistical Analysis"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Nicole Santos.pdf",
+      "discovered": [
+        "Supply Chain Management",
+        "Inventory Planning",
+        "Logistics Coordination",
+        "Procurement",
+        "Data Analysis",
+        "Warehouse Operations",
+        "ERP Systems",
+        "Process Optimization"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Samantha Reyes.pdf",
+      "discovered": [
+        "Manufacturing Processes",
+        "Process Optimization",
+        "Production Systems",
+        "Root Cause Analysis",
+        "Equipment Calibration",
+        "Quality Control",
+        "Technical Documentation"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Ethan Morales.pdf",
+      "discovered": [
+        "Production Planning",
+        "Manufacturing Operations",
+        "Process Improvement",
+        "Preventive Maintenance",
+        "Quality Monitoring",
+        "Lean Manufacturing",
+        "Technical Reporting",
+        "Problem Solving"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Vincent Cruz.pdf",
+      "discovered": [
+        "Bridge Design",
+        "Structural Analysis",
+        "AutoCAD",
+        "Load Calculations",
+        "Concrete Design",
+        "Inspection",
+        "Maintenance",
+        "SAP2000"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Patricia Gomez.pdf",
+      "discovered": [
+        "Cost Estimation",
+        "Quantity Take-Off",
+        "Contract Evaluation",
+        "AutoCAD",
+        "Procurement Analysis",
+        "Construction Budgeting",
+        "Billing Evaluation"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Jerome Delgado.pdf",
+      "discovered": [
+        "Hydraulic Modeling",
+        "Water Distribution Systems",
+        "Stormwater Management",
+        "HEC-RAS",
+        "AutoCAD",
+        "Flood Control Planning",
+        "Pipeline Design"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Nicole Ramirez.pdf",
+      "discovered": [
+        "Revit",
+        "Navisworks",
+        "BIM Coordination",
+        "3D Modeling",
+        "Clash Detection",
+        "Construction Documentation"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Carlo Mendoza.pdf",
+      "discovered": [
+        "Quantity Takeoff",
+        "Cost Estimation",
+        "AutoCAD",
+        "Planswift",
+        "MS Excel",
+        "Construction Budgeting",
+        "BOQ Preparation",
+        "Procurement Coordination"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Kenneth Garcia.pdf",
+      "discovered": [
+        "Site Inspection",
+        "Material Testing",
+        "Construction Standards",
+        "Documentation",
+        "AutoCAD",
+        "Concrete Testing",
+        "Problem Solving",
+        "QC Procedures"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Michael Santos.pdf",
+      "discovered": [
+        "Occupational Safety",
+        "Risk Assessment",
+        "Incident Investigation",
+        "Safety Compliance",
+        "PPE Management",
+        "Emergency Response",
+        "Safety Training",
+        "Documentation"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Rafael Cruz.pdf",
+      "discovered": [
+        "Curtain Wall Systems",
+        "Fa\u00e7ade Engineering",
+        "AutoCAD",
+        "Shop Drawings",
+        "Structural Coordination",
+        "Aluminum Systems",
+        "Glass Systems",
+        "Construction Detailing"
+      ],
+      "tp": 8,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Miguel Santos.pdf",
+      "discovered": [
+        "Power Systems Analysis",
+        "ETAP",
+        "SCADA",
+        "Electrical Protection",
+        "Grid Planning",
+        "MATLAB",
+        "DIgSILENT PowerFactory"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Adrian Cruz.pdf",
+      "discovered": [
+        "AutoCAD Electrical",
+        "Revit MEP",
+        "Dialux",
+        "Electrical Design",
+        "Load Calculation",
+        "IEC Standards"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - John Villanueva.pdf",
+      "discovered": [
+        "Substation Design",
+        "Protection Systems",
+        "High Voltage Equipment",
+        "ETAP",
+        "Relay Testing",
+        "SCADA",
+        "Safety Compliance"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Paolo Dizon.pdf",
+      "discovered": [
+        "SCADA Systems",
+        "PLC Programming",
+        "RTU Integration",
+        "HMI Design",
+        "Modbus Protocol",
+        "Industrial Automation",
+        "Python"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Marco Lim.pdf",
+      "discovered": [
+        "Process Control",
+        "Instrumentation",
+        "PLC Systems",
+        "P&ID Design",
+        "Calibration",
+        "DCS Systems",
+        "HART Protocol"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Ryan Mateo.pdf",
+      "discovered": [
+        "Smart Metering",
+        "AMI Systems",
+        "Energy Auditing",
+        "Data Analysis",
+        "Calibration",
+        "SCADA",
+        "Electrical Billing Systems"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Daniel Navarro.pdf",
+      "discovered": [
+        "Protection Relays",
+        "ETAP",
+        "Fault Analysis",
+        "Substation Systems",
+        "SCADA",
+        "Relay Coordination",
+        "High Voltage Systems"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Anthony dela Cruz.pdf",
+      "discovered": [
+        "Building Electrical Design",
+        "PEC Compliance",
+        "AutoCAD",
+        "Load Analysis",
+        "Lighting Design",
+        "Revit MEP",
+        "Power Distribution"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Eric Bautista.pdf",
+      "discovered": [
+        "High Voltage Systems",
+        "Transmission Lines",
+        "Insulation Testing",
+        "Power Systems",
+        "ETAP",
+        "Safety Standards",
+        "Grid Reliability"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Ryan Dela Cruz.pdf",
+      "discovered": [
+        "Preventive Maintenance",
+        "Hydraulics",
+        "Pneumatics",
+        "CMMS",
+        "Equipment Troubleshooting",
+        "Industrial Safety"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Kevin Torres.pdf",
+      "discovered": [
+        "Lean Manufacturing",
+        "Six Sigma",
+        "Process Optimization",
+        "Production Planning",
+        "Root Cause Analysis",
+        "Quality Control",
+        "SAP"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Adrian Navarro 2.pdf",
+      "discovered": [
+        "SolidWorks",
+        "Modeling",
+        "Civil 3D",
+        "Sheet Metal Design",
+        "Technical Drawings",
+        "GD&T",
+        "Product Development",
+        "BOM Management"
+      ],
+      "tp": 7,
+      "fp": 1,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Carlo Mendoza 3.pdf",
+      "discovered": [
+        "SolidWorks",
+        "CNC Programming",
+        "Tool Design",
+        "Preventive Maintenance",
+        "Lean Manufacturing",
+        "GD&T"
+      ],
+      "tp": 6,
+      "fp": 0,
+      "fn": 1
+    },
+    {
+      "name": "Eng - Michael Dela Cruz.pdf",
+      "discovered": [
+        "Plant Maintenance",
+        "Industrial Safety",
+        "Preventive Maintenance",
+        "PLC Troubleshooting",
+        "Boiler Systems",
+        "Equipment Inspection",
+        "CMMS"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Daniel Villanueva.pdf",
+      "discovered": [
+        "Industrial Refrigeration",
+        "HVAC Systems",
+        "Ammonia Refrigeration",
+        "Preventive Maintenance",
+        "Troubleshooting",
+        "Energy Efficiency",
+        "Technical Reporting"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "name": "Eng - Francis Bautista.pdf",
+      "discovered": [
+        "Pump Systems",
+        "Valve Maintenance",
+        "Hydraulics",
+        "Rotating Equipment",
+        "Pressure Testing",
+        "Predictive Maintenance",
+        "Piping Systems"
+      ],
+      "tp": 7,
+      "fp": 0,
+      "fn": 0
+    }
+  ],
+  "ranking_sweep": [
+    {
+      "threshold": 0.6,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.97,
+      "score_pass": 1.0,
+      "best_nlp": 0.9728,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.65,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.97,
+      "score_pass": 1.0,
+      "best_nlp": 0.9728,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.7,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.97,
+      "score_pass": 1.0,
+      "best_nlp": 0.9728,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.75,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.97,
+      "score_pass": 1.0,
+      "best_nlp": 0.9728,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.8,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.93,
+      "score_pass": 1.0,
+      "best_nlp": 0.9721,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.85,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.84,
+      "score_pass": 1.0,
+      "best_nlp": 0.9703,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.9,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.79,
+      "score_pass": 1.0,
+      "best_nlp": 0.9693,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    },
+    {
+      "threshold": 0.95,
+      "mrr": 1.0,
+      "hit1": 1.0,
+      "hit_k": 1.0,
+      "ndcg": 1.0,
+      "avg_best_score": 80.79,
+      "score_pass": 1.0,
+      "best_nlp": 0.9693,
+      "mean_rank": 1.0,
+      "rank_counts": {
+        "1": 150,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "miss": 0
+      }
+    }
+  ]
+}

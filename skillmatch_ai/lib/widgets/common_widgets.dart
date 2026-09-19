@@ -204,7 +204,8 @@ class AccuracyRing extends StatelessWidget {
     return (double.tryParse(clean) ?? 0) / 100;
   }
 
-  String get _whole => accuracy.replaceAll('%', '').split('.').first;
+  String get _whole =>
+      (double.tryParse(accuracy.replaceAll('%', '').trim()) ?? 0).round().toString();
 
   Color get _color {
     final v = _value;

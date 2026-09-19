@@ -255,6 +255,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
   /// nothing gets forced tall with empty space inside it.
   Widget _buildBentoGrid(BuildContext context) {
     final c = AppColors.of(context);
+    final totalTargetSkills = _matchedSkills.length + _missingSkills.length;
     return Column(
       children: [
         _buildAccuracyTile(context),
@@ -265,8 +266,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
             children: [
               Expanded(
                 child: StatCard(
-                  label: 'Matched',
-                  value: '${_matchedSkills.length}',
+                  label: 'Skills Matched',
+                  value: '${_matchedSkills.length}/$totalTargetSkills',
                   valueColor: AppTheme.teal500,
                   icon: Icons.check_circle_outline_rounded,
                 ),
@@ -274,8 +275,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: StatCard(
-                  label: 'Missing',
-                  value: '${_missingSkills.length}',
+                  label: 'Skills Missing',
+                  value: '${_missingSkills.length}/$totalTargetSkills',
                   valueColor: AppTheme.red500,
                   icon: Icons.remove_circle_outline_rounded,
                 ),
@@ -290,7 +291,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
             children: [
               Expanded(
                 child: StatCard(
-                  label: 'Total skills',
+                  label: 'Your Total Skills',
                   value: '${widget.record.skillCount}',
                   valueColor: c.textPrimary,
                   icon: Icons.psychology_outlined,
@@ -330,7 +331,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
         children: [
           AccuracyRing(accuracy: _accuracyLabel, size: 64),
           const SizedBox(height: 20),
-          Text('NLP match accuracy',
+          Text('Skills Match Percentage',
               style: GoogleFonts.spaceGrotesk(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
@@ -398,14 +399,14 @@ class _ResultsScreenState extends State<ResultsScreen> {
   }
 
   Widget _buildSkillsSection(
-    BuildContext context,
-    String title,
-    List<String> skills,
-    SkillChipType type, {
-    required IconData icon,
-    required Color iconColor,
-    String? subtitle,
-  }) {
+      BuildContext context,
+      String title,
+      List<String> skills,
+      SkillChipType type, {
+        required IconData icon,
+        required Color iconColor,
+        String? subtitle,
+      }) {
     if (skills.isEmpty) return const SizedBox.shrink();
 
     return Column(
@@ -497,7 +498,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
           spacing: 7,
           runSpacing: 7,
           children:
-              _matchedSkills.map((s) => _matchedSkillChip(context, s)).toList(),
+          _matchedSkills.map((s) => _matchedSkillChip(context, s)).toList(),
         ),
       ],
     );
@@ -526,7 +527,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
           GestureDetector(
             onTap: () => _demoteSkill(skill),
             child:
-                Icon(Icons.close_rounded, size: 14, color: AppTheme.green500),
+            Icon(Icons.close_rounded, size: 14, color: AppTheme.green500),
           ),
         ],
       ),
@@ -588,11 +589,11 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 decoration: InputDecoration(
                   hintText: 'e.g. Docker, Machine Learning, SQL…',
                   hintStyle:
-                      GoogleFonts.workSans(fontSize: 13, color: c.textTertiary),
+                  GoogleFonts.workSans(fontSize: 13, color: c.textTertiary),
                   prefixIcon: Icon(Icons.add_circle_outline_rounded,
                       color: c.textTertiary, size: 18),
                   contentPadding:
-                      const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                  const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
                 ),
                 onFieldSubmitted: (_) => _addSkill(),
                 textInputAction: TextInputAction.done,
@@ -603,7 +604,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
               onPressed: _addSkill,
               style: ElevatedButton.styleFrom(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
               ),
@@ -623,7 +624,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
               color: AppTheme.teal200,
               borderRadius: BorderRadius.circular(AppTheme.radiusSm),
               border:
-                  Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
+              Border.all(color: c.cardBorder, width: AppTheme.borderWidth),
             ),
             child: Row(children: [
               const Icon(Icons.check_circle_outline_rounded,

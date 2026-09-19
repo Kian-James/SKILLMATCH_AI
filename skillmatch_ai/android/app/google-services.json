@@ -1,3 +1,54 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d08904aaa33152bb3e1c1410284ebc69de0b3b388f297b997a3ec1ee513f8539
-size 1339
+{
+  "project_info": {
+    "project_number": "807290065452",
+    "project_id": "skillmatch-ai-2c8cd",
+    "storage_bucket": "skillmatch-ai-2c8cd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:807290065452:android:bc36ff01ab437329f83789",
+        "android_client_info": {
+          "package_name": "com.example.skillmatch_ai"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "807290065452-bdrccq1nmgme6cn3ev5lu375i125b2v3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.skillmatch_ai",
+            "certificate_hash": "e01ff0f3508b0c014a04b01b13e79bd0d9605082"
+          }
+        },
+        {
+          "client_id": "807290065452-0fsihbaj7vnohgqslkpogurf67ah7f5l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyATlVN0UbOB6a65kgq6ZoJVvKLnxJqCTyk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "807290065452-0fsihbaj7vnohgqslkpogurf67ah7f5l.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "807290065452-609g3m5nunpcb3n70fh3tpon3so9v761.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.skillmatchAi"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

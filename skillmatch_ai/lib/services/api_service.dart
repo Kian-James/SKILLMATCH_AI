@@ -21,7 +21,7 @@ import '../models/models.dart';
 class ApiService {
   // ── Change this to your backend host ─────────────────────────────────────
   static const String baseUrl =
-      'https://skillmatch-ai-b5s7.onrender.com'; // your machine's IP
+      'http://localhost:8000'; // your machine's IP
   // Bumped from 3 to 5 minutes: the backend now queues a second concurrent
   // request instead of freezing (see backend fix), but a queued request can
   // still take close to 2x a single run's time to finish. This gives it
@@ -91,6 +91,49 @@ class ApiService {
     final bytes = fileBytes ?? await _readBytes(imagePath);
     req.files.add(_imageFile(bytes, fileName));
     return _parseFull(req);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  /refresh-fit-reason
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// Regenerate the fit_reason narrative from an updated matched/missing
+  /// skill split — no file upload, no OCR/NLP/FAISS re-run. Called after
+  /// the user promotes/demotes a skill chip on the results screen so the
+  /// AI insight text doesn't stay frozen at the original scan's numbers.
+  Future<String> refreshFitReason({
+    required String title,
+    required String industry,
+    required List<String> resumeSkills,
+    required List<String> matchedSkills,
+    required List<String> missingSkills,
+    double cosineScore = 0.0,
+  }) async {
+    final res = await http
+        .post(
+          Uri.parse('$baseUrl/refresh-fit-reason'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'title': title,
+            'industry': industry,
+            'resume_skills': resumeSkills,
+            'matched_skills': matchedSkills,
+            'missing_skills': missingSkills,
+            'cosine_score': cosineScore,
+          }),
+        )
+        .timeout(
+          const Duration(seconds: 30),
+          onTimeout: () => throw Exception(
+              'Refreshing the AI insight is taking too long — try again in a moment.'),
+        );
+
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200) {
+      final detail = json['detail'] ?? res.body;
+      throw Exception('Could not refresh fit reason (${res.statusCode}): $detail');
+    }
+    return json['fit_reason'] as String? ?? '';
   }
 
   // ══════════════════════════════════════════════════════════════════════════

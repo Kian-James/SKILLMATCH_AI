@@ -209,33 +209,14 @@ def _semantic_item_match(
     return bool(I[0][0] >= 0 and float(D[0][0]) >= threshold)
 
 
-def _partition_items(
-        req:            list[str],
-        candidate_raw:  list[str],
-) -> tuple[list[str], list[str]]:
-    """
-    Split required items (skills or certs) into (matched, missing) using
-    semantic matching against the candidate's discovered items. Embeddings
-    for candidate_raw — and the FAISS index built over them — are computed
-    once and reused across every item in req.
-    """
-    candidate_norms = [normalize(c) for c in candidate_raw]
-    candidate_vecs  = _encode_norm(candidate_norms)
-    candidate_index = _build_index(candidate_vecs)
-
-    matched: list[str] = []
-    missing: list[str] = []
-    for s in req:
-        if _semantic_item_match(s, candidate_norms, candidate_index):
-            matched.append(s)
-        else:
-            missing.append(s)
-    return matched, missing
-
-
-# Backwards-compatible alias — same semantics, kept for any external callers
-# that import _partition_skills by name.
-_partition_skills = _partition_items
+## NOTE: the old _partition_items()/_partition_skills() (single-shot FAISS
+## top-1 lookup, no phrase-growth, no consumption tracking) has been removed.
+## Skill/cert partitioning for scoring now goes through semantic_verify()
+## (core/validation.py) — see calculate_cosine_similarity() below — so there
+## is one semantic-matching implementation feeding both match_ratio/
+## fit_reason and nlp_validation, instead of two that could disagree.
+## _semantic_item_match / _encode_norm / _build_index are kept as-is: they're
+## still imported directly by evaluate_pipeline.py's offline evaluator.
 
 
 # ── Hybrid score ──────────────────────────────────────────────────────────────
@@ -573,13 +554,30 @@ def calculate_cosine_similarity(
         job     = jobs_corpus[idx]
         req     = job.get("required_skills", [])
 
-        # Semantic skill partition (SBERT cosine, not string fuzzy) — consistent
-        # with the offline evaluator's expectations for matched/missing sets.
-        matched, missing = _partition_items(req, resume_skills)
+        # Skill partition now runs through the same semantic_verify()
+        # sliding-window matcher used to report nlp_validation, instead of
+        # a separate _partition_items() single-shot FAISS lookup. Previously
+        # these were two independent implementations of "is this skill
+        # matched" (different consumption/growth behaviour), so match_ratio
+        # / fit_reason (derived from matched/missing here) and
+        # nlp_validation.NLP_ACCURACY could — and did — disagree on the same
+        # resume/job pair. Computing it once and reusing the result for both
+        # also avoids encoding the same discovered-skill list twice.
+        skill_verify = semantic_verify(
+            discovered_list   = resume_skills,
+            ground_truth_list = req,
+        )
+        matched = skill_verify["matched_skills"]
+        missing = skill_verify["unmatched_skills"]
 
-        # Semantic cert partition — same mechanism, separate from the score.
+        # Same treatment for certifications.
         req_certs = job.get("required_certifications", [])
-        matched_certs, missing_certs = _partition_items(req_certs, resume_certs)
+        cert_verify = semantic_verify(
+            discovered_list   = resume_certs,
+            ground_truth_list = req_certs,
+        )
+        matched_certs = cert_verify["matched_skills"]
+        missing_certs = cert_verify["unmatched_skills"]
 
         if req:
             # Normal case: this job has real required_skills data, so the
@@ -658,14 +656,12 @@ def calculate_cosine_similarity(
                 match_ratio     = match_ratio,
                 industry        = industry,
             ),
-            "nlp_validation":  semantic_verify(
-                discovered_list   = resume_skills,
-                ground_truth_list = req,
-            ),
-            "nlp_validation_certs": semantic_verify(
-                discovered_list   = resume_certs,
-                ground_truth_list = req_certs,
-            ),
+            # Reuse the same semantic_verify() calls made above for
+            # matched/missing — this is now the single source of truth for
+            # both the score/fit_reason path and the reported accuracy, so
+            # the two can no longer drift apart on the same resume/job pair.
+            "nlp_validation":       skill_verify,
+            "nlp_validation_certs": cert_verify,
         })
 
     results.sort(key=lambda r: r["score"], reverse=True)

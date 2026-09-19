@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:da868d1bf4bd4784e8030126ac896cce48a2f864b2a980df6d159f61783319bf
-size 917
+{
+  "type": "service_account",
+  "project_id": "skillmatch-ai-27c75",
+  "private_key_id": "fb5c0842e9f4015156964de0d021abc0974cef71",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDILhLtU7zeQSTS\nl1oifPb3Q8/egBtytqn6Bdf63biDxQrRTCiViuvDi9BT3A6WYquxQs0lKZ7DPLqk\ngdALmCKBnp9hqlKPsHqK3QHRdYPONpuvnpwvT+4KKKbL7KaBXTV12XDiw6JczNA8\nhCkb3RppQEmrHBDH4cy5gKNPeXUY+Trr1WI6J68ABHZCA+JyWaheYBp3GfAgpCtR\nH3hEjkhfAY4tic4nTyaW1mPLecGN/8NzzhZ2rDzL2wSl2gYmqnCfqzEtqgDjlCY6\n5cxA6aFniGHAw8KXbY4Ye0Knd0bVekAgNlzhrKq950VhnBOq8hJmdEv/4s8j9OTx\n45d5weaPAgMBAAECggEARiAx3DcGBnweuLFxz3wkjimQ0/rf4rdP43kRmN38ahjo\nebqqyvxwLEA5+m6wI4msaPwkXpzuc6m+HqwlJDKm/+6AGhgvNQwXWbcjkGuRAXgK\n4SJ4x3BCTQfBqtWb3Ny4wjCqxZ3QLp9HYbPQrOSvgGiXhhxeWo9lByUj0M8VMOpb\nLwttDjP4Q2vr/pfnYxaZv4iIjhAGkbZ4aGF3dGQNs5QPr3vozubMCpRCGhA1SyKf\n3mRAwYJIjmfpVYhGn1WlbcL2lCVLUuuyyxskuGqW4QVGkbn+51tKIVjKG2KAL+Xd\ng3ITiFMdt0Jx/qaVXQGsqgjo04mUkKiUQalaUXNq7QKBgQD4CqrzVSc8Kt3P6nA7\n0dGlHQlEjaRurFBvoKIL4VYdVEMwXuFaIpG+piK1nqNV1BVYYvTZO3AiFwneCSML\nnfOegOknQWijOX2v+6BdI1+fni47P94vLbeVlZPMo4/9vz23lBNY8tCMvVt97WB/\n0368oVitwJ3JgBdNKy/3Plfn6wKBgQDOmkk5bRrqLwzddBtJVJoLhCwn5qGmNaTQ\nJZJ4ziig+W3wq7MxiRLPCiZRNC1Ac+KztiSe8NZ9FHjuOAeUJf7Lb7ktBJ15scri\n+nep5RYBJObs1qCJJRlsNT3OStBv7OUrdvX77ZTZFPpEYj76b9VljR1TY3RG5WPl\njHHCgtYW7QKBgQC9nNIQD/FdUlucHFhNsli0At1Z1Xl0zS70FnSp5klBRG/UY0Ob\n9r85YaE4+5ta+jSTC5qnEYPn23rEjHGI6OcaLOuPAbZuyH0ncZCmgmsQBwjKbEl6\nAVXM+LoyfnqNfIs+cejUX1JDtGFjg3n4XYINyr2SnaNBLTUi3bfeJn9mnwKBgQCj\nPZi5vRFVE9PwbjrZF/WXP9m7tSjoMN6GcAlpVksX1b0eOiwd6ZZo7DYWV0mh8W6g\nXDxXMSfoMHLUloS2c8b8asw/W7QpYWdTLF+8Z3uZb9TeMT8q3ZtWukKZateCeAUi\n8J2vbqr7Uu3jdlUYf6B22qbfKmfHVJw31V5VOBd8iQKBgDOG4I4IvznABKc9hbOV\nE15EPKdIDyMyFKZncH4AQnzwtmSErds2rS5flHSYwJZa+Tv9i3EOMxIPe8sHrRSt\nmmsQDtdtSX0d6PkqkxYTLQcKj+FOsQVEFyNXot+j/QEmvR4oeimR/VpTm+lqlxs5\n4ISjrVXce2/6kmeuxtgjlN0O\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-fbsvc@skillmatch-ai-27c75.iam.gserviceaccount.com",
+  "client_id": "106108606992506356965",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40skillmatch-ai-27c75.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
