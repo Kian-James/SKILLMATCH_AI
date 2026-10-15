@@ -1,0 +1,31 @@
+services:
+  ocr-service:
+    build: ./ocr-service
+    image: skillmatch/skillmatch-ocr:latest
+    container_name: ocr-service
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    image: skillmatch/skillmatch-backend:latest
+    container_name: backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - OCR_SERVICE_URL=http://ocr-service:8001
+    depends_on:
+      - ocr-service
+    restart: unless-stopped
+
+  frontend:
+    build: ./skillmatch_ai
+    image: skillmatch/skillmatch-frontend:latest
+    container_name: frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

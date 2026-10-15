@@ -1,10 +1,6 @@
 # ── Secrets (wildcards catch copies like firebase_service_account-2.json) ──
 .env
 .env.*
-firebase*.json
-*service_account*.json
-*serviceAccount*.json
-*adminsdk*.json
 *.pem
 *.key
 
