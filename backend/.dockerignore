@@ -1,0 +1,53 @@
+# ── Secrets (wildcards catch copies like firebase_service_account-2.json) ──
+.env
+.env.*
+firebase*.json
+*service_account*.json
+*serviceAccount*.json
+*adminsdk*.json
+*.pem
+*.key
+
+# ── Personal data / test inputs ──
+resumes/
+resumes-images/
+*.pdf
+
+# ── Evaluation outputs and dev-only data ──
+charts_out/
+eval_charts/
+eval_charts2/
+extra/
+labels*.json
+report_*.json
+sweep_*.json
+threshold_sweep_*.png
+*.png
+*.jpg
+*.jpeg
+
+# ── Dev-only scripts (not imported by the app) ──
+charts.py
+debug_list_skills.py
+delete_jobs_collection.py
+evaluate_pipeline.py
+evaluate_threshold_sweep.py
+
+# ── Python ──
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# ── Git, editor, OS ──
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# ── Docker files themselves ──
+Dockerfile
+.dockerignore

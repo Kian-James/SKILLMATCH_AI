@@ -131,7 +131,8 @@ class ApiService {
     final json = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200) {
       final detail = json['detail'] ?? res.body;
-      throw Exception('Could not refresh fit reason (${res.statusCode}): $detail');
+      throw Exception(
+          'Could not refresh fit reason (${res.statusCode}): $detail');
     }
     return json['fit_reason'] as String? ?? '';
   }

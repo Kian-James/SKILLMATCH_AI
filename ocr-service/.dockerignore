@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+*.json.bak
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local data and junk
+temp_resumes/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+.DS_Store
+
+# Git and editor files
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+render.yaml
